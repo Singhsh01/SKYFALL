@@ -1,0 +1,711 @@
+#include "Hud.hpp"
+
+#include "../render/Convert.hpp"
+#include "Font.hpp"
+#include "raymath.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+
+namespace sky {
+
+using ui::Align;
+
+namespace {
+const Color kHud = {150, 255, 205, 235};
+const Color kHudDim = {150, 255, 205, 120};
+const Color kEnemy = {255, 70, 60, 240};
+const Color kAlly = {90, 170, 255, 235};
+const Color kWarn = {255, 170, 40, 245};
+const Color kPanel = {8, 14, 18, 150};
+const Color kPanelBorder = {150, 255, 205, 60};
+
+std::string fmt(const char* f, double v) { char b[64]; std::snprintf(b, sizeof b, f, v); return b; }
+std::string fmti(const char* f, int v) { char b[64]; std::snprintf(b, sizeof b, f, v); return b; }
+
+const char* groundName(GroundKind k) {
+    switch (k) {
+        case GroundKind::Tank: return "TANK";
+        case GroundKind::Truck: return "TRUCK";
+        case GroundKind::AAA: return "AAA";
+        case GroundKind::SAM: return "SAM";
+        case GroundKind::Bunker: return "BUNKER";
+        case GroundKind::Radar: return "RADAR";
+    }
+    return "";
+}
+}  // namespace
+
+void Hud::update(double dt) {
+    time_ += dt;
+    hit_ = std::max(0.0, hit_ - dt);
+    for (auto& r : radio_) r.t += dt;
+    while (!radio_.empty() && radio_.front().t > radio_.front().dur) radio_.pop_front();
+    for (auto& p : popups_) p.t += dt;
+    while (!popups_.empty() && popups_.front().t > 2.4) popups_.pop_front();
+}
+
+void Hud::radio(const std::string& who, const std::string& text, double dur) {
+    radio_.push_back({who, text, 0, dur});
+    if (radio_.size() > 3) radio_.pop_front();
+}
+
+void Hud::popup(const std::string& text, Color col) {
+    popups_.push_back({text, 0, col});
+    if (popups_.size() > 4) popups_.pop_front();
+}
+
+Vector2 Hud::project(const HudContext& c, Vector3 p, bool* inFront) const {
+    Vector3 fwd = Vector3Normalize(Vector3Subtract(c.cam.target, c.cam.position));
+    if (inFront) *inFront = Vector3DotProduct(Vector3Subtract(p, c.cam.position), fwd) > 0.5f;
+    return GetWorldToScreenEx(p, c.cam, c.w, c.h);
+}
+
+void Hud::draw(const HudContext& c) {
+    if (!c.player) return;
+    bool cockpit = c.camMode == CameraMode::Cockpit;
+    float s = static_cast<float>(c.h) / 720.0f * static_cast<float>(c.settings ? c.settings->uiScale : 1.0);
+    if (!c.dead) {
+        if (cockpit && c.combiner.width > 10) {
+            BeginScissorMode(static_cast<int>(c.combiner.x), static_cast<int>(c.combiner.y), static_cast<int>(c.combiner.width), static_cast<int>(c.combiner.height));
+            pitchLadder(c);
+            flightSymbology(c, true);
+            EndScissorMode();
+        } else if (!cockpit) {
+            flightSymbology(c, false);
+        }
+        targets(c);
+        weapons(c);
+        minimap(c);
+        warnings(c);
+    }
+    killFeed(c);
+    missionPanel(c);
+    radioPanel(c);
+    popups(c);
+    // hit marker
+    if (hit_ > 0) {
+        Vector2 ctr = {c.w * 0.5f, c.h * 0.5f};
+        if (!cockpit) {
+            bool f;
+            Vector3 aim = toRl(c.player->fm->state().pos + c.player->fm->state().q.forward() * 1000.0);
+            ctr = project(c, aim, &f);
+        }
+        Color hc = killHit_ ? kEnemy : Color{255, 255, 255, 240};
+        float a = static_cast<float>(hit_ / 0.25);
+        hc = ui::withAlpha(hc, a);
+        float r0 = 10 * s, r1 = 22 * s;
+        for (int k = 0; k < 4; ++k) {
+            float ang = PI / 4 + k * PI / 2;
+            ui::line({ctr.x + cosf(ang) * r0, ctr.y + sinf(ang) * r0}, {ctr.x + cosf(ang) * r1, ctr.y + sinf(ang) * r1}, 2.5f * s, hc);
+        }
+    }
+    if (c.dead) {
+        DrawRectangle(0, 0, c.w, c.h, Color{0, 0, 0, 90});
+        ui::textShadow(c.deathReason.empty() ? "AIRCRAFT LOST" : c.deathReason, c.w * 0.5f, c.h * 0.40f, 34 * s, kEnemy, Align::Center);
+        if (c.respawnTimer > 0)
+            ui::textShadow(fmt("RESPAWNING IN %.0f", std::ceil(c.respawnTimer)), c.w * 0.5f, c.h * 0.40f + 46 * s, 22 * s, WHITE, Align::Center);
+        else
+            ui::textShadow("PRESS  R  TO RETRY     ESC  FOR MENU", c.w * 0.5f, c.h * 0.40f + 46 * s, 22 * s, WHITE, Align::Center);
+    }
+    if (c.showDebug) debug(c);
+    if (c.showHelp) help(c);
+}
+
+void Hud::pitchLadder(const HudContext& c) {
+    const FlightState& st = c.player->fm->state();
+    Vector3 cam = c.cam.position;
+    Vec3 f = st.q.forward();
+    Vector3 h = Vector3Normalize({static_cast<float>(f.x), 0, static_cast<float>(f.z)});
+    Vector3 rt = {-h.z, 0, h.x};
+    Vector3 up = {0, 1, 0};
+    Euler e = toEuler(st.q);
+    float pitchDeg = static_cast<float>(e.pitch / kDeg);
+    float s = c.h / 720.0f;
+    for (int a = -90; a <= 90; a += 5) {
+        if (std::fabs(a - pitchDeg) > 22) continue;
+        float th = a * DEG2RAD;
+        Vector3 d = Vector3Add(Vector3Scale(h, cosf(th)), Vector3Scale(up, sinf(th)));
+        float half = a == 0 ? 0.22f : 0.085f, gap = a == 0 ? 0.03f : 0.025f;
+        bool f1, f2;
+        Vector2 L0 = project(c, Vector3Add(cam, Vector3Scale(Vector3Add(d, Vector3Scale(rt, -half)), 1000)), &f1);
+        Vector2 L1 = project(c, Vector3Add(cam, Vector3Scale(Vector3Add(d, Vector3Scale(rt, -gap)), 1000)), &f2);
+        Vector2 R0 = project(c, Vector3Add(cam, Vector3Scale(Vector3Add(d, Vector3Scale(rt, gap)), 1000)));
+        Vector2 R1 = project(c, Vector3Add(cam, Vector3Scale(Vector3Add(d, Vector3Scale(rt, half)), 1000)));
+        if (!f1 || !f2) continue;
+        Color col = kHud;
+        if (a < 0) {
+            // dashed negative bars
+            for (int k = 0; k < 3; ++k) {
+                float t0 = k / 3.0f, t1 = t0 + 0.2f;
+                ui::line(Vector2Lerp(L0, L1, t0), Vector2Lerp(L0, L1, t1), 1.6f * s, col, false);
+                ui::line(Vector2Lerp(R0, R1, 1 - t1), Vector2Lerp(R0, R1, 1 - t0), 1.6f * s, col, false);
+            }
+        } else {
+            ui::line(L0, L1, 1.6f * s, col, false);
+            ui::line(R0, R1, 1.6f * s, col, false);
+        }
+        if (a != 0) {
+            Vector2 dir = Vector2Normalize(Vector2Subtract(R1, R0));
+            Vector2 n = {-dir.y, dir.x};
+            float tick = (a > 0 ? 7.0f : -7.0f) * s;
+            ui::line(L0, {L0.x + n.x * tick, L0.y + n.y * tick}, 1.6f * s, col, false);
+            ui::line(R1, {R1.x + n.x * tick, R1.y + n.y * tick}, 1.6f * s, col, false);
+            std::string lbl = std::to_string(std::abs(a));
+            ui::text(lbl, L0.x - 8 * s, L0.y - 7 * s, 13 * s, col, Align::Right);
+            ui::text(lbl, R1.x + 8 * s, R1.y - 7 * s, 13 * s, col, Align::Left);
+        }
+    }
+}
+
+void Hud::flightSymbology(const HudContext& c, bool cockpit) {
+    const FlightState& st = c.player->fm->state();
+    float s = c.h / 720.0f;
+    Color col = kHud;
+    Rectangle area = cockpit ? c.combiner : Rectangle{0, 0, static_cast<float>(c.w), static_cast<float>(c.h)};
+    float cx = area.x + area.width * 0.5f;
+    float cy = area.y + area.height * (cockpit ? 0.5f : 0.5f);
+    float spread = cockpit ? area.width * 0.36f : 230 * s;
+    float fs = cockpit ? 15 * s : 18 * s;
+
+    // boresight / gun cross and flight path marker
+    bool f1, f2;
+    Vector2 bore = project(c, toRl(st.pos + st.q.forward() * 1000.0), &f1);
+    if (f1) {
+        float r = 9 * s;
+        ui::line({bore.x - 2.2f * r, bore.y}, {bore.x - r, bore.y}, 2 * s, col);
+        ui::line({bore.x + r, bore.y}, {bore.x + 2.2f * r, bore.y}, 2 * s, col);
+        ui::line({bore.x, bore.y - 2.2f * r}, {bore.x, bore.y - r}, 2 * s, col);
+        ui::line({bore.x, bore.y + r}, {bore.x, bore.y + 2.2f * r}, 2 * s, col);
+        DrawCircleV(bore, 1.8f * s, col);
+    }
+    if (st.airspeed > 15) {
+        Vector2 fpm = project(c, toRl(st.pos + normalize(st.vel) * 1000.0), &f2);
+        if (f2) {
+            float r = 7 * s;
+            DrawRing(fpm, r - 1.2f * s, r + 0.8f * s, 0, 360, 24, col);
+            ui::line({fpm.x - r, fpm.y}, {fpm.x - 2.6f * r, fpm.y}, 2 * s, col, false);
+            ui::line({fpm.x + r, fpm.y}, {fpm.x + 2.6f * r, fpm.y}, 2 * s, col, false);
+            ui::line({fpm.x, fpm.y - r}, {fpm.x, fpm.y - 2.0f * r}, 2 * s, col, false);
+        }
+    }
+
+    // speed (left) and altitude (right) boxes with tapes
+    double kmh = st.airspeed * 3.6, kt = st.airspeed * 1.943844;
+    double alt = st.pos.y;
+    float bw = 86 * s, bh = 30 * s;
+    Rectangle sb = {cx - spread - bw, cy - bh / 2, bw, bh};
+    Rectangle ab = {cx + spread, cy - bh / 2, bw, bh};
+    // tapes
+    auto tape = [&](float x, double value, double step, int labelEvery, bool leftSide) {
+        float pxPer = 46 * s / static_cast<float>(step);
+        double base = std::floor(value / step) * step;
+        for (int k = -5; k <= 5; ++k) {
+            double v = base + k * step;
+            if (v < 0 && step > 1) continue;
+            float y = cy - static_cast<float>((v - value) * pxPer);
+            if (std::fabs(y - cy) < bh * 0.7f || std::fabs(y - cy) > 140 * s) continue;
+            float len = (static_cast<int>(std::round(v / step)) % labelEvery == 0) ? 12 * s : 6 * s;
+            float x0 = leftSide ? x - len : x, x1 = leftSide ? x : x + len;
+            ui::line({x0, y}, {x1, y}, 1.5f * s, kHudDim, false);
+            if (len > 8 * s) ui::text(fmti("%d", static_cast<int>(std::round(v))), leftSide ? x - 16 * s : x + 16 * s, y - 7 * s, 13 * s, kHudDim, leftSide ? Align::Right : Align::Left);
+        }
+    };
+    tape(sb.x + bw + 4 * s, kmh, 50, 2, true);
+    tape(ab.x - 4 * s, alt, 100, 5, false);
+    ui::panel(sb, Color{0, 0, 0, 70}, col);
+    ui::panel(ab, Color{0, 0, 0, 70}, col);
+    ui::text(fmti("%d", static_cast<int>(kmh)), sb.x + bw - 8 * s, sb.y + 4 * s, 22 * s, col, Align::Right);
+    ui::text(fmti("%d", static_cast<int>(alt)), ab.x + bw - 8 * s, ab.y + 4 * s, 22 * s, col, Align::Right);
+    ui::text("KM/H", sb.x, sb.y - 18 * s, 13 * s, kHudDim);
+    ui::text("ALT M", ab.x, ab.y - 18 * s, 13 * s, kHudDim);
+    ui::text(fmti("%d KT", static_cast<int>(kt)), sb.x, sb.y + bh + 6 * s, fs * 0.8f, col);
+    ui::text(fmt("M %.2f", st.mach), sb.x, sb.y + bh + 24 * s, fs * 0.8f, col);
+    ui::text(fmt("G %.1f", st.gLoad), sb.x, sb.y + bh + 42 * s, fs * 0.8f, st.gLoad > 8.0 ? kWarn : col);
+    ui::text(fmt("AOA %.0f", st.alpha / kDeg), sb.x, sb.y + bh + 60 * s, fs * 0.8f, st.stalled ? kWarn : col);
+    double vs = st.vel.y;
+    ui::text(fmti("VS %+d", static_cast<int>(vs * 60.0)), ab.x, ab.y + bh + 6 * s, fs * 0.8f, col);
+    if (st.agl < 1500) ui::text(fmti("R %d", static_cast<int>(st.agl)), ab.x, ab.y + bh + 24 * s, fs * 0.8f, st.agl < 150 && !st.onGround ? kWarn : col);
+    // throttle
+    {
+        float tx = ab.x, ty = ab.y + bh + (st.agl < 1500 ? 46 : 28) * s;
+        float tw = bw, th = 7 * s;
+        DrawRectangleLinesEx({tx, ty, tw, th}, 1, kHudDim);
+        float fill = static_cast<float>(std::min(st.throttle / FlightModel::kAbDetent, 1.0));
+        DrawRectangle(static_cast<int>(tx), static_cast<int>(ty), static_cast<int>(tw * fill * 0.9f), static_cast<int>(th), kHud);
+        if (st.throttle > FlightModel::kAbDetent)
+            DrawRectangle(static_cast<int>(tx + tw * 0.9f), static_cast<int>(ty), static_cast<int>(tw * 0.1f * (st.throttle - 0.9) / 0.1), static_cast<int>(th), kWarn);
+        ui::text(st.abLevel > 0.1 ? "AB" : fmti("THR %d%%", static_cast<int>(std::min(st.throttle / 0.9, 1.0) * 100)), tx, ty + th + 3 * s, 13 * s, st.abLevel > 0.1 ? kWarn : col);
+    }
+    // heading tape
+    {
+        double hdg = compassHeadingDeg(st.q);
+        float top = cockpit ? area.y + 14 * s : 22 * s;
+        float wTape = cockpit ? area.width * 0.7f : 360 * s;
+        float pxPerDeg = wTape / 60.0f;
+        for (int d = -35; d <= 35; ++d) {
+            double v = std::floor(hdg) + d;
+            int iv = (static_cast<int>(v) % 360 + 360) % 360;
+            float x = cx + static_cast<float>((v - hdg) * pxPerDeg);
+            if (std::fabs(x - cx) > wTape / 2) continue;
+            if (iv % 5 != 0) continue;
+            bool major = iv % 10 == 0;
+            ui::line({x, top + 16 * s}, {x, top + (major ? 26 : 22) * s}, 1.5f * s, kHudDim, false);
+            if (major) {
+                std::string lbl = iv == 0 ? "N" : iv == 90 ? "E" : iv == 180 ? "S" : iv == 270 ? "W" : fmti("%02d", iv / 10);
+                ui::text(lbl, x, top, 14 * s, kHudDim, Align::Center);
+            }
+        }
+        Rectangle hb = {cx - 26 * s, top + 28 * s, 52 * s, 20 * s};
+        ui::panel(hb, Color{0, 0, 0, 80}, col);
+        ui::text(fmti("%03d", static_cast<int>(std::round(hdg)) % 360), cx, hb.y + 2 * s, 16 * s, col, Align::Center);
+    }
+    // configuration flags
+    {
+        float y = cy + (cockpit ? area.height * 0.32f : 150 * s);
+        std::string cfg;
+        if (st.gearPos > 0.01) ui::text(st.gearPos >= 1.0 ? "GEAR DN" : "GEAR TRANSIT", cx - 60 * s, y, 14 * s, st.gearPos >= 1.0 ? Color{120, 255, 120, 230} : kWarn, Align::Center);
+        if (st.parkingBrake) ui::text("PARK BRK", cx + 60 * s, y, 14 * s, kWarn, Align::Center);
+        else if (st.wheelBrake && st.onGround) ui::text("BRAKES", cx + 60 * s, y, 14 * s, kWarn, Align::Center);
+        else if (st.airbrake && !st.onGround) ui::text("SPD BRK", cx + 60 * s, y, 14 * s, kWarn, Align::Center);
+        const char* eng = st.engine == EngineState::Off ? "ENG OFF" : st.engine == EngineState::Starting ? "ENG START" :
+                          st.engine == EngineState::Flameout ? "FLAMEOUT" : nullptr;
+        if (eng) ui::text(eng, cx, y + 18 * s, 14 * s, kWarn, Align::Center);
+    }
+}
+
+void Hud::targets(const HudContext& c) {
+    if (!c.battle) return;
+    const Jet& p = *c.player;
+    const FlightState& ps = p.fm->state();
+    float s = c.h / 720.0f;
+    Vector2 ctr = {c.w * 0.5f, c.h * 0.5f};
+    for (const auto& jp : c.battle->jets()) {
+        const Jet& j = *jp;
+        if (j.isPlayer || !j.alive) continue;
+        const FlightState& js = j.fm->state();
+        Vector3 wp = toRl(js.pos);
+        double dist = length(js.pos - ps.pos);
+        bool front;
+        Vector2 sp = project(c, wp, &front);
+        bool enemy = j.team != p.team;
+        Color col = enemy ? kEnemy : kAlly;
+        bool onScreen = front && sp.x > 0 && sp.x < c.w && sp.y > 0 && sp.y < c.h;
+        if (onScreen) {
+            float r = std::clamp(static_cast<float>(2200.0 / std::max(dist, 1.0)) * 6.0f, 9.0f, 34.0f) * s;
+            if (enemy) {
+                // diamond marker
+                Vector2 pts[4] = {{sp.x, sp.y - r}, {sp.x + r, sp.y}, {sp.x, sp.y + r}, {sp.x - r, sp.y}};
+                for (int k = 0; k < 4; ++k) ui::line(pts[k], pts[(k + 1) % 4], 1.8f * s, col);
+                // BF-style spot triangle above
+                Vector2 t0 = {sp.x, sp.y - r - 6 * s}, t1 = {sp.x - 6 * s, sp.y - r - 16 * s}, t2 = {sp.x + 6 * s, sp.y - r - 16 * s};
+                DrawTriangle(t0, t2, t1, col);
+                ui::textShadow(dist > 1000 ? fmt("%.1f km", dist / 1000.0) : fmti("%d m", static_cast<int>(dist)), sp.x + r + 6 * s, sp.y - 8 * s, 14 * s, col);
+                if (dist < 4000) ui::textShadow(j.callsign, sp.x + r + 6 * s, sp.y + 6 * s, 12 * s, ui::withAlpha(col, 0.8f));
+            } else {
+                Vector2 t0 = {sp.x, sp.y - 6 * s}, t1 = {sp.x - 7 * s, sp.y - 18 * s}, t2 = {sp.x + 7 * s, sp.y - 18 * s};
+                DrawTriangle(t0, t2, t1, col);
+                ui::textShadow(j.callsign, sp.x, sp.y - 36 * s, 12 * s, col, Align::Center);
+            }
+        } else if (enemy && dist < 12000) {
+            // off-screen arrow at the edge
+            Vector3 camFwd = Vector3Normalize(Vector3Subtract(c.cam.target, c.cam.position));
+            Matrix view = GetCameraMatrix(c.cam);
+            Vector3 right = {view.m0, view.m4, view.m8}, up = {view.m1, view.m5, view.m9};
+            Vector3 d = Vector3Subtract(wp, c.cam.position);
+            Vector2 dir = Vector2Normalize({Vector3DotProduct(d, right), -Vector3DotProduct(d, up)});
+            (void)camFwd;
+            float rx = c.w * 0.42f, ry = c.h * 0.40f;
+            Vector2 e = {ctr.x + dir.x * rx, ctr.y + dir.y * ry};
+            Vector2 n = {-dir.y, dir.x};
+            Vector2 a = {e.x + dir.x * 14 * s, e.y + dir.y * 14 * s};
+            Vector2 b = {e.x + n.x * 8 * s, e.y + n.y * 8 * s};
+            Vector2 cc = {e.x - n.x * 8 * s, e.y - n.y * 8 * s};
+            DrawTriangle(a, cc, b, col);
+            DrawTriangle(a, b, cc, col);
+            ui::textShadow(fmt("%.1f", dist / 1000.0), e.x - dir.x * 22 * s, e.y - dir.y * 22 * s - 7 * s, 13 * s, col, Align::Center);
+        }
+    }
+    // ground targets
+    for (size_t gi = 0; gi < c.battle->ground().size(); ++gi) {
+        const GroundTarget& g = c.battle->ground()[gi];
+        if (!g.alive) continue;
+        double dist = length(g.pos - ps.pos);
+        if (dist > 3500) continue;
+        double off = std::acos(std::clamp(dot(normalize(g.pos - ps.pos), ps.q.forward()), -1.0, 1.0));
+        bool important = g.kind == GroundKind::SAM || g.kind == GroundKind::AAA;
+        if (off > (important ? 35.0 : 14.0) * kDeg && p.lockTarget != -1000 - static_cast<int>(gi)) continue;
+        bool front;
+        Vector2 sp = project(c, toRl(g.pos + Vec3{0, 3, 0}), &front);
+        if (!front || sp.x < 0 || sp.x > c.w || sp.y < 0 || sp.y > c.h) continue;
+        float r = 6 * s;
+        DrawRectangleLinesEx({sp.x - r, sp.y - r, 2 * r, 2 * r}, 1.5f * s, ui::withAlpha(kEnemy, 0.85f));
+        if (dist < 2500) ui::textShadow(groundName(g.kind), sp.x, sp.y + r + 2 * s, 11 * s, ui::withAlpha(kEnemy, 0.85f), Align::Center);
+    }
+    // lock box
+    if (p.lockTarget != -1) {
+        Vec3 tp, tv;
+        bool ok = false;
+        if (p.lockTarget >= 0) {
+            const Jet* t = c.battle->jetById(p.lockTarget);
+            if (t && t->alive) { tp = t->fm->state().pos; tv = t->fm->state().vel; ok = true; }
+        } else if (p.lockTarget <= -1000) {
+            int gi = -1000 - p.lockTarget;
+            if (gi < static_cast<int>(c.battle->ground().size())) { tp = c.battle->ground()[gi].pos + Vec3{0, 2, 0}; ok = true; }
+        }
+        bool front;
+        Vector2 sp = ok ? project(c, toRl(tp), &front) : Vector2{};
+        if (ok && front) {
+            float prog = static_cast<float>(p.lockProgress);
+            bool locked = prog >= 1.0f;
+            float r = (locked ? 26.0f : 26.0f + (1.0f - prog) * 60.0f) * s;
+            float rot = locked ? 45.0f : static_cast<float>(time_ * 180.0);
+            Color lc = locked ? kEnemy : kWarn;
+            for (int k = 0; k < 4; ++k) {
+                float a0 = (rot + k * 90) * DEG2RAD;
+                Vector2 corner = {sp.x + cosf(a0) * r, sp.y + sinf(a0) * r};
+                Vector2 l1 = {corner.x + cosf(a0 + 2.36f) * 12 * s, corner.y + sinf(a0 + 2.36f) * 12 * s};
+                Vector2 l2 = {corner.x + cosf(a0 - 2.36f) * 12 * s, corner.y + sinf(a0 - 2.36f) * 12 * s};
+                ui::line(corner, l1, 2.5f * s, lc);
+                ui::line(corner, l2, 2.5f * s, lc);
+            }
+            ui::textShadow(locked ? "LOCKED" : "LOCKING", sp.x, sp.y + r + 10 * s, 15 * s, lc, Align::Center);
+            // gun lead pipper
+            double dist = length(tp - ps.pos);
+            if (p.lockTarget >= 0 && dist < 1800) {
+                double tof = dist / 1050.0;
+                // where the nose must point: relative target motion plus gravity drop compensation
+                Vec3 lead = tp + (tv - ps.vel) * tof + Vec3{0, 0.5 * kG * tof * tof, 0};
+                bool lf;
+                Vector2 lp = project(c, toRl(lead), &lf);
+                if (lf) {
+                    DrawRing(lp, 9 * s, 11 * s, 0, 360, 24, kHud);
+                    DrawCircleV(lp, 2 * s, kHud);
+                    ui::text("GUN", lp.x + 14 * s, lp.y - 7 * s, 12 * s, kHud);
+                }
+            }
+        }
+    }
+    // incoming missiles markers
+    for (const Missile& m : c.battle->missiles()) {
+        if (m.targetJet != p.id || m.decoyFlare >= 0) continue;
+        bool front;
+        Vector2 sp = project(c, toRl(m.pos), &front);
+        if (!front) continue;
+        DrawRing(sp, 7 * s, 9 * s, 0, 360, 16, kEnemy);
+        ui::textShadow("M", sp.x, sp.y - 24 * s, 13 * s, kEnemy, Align::Center);
+    }
+}
+
+void Hud::weapons(const HudContext& c) {
+    const Jet& p = *c.player;
+    float s = c.h / 720.0f;
+    float w = 230 * s, h = 118 * s;
+    Rectangle r = {c.w - w - 18 * s, c.h - h - 18 * s, w, h};
+    ui::panel(r, kPanel, kPanelBorder);
+    float x = r.x + 12 * s, y = r.y + 10 * s;
+    ui::text(p.fm->profile().name, x, y, 15 * s, WHITE);
+    y += 22 * s;
+    // hull
+    float hp = static_cast<float>(p.health / 100.0);
+    ui::text("HULL", x, y, 13 * s, Color{200, 210, 210, 230});
+    Rectangle bar = {x + 50 * s, y + 3 * s, w - 74 * s, 9 * s};
+    DrawRectangleRec(bar, Color{255, 255, 255, 30});
+    Color hc = hp > 0.6f ? Color{120, 240, 160, 230} : hp > 0.3f ? kWarn : kEnemy;
+    DrawRectangleRec({bar.x, bar.y, bar.width * hp, bar.height}, hc);
+    ui::text(fmti("%d", static_cast<int>(p.health)), bar.x + bar.width + 4 * s, y - 1 * s, 13 * s, hc);
+    y += 20 * s;
+    // cannon
+    ui::text("CANNON", x, y, 13 * s, Color{200, 210, 210, 230});
+    ui::text(fmti("%d", p.rounds), x + w - 24 * s, y, 15 * s, p.gunFiring ? kWarn : WHITE, Align::Right);
+    y += 20 * s;
+    // missiles pips
+    ui::text("MISSILE", x, y, 13 * s, Color{200, 210, 210, 230});
+    int maxM = p.fm->profile().missiles;
+    for (int i = 0; i < maxM; ++i) {
+        Rectangle pip = {x + 66 * s + i * 17 * s, y + 2 * s, 12 * s, 10 * s};
+        if (i < p.missiles) DrawRectangleRec(pip, WHITE);
+        else DrawRectangleLinesEx(pip, 1, Color{255, 255, 255, 90});
+    }
+    y += 20 * s;
+    ui::text("FLARES", x, y, 13 * s, Color{200, 210, 210, 230});
+    for (int i = 0; i < 3; ++i) {
+        Rectangle pip = {x + 66 * s + i * 30 * s, y + 2 * s, 24 * s, 10 * s};
+        if (i < p.flareCharges) DrawRectangleRec(pip, Color{255, 200, 90, 240});
+        else {
+            DrawRectangleLinesEx(pip, 1, Color{255, 200, 90, 90});
+            if (i == p.flareCharges) {
+                float prog = static_cast<float>(1.0 - p.flareCooldown / 9.0);
+                DrawRectangleRec({pip.x, pip.y, pip.width * std::clamp(prog, 0.0f, 1.0f), pip.height}, Color{255, 200, 90, 90});
+            }
+        }
+    }
+    ui::text("[X]", x + w - 24 * s, y, 12 * s, Color{255, 255, 255, 120}, Align::Right);
+}
+
+void Hud::minimap(const HudContext& c) {
+    if (c.minimap.id == 0) return;
+    const FlightState& ps = c.player->fm->state();
+    float s = c.h / 720.0f;
+    float size = 190 * s;
+    Rectangle r = {18 * s, c.h - size - 18 * s, size, size};
+    double range = 7000.0;            // metres from centre to edge
+    double mPerPx = 2.0 * Terrain::kHalfSize / c.minimap.width;
+    double hdg = compassHeadingDeg(ps.q);
+    float cx = r.x + size / 2, cy = r.y + size / 2;
+    float pxPerM = static_cast<float>(size / 2 / range);
+    BeginScissorMode(static_cast<int>(r.x), static_cast<int>(r.y), static_cast<int>(r.width), static_cast<int>(r.height));
+    DrawRectangleRec(r, Color{10, 16, 20, 255});
+    float srcHalf = static_cast<float>(range * 1.45 / mPerPx);
+    float u = static_cast<float>((ps.pos.x + Terrain::kHalfSize) / mPerPx), v = static_cast<float>((ps.pos.z + Terrain::kHalfSize) / mPerPx);
+    float dstHalf = static_cast<float>(range * 1.45) * pxPerM;
+    DrawTexturePro(c.minimap, {u - srcHalf, v - srcHalf, srcHalf * 2, srcHalf * 2}, {cx, cy, dstHalf * 2, dstHalf * 2}, {dstHalf, dstHalf},
+                   static_cast<float>(-hdg), Color{255, 255, 255, 215});
+    // range rings
+    DrawRingLines({cx, cy}, size * 0.25f, size * 0.25f, 0, 360, 48, Color{255, 255, 255, 40});
+    DrawRingLines({cx, cy}, size * 0.5f, size * 0.5f, 0, 360, 64, Color{255, 255, 255, 40});
+    double psi = hdg * DEG2RAD;
+    Vector2 fw = {static_cast<float>(std::sin(psi)), static_cast<float>(-std::cos(psi))};
+    Vector2 rt = {static_cast<float>(std::cos(psi)), static_cast<float>(std::sin(psi))};
+    auto toMap = [&](const Vec3& p) {
+        float dx = static_cast<float>(p.x - ps.pos.x), dz = static_cast<float>(p.z - ps.pos.z);
+        return Vector2{cx + (dx * rt.x + dz * rt.y) * pxPerM, cy - (dx * fw.x + dz * fw.y) * pxPerM};
+    };
+    auto tri = [&](Vector2 p, double headingDeg, float sz, Color col) {
+        double rel = (headingDeg - hdg) * DEG2RAD;
+        Vector2 f = {static_cast<float>(std::sin(rel)), static_cast<float>(-std::cos(rel))};
+        Vector2 n = {-f.y, f.x};
+        Vector2 a = {p.x + f.x * sz, p.y + f.y * sz};
+        Vector2 b = {p.x - f.x * sz * 0.7f + n.x * sz * 0.65f, p.y - f.y * sz * 0.7f + n.y * sz * 0.65f};
+        Vector2 d = {p.x - f.x * sz * 0.7f - n.x * sz * 0.65f, p.y - f.y * sz * 0.7f - n.y * sz * 0.65f};
+        DrawTriangle(a, d, b, col);
+        DrawTriangle(a, b, d, col);
+    };
+    if (c.battle) {
+        for (const GroundTarget& g : c.battle->ground())
+            if (g.alive) { Vector2 m = toMap(g.pos); DrawRectangleV({m.x - 2 * s, m.y - 2 * s}, {4 * s, 4 * s}, Color{255, 90, 70, 200}); }
+        for (const auto& jp : c.battle->jets()) {
+            if (jp->isPlayer || !jp->alive) continue;
+            tri(toMap(jp->fm->state().pos), compassHeadingDeg(jp->fm->state().q), 6 * s, jp->team == Team::Red ? kEnemy : kAlly);
+        }
+        for (const Missile& m : c.battle->missiles()) DrawCircleV(toMap(m.pos), 2 * s, m.team == Team::Red ? kEnemy : WHITE);
+    }
+    tri({cx, cy}, hdg, 8 * s, WHITE);
+    EndScissorMode();
+    DrawRectangleLinesEx(r, 1, kPanelBorder);
+    // north marker
+    Vector2 north = {cx + (0 * rt.x + -1 * rt.y) * size * 0.44f, cy - (0 * fw.x + -1 * fw.y) * size * 0.44f};
+    ui::textShadow("N", north.x, north.y - 7 * s, 14 * s, WHITE, Align::Center);
+    ui::text(fmt("%.0f KM", range / 1000.0), r.x + 4 * s, r.y + 4 * s, 11 * s, Color{255, 255, 255, 140});
+}
+
+void Hud::killFeed(const HudContext& c) {
+    if (!c.battle) return;
+    float s = c.h / 720.0f;
+    float y = 18 * s;
+    for (const KillFeedEntry& k : c.battle->killFeed()) {
+        float a = static_cast<float>(std::clamp(9.0 - k.age, 0.0, 1.0));
+        std::string mid = k.weapon.empty() ? "  >  " : "  [" + k.weapon + "]  ";
+        std::string all = k.killer + mid + k.victim;
+        float tw = ui::measure(all, 15 * s);
+        Rectangle r = {c.w - tw - 32 * s, y, tw + 16 * s, 24 * s};
+        DrawRectangleRec(r, Color{0, 0, 0, static_cast<unsigned char>(110 * a)});
+        float x = r.x + 8 * s;
+        Color kc = ui::withAlpha(k.killerBlue ? kAlly : kEnemy, a);
+        Color vc = ui::withAlpha(k.killerBlue ? kEnemy : kAlly, a);
+        if (k.killer == "YOU") kc = ui::withAlpha(Color{255, 225, 120, 255}, a);
+        ui::text(k.killer, x, y + 4 * s, 15 * s, kc);
+        x += ui::measure(k.killer, 15 * s);
+        ui::text(mid, x, y + 4 * s, 15 * s, ui::withAlpha(WHITE, a * 0.7f));
+        x += ui::measure(mid, 15 * s);
+        ui::text(k.victim, x, y + 4 * s, 15 * s, k.victim == "YOU" ? ui::withAlpha(Color{255, 225, 120, 255}, a) : vc);
+        y += 28 * s;
+    }
+}
+
+void Hud::warnings(const HudContext& c) {
+    const FlightState& ps = c.player->fm->state();
+    float s = c.h / 720.0f;
+    bool blink = std::fmod(time_, 0.5) < 0.3;
+    float y = c.h * 0.30f;
+    if (c.battle && c.battle->playerMissileWarning()) {
+        if (blink) {
+            const char* t = "MISSILE INCOMING";
+            float tw = ui::measure(t, 30 * s);
+            DrawRectangle(static_cast<int>(c.w / 2 - tw / 2 - 16 * s), static_cast<int>(y - 6 * s), static_cast<int>(tw + 32 * s), static_cast<int>(44 * s), Color{120, 0, 0, 150});
+            ui::textShadow(t, c.w * 0.5f, y, 30 * s, Color{255, 80, 70, 255}, Align::Center);
+        }
+        ui::textShadow(fmt("DEPLOY FLARES  [X]   %.1f KM", c.battle->nearestThreatDistance() / 1000.0), c.w * 0.5f, y + 42 * s, 16 * s, WHITE, Align::Center);
+        // direction arrow around the centre
+        Vec3 d = c.battle->nearestThreatDir();
+        Matrix view = GetCameraMatrix(c.cam);
+        Vector3 right = {view.m0, view.m4, view.m8}, fwd = Vector3Normalize(Vector3Subtract(c.cam.target, c.cam.position));
+        Vector3 dd = toRl(d);
+        Vector2 dir = Vector2Normalize({Vector3DotProduct(dd, right), -Vector3DotProduct(dd, fwd)});
+        Vector2 ctr = {c.w * 0.5f, c.h * 0.5f};
+        float rr = 110 * s;
+        Vector2 tip = {ctr.x + dir.x * (rr + 22 * s), ctr.y + dir.y * (rr + 22 * s)};
+        Vector2 n = {-dir.y, dir.x};
+        Vector2 b1 = {ctr.x + dir.x * rr + n.x * 14 * s, ctr.y + dir.y * rr + n.y * 14 * s};
+        Vector2 b2 = {ctr.x + dir.x * rr - n.x * 14 * s, ctr.y + dir.y * rr - n.y * 14 * s};
+        DrawTriangle(tip, b2, b1, Color{255, 60, 50, 230});
+        DrawTriangle(tip, b1, b2, Color{255, 60, 50, 230});
+        y += 80 * s;
+    }
+    if (c.gpws && blink) {
+        ui::textShadow("PULL UP", c.w * 0.5f, y, 32 * s, Color{255, 60, 50, 255}, Align::Center);
+        y += 44 * s;
+    }
+    if (ps.stalled && blink) {
+        ui::textShadow("STALL", c.w * 0.5f, y, 28 * s, kWarn, Align::Center);
+        y += 40 * s;
+    }
+    if (!ps.onGround && ps.gearPos > 0.5 && ps.airspeed > 150 && blink) {
+        ui::textShadow("GEAR OVERSPEED", c.w * 0.5f, y, 22 * s, kWarn, Align::Center);
+        y += 32 * s;
+    }
+    double horiz = std::sqrt(ps.pos.x * ps.pos.x + ps.pos.z * ps.pos.z);
+    if (c.arena && horiz > 14000 && blink) {
+        ui::textShadow("RETURN TO THE COMBAT AREA", c.w * 0.5f, y, 22 * s, kWarn, Align::Center);
+        y += 32 * s;
+    }
+    if (ps.fuelKg < 900 && ps.engine == EngineState::Running && blink)
+        ui::textShadow("BINGO FUEL", c.w * 0.5f, y, 20 * s, kWarn, Align::Center);
+}
+
+void Hud::missionPanel(const HudContext& c) {
+    float s = c.h / 720.0f;
+    if (c.mission) {
+        const Mission& m = *c.mission;
+        float w = 330 * s;
+        float lineH = 22 * s;
+        float h = 52 * s + lineH * m.stepCount() + 38 * s;
+        Rectangle r = {18 * s, 18 * s, w, h};
+        ui::panel(r, kPanel, kPanelBorder);
+        ui::text("MISSION 01", r.x + 12 * s, r.y + 8 * s, 13 * s, Color{150, 255, 205, 200});
+        ui::text(m.title(), r.x + 12 * s, r.y + 24 * s, 19 * s, WHITE);
+        float y = r.y + 52 * s;
+        for (size_t i = 0; i < m.stepCount(); ++i) {
+            const MissionStep& st = m.steps()[i];
+            bool done = i < m.stepIndex();
+            bool cur = i == m.stepIndex() && m.status() == MissionStatus::Running;
+            Color col = done ? Color{120, 240, 160, 220} : cur ? WHITE : Color{255, 255, 255, 90};
+            if (cur) DrawRectangle(static_cast<int>(r.x + 4 * s), static_cast<int>(y - 3 * s), static_cast<int>(w - 8 * s), static_cast<int>(lineH), Color{150, 255, 205, 35});
+            const char* mark = done ? "+" : cur ? ">" : " ";
+            ui::text(mark, r.x + 12 * s, y, 15 * s, col);
+            ui::text(st.title, r.x + 30 * s, y, 15 * s, col);
+            if (cur && !st.keyHint.empty()) {
+                float kw = ui::measure(st.keyHint, 12 * s) + 12 * s;
+                Rectangle kb = {r.x + w - kw - 10 * s, y - 1 * s, kw, 18 * s};
+                DrawRectangleRec(kb, Color{255, 255, 255, 220});
+                ui::text(st.keyHint, kb.x + kw / 2, kb.y + 3 * s, 12 * s, BLACK, Align::Center);
+            }
+            y += lineH;
+        }
+        if (const MissionStep* cur = m.current()) {
+            ui::text(cur->instruction, r.x + 12 * s, y + 4 * s, 13 * s, Color{220, 230, 230, 230}, Align::Left, false);
+            if (cur->progress && c.player) {
+                MissionContext ctx{&c.player->fm->state(), &c.player->fm->profile(), nullptr, 0};
+                float pr = static_cast<float>(std::clamp(cur->progress(ctx), 0.0, 1.0));
+                if (cur->holdSeconds > 0 && m.holdTimer() > 0) pr = static_cast<float>(m.holdTimer() / cur->holdSeconds);
+                DrawRectangle(static_cast<int>(r.x + 12 * s), static_cast<int>(y + 24 * s), static_cast<int>((w - 24 * s)), static_cast<int>(4 * s), Color{255, 255, 255, 40});
+                DrawRectangle(static_cast<int>(r.x + 12 * s), static_cast<int>(y + 24 * s), static_cast<int>((w - 24 * s) * pr), static_cast<int>(4 * s), Color{150, 255, 205, 220});
+            }
+        }
+        if (m.stepFlash() > 0 && m.stepIndex() > 0) {
+            float a = static_cast<float>(std::min(1.0, m.stepFlash()));
+            ui::textShadow(std::string("COMPLETE: ") + m.steps()[m.stepIndex() - 1].title, c.w * 0.5f, c.h * 0.2f, 22 * s, ui::withAlpha(Color{120, 255, 170, 255}, a), Align::Center);
+        }
+        if (m.status() == MissionStatus::Complete && c.missionDone) {
+            ui::textShadow("MISSION COMPLETE", c.w * 0.5f, c.h * 0.16f, 40 * s, Color{120, 255, 170, 255}, Align::Center);
+            ui::textShadow(fmt("TIME %.0f s     PRESS ENTER TO ENGAGE INBOUND BANDITS", m.elapsed()), c.w * 0.5f, c.h * 0.16f + 50 * s, 17 * s, WHITE, Align::Center);
+        }
+    } else if (c.arena && c.battle) {
+        Rectangle r = {18 * s, 18 * s, 250 * s, 78 * s};
+        ui::panel(r, kPanel, kPanelBorder);
+        ui::text("DOGFIGHT ARENA", r.x + 12 * s, r.y + 8 * s, 13 * s, Color{150, 255, 205, 200});
+        ui::text(fmti("WAVE %d", c.battle->wave()), r.x + 12 * s, r.y + 26 * s, 22 * s, WHITE);
+        ui::text(fmti("SCORE %d", c.battle->score()), r.x + r.width - 12 * s, r.y + 26 * s, 22 * s, Color{255, 225, 120, 255}, Align::Right);
+        ui::text(fmti("BANDITS %d", c.battle->enemiesAlive()), r.x + 12 * s, r.y + 54 * s, 14 * s, kEnemy);
+        ui::text(fmti("KILLS %d", c.player->kills), r.x + r.width - 12 * s, r.y + 54 * s, 14 * s, WHITE, Align::Right);
+        if (c.battle->waveBannerTimer() > 0) {
+            float a = static_cast<float>(std::min(1.0, c.battle->waveBannerTimer()));
+            ui::textShadow(fmti("WAVE %d", c.battle->wave()), c.w * 0.5f, c.h * 0.19f, 46 * s, ui::withAlpha(WHITE, a), Align::Center);
+            ui::textShadow(fmti("%d BANDITS INBOUND", c.battle->enemiesAlive()), c.w * 0.5f, c.h * 0.19f + 52 * s, 18 * s, ui::withAlpha(kEnemy, a), Align::Center);
+        }
+    }
+}
+
+void Hud::radioPanel(const HudContext& c) {
+    if (c.settings && !c.settings->captions) return;
+    float s = c.h / 720.0f;
+    float y = 84 * s;
+    for (auto it = radio_.begin(); it != radio_.end(); ++it) {
+        float a = static_cast<float>(std::clamp(std::min(it->t * 4.0, it->dur - it->t), 0.0, 1.0));
+        std::string full = it->who + ":  " + it->text;
+        float tw = ui::measure(full, 16 * s);
+        DrawRectangle(static_cast<int>(c.w / 2 - tw / 2 - 12 * s), static_cast<int>(y - 4 * s), static_cast<int>(tw + 24 * s), static_cast<int>(26 * s), Color{0, 0, 0, static_cast<unsigned char>(120 * a)});
+        float x = c.w / 2 - tw / 2;
+        ui::text(it->who + ":", x, y, 16 * s, ui::withAlpha(Color{150, 255, 205, 255}, a));
+        ui::text(it->text, x + ui::measure(it->who + ":  ", 16 * s), y, 16 * s, ui::withAlpha(WHITE, a), Align::Left, false);
+        y += 30 * s;
+    }
+}
+
+void Hud::popups(const HudContext& c) {
+    float s = c.h / 720.0f;
+    float y = c.h * 0.58f;
+    for (const Popup& p : popups_) {
+        float a = static_cast<float>(std::clamp(2.4 - p.t, 0.0, 1.0));
+        float rise = static_cast<float>(p.t * 12.0);
+        ui::textShadow(p.text, c.w * 0.5f, y - rise * s, 20 * s, ui::withAlpha(p.color, a), Align::Center);
+        y += 26 * s;
+    }
+}
+
+void Hud::debug(const HudContext& c) {
+    float s = c.h / 720.0f;
+    const FlightState& st = c.player->fm->state();
+    Rectangle r = {c.w - 300 * s, 200 * s, 282 * s, 300 * s};
+    ui::panel(r, Color{0, 0, 0, 170}, kPanelBorder);
+    float x = r.x + 10 * s, y = r.y + 8 * s, lh = 17 * s;
+    auto row = [&](const std::string& t) { ui::text(t, x, y, 13 * s, WHITE, Align::Left, false); y += lh; };
+    row(fmt("FPS %.0f", c.frame.mean > 0 ? 1000.0 / c.frame.mean : 0.0));
+    row(fmt("frame p50 %.2f ms", c.frame.p50) + fmt("  p95 %.2f", c.frame.p95));
+    row(fmt("frame p99 %.2f ms", c.frame.p99) + fmt("  max %.1f", c.frame.max));
+    row(fmt("world pass %.2f ms (CPU submit)", c.worldMs));
+    row(fmti("draw calls %d", c.drawCalls) + fmti("   particles %d", static_cast<int>(c.particles)));
+    row(fmt("sim %.0f Hz fixed", c.fixedHz) + fmti("  dropped %d", c.droppedSteps));
+    row(fmt("pos %.0f, ", st.pos.x) + fmt("%.0f, ", st.pos.y) + fmt("%.0f", st.pos.z));
+    row(fmt("TAS %.1f m/s", st.airspeed) + fmt("  qbar %.0f Pa", st.qbar));
+    row(fmt("alpha %.1f deg", st.alpha / kDeg) + fmt("  beta %.1f", st.beta / kDeg));
+    row(fmt("CL %.2f", st.cl) + fmt("  CD %.3f", st.cd) + fmt("  n %.2f g", st.gLoad));
+    row(fmt("thrust %.0f kN", st.thrustN / 1000.0) + fmt("  rpm %.0f%%", st.rpm * 100.0));
+    row(fmt("fuel %.0f kg", st.fuelKg) + fmt("  mass %.0f kg", c.player->fm->massKg()));
+    row(std::string("handling ") + (c.player->fm->handling() == HandlingMode::Assisted ? "ASSISTED" : "SIMULATION"));
+    row(std::string("time of day ") + c.timeOfDay + (c.gamepad ? "   PAD" : ""));
+    row(std::string("camera ") + cameraName(c.camMode));
+}
+
+void Hud::help(const HudContext& c) {
+    float s = c.h / 720.0f;
+    Rectangle r = {c.w * 0.5f - 300 * s, c.h * 0.5f - 210 * s, 600 * s, 420 * s};
+    ui::panel(r, Color{0, 0, 0, 200}, kPanelBorder);
+    ui::text("CONTROLS", r.x + 20 * s, r.y + 14 * s, 22 * s, WHITE);
+    const char* rows[][2] = {
+        {"W / S", "Throttle up / down (full = afterburner)"}, {"Arrow Up / Down", "Pitch (Down = pull up)"},
+        {"Arrow Left / Right", "Roll"}, {"A / D", "Yaw / nosewheel steering"}, {"E", "Engine start"},
+        {"B", "Parking brake"}, {"Left Ctrl", "Wheel brakes / air brake (hold)"}, {"G", "Landing gear"},
+        {"Space / Left mouse", "Cannon"}, {"F", "Missile (lock first)"}, {"X", "Flares"}, {"T / Tab", "Cycle target"},
+        {"C", "Camera: cockpit / chase / external"}, {"Right mouse drag, I J K L", "Look around / orbit"},
+        {"R", "Reset / respawn"}, {"F3  /  F5", "Telemetry  /  time of day"}, {"Esc / P", "Pause menu"}, {"H", "Close help"}};
+    float y = r.y + 50 * s;
+    for (auto& row : rows) {
+        ui::text(row[0], r.x + 20 * s, y, 15 * s, Color{150, 255, 205, 255});
+        ui::text(row[1], r.x + 230 * s, y, 15 * s, WHITE, Align::Left, false);
+        y += 20 * s;
+    }
+}
+
+}  // namespace sky
