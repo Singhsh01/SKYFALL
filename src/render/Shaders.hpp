@@ -45,6 +45,27 @@ vec3 applyFog(vec3 col, vec3 worldPos) {
     return mix(col, fogCol, clamp(fogAmount(worldPos), 0.0, 1.0));
 }
 
+uniform mat4 uLightVP;
+uniform sampler2D uShadowMap;
+uniform float uShadowOn;
+float shadowAt(vec3 wp, float ndl) {
+    if (uShadowOn < 0.5) return 1.0;
+    vec4 lp = uLightVP * vec4(wp, 1.0);
+    vec3 p = lp.xyz / lp.w * 0.5 + 0.5;
+    if (p.x <= 0.0 || p.x >= 1.0 || p.y <= 0.0 || p.y >= 1.0 || p.z >= 1.0) return 1.0;
+    float bias = 0.0008 + 0.0025 * (1.0 - clamp(ndl, 0.0, 1.0));
+    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+    float occl = 0.0;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+            occl += (p.z - bias > texture(uShadowMap, p.xy + vec2(x, y) * texel).r) ? 1.0 : 0.0;
+    occl /= 9.0;
+    // fade out towards the edge of the shadow volume
+    vec2 e = abs(p.xy - 0.5) * 2.0;
+    occl *= 1.0 - smoothstep(0.8, 1.0, max(e.x, e.y));
+    return 1.0 - 0.82 * occl;
+}
+
 vec3 ambientLight(vec3 n) {
     // hemispheric ambient: sky from above, warm ground bounce from below
     vec3 skyAmb = mix(uHorizon, uZenith, 0.5) * 0.9;
@@ -172,7 +193,7 @@ void main() {
         fc *= furrow * (0.9 + 0.2 * micro);
         float edge = min(min(fr.x, 1.0 - fr.x) * sz.x, min(fr.y, 1.0 - fr.y) * sz.y);
         fc = mix(vec3(0.12, 0.16, 0.07), fc, smoothstep(2.0, 5.0, edge));
-        float farm = smoothstep(0.10, 0.03, 1.0 - vNormal.y) * smoothstep(420.0, 260.0, vPos.y) * smoothstep(12.0, 30.0, vPos.y);
+        float farm = smoothstep(0.16, 0.02, 1.0 - normalize(vNormal).y) * smoothstep(420.0, 260.0, vPos.y) * smoothstep(12.0, 30.0, vPos.y);
         farm *= smoothstep(0.38, 0.5, texture(uNoise, vPos.xz / 9000.0 + 0.37).g);
         albedo = mix(albedo, fc, farm * 0.9);
     }
@@ -186,8 +207,8 @@ void main() {
     albedo = mix(albedo, sand, beach);
     albedo = mix(albedo, albedo * 0.55, smoothstep(1.0, -2.0, vPos.y)); // wet below waterline
 
-    float sh = cloudShadow(vPos);
     float ndl = max(dot(n, uSunDir), 0.0);
+    float sh = cloudShadow(vPos) * shadowAt(vPos, ndl);
     vec3 light = uSunColor * ndl * sh + ambientLight(n) * (0.75 + 0.25 * sh);
     vec3 col = albedo * light;
     // explosion flash
@@ -294,7 +315,8 @@ void main() {
     float ndl = max(dot(n, uSunDir), 0.0);
     vec3 h = normalize(uSunDir + v);
     float spec = pow(max(dot(n, h), 0.0), 40.0) * uSpecular;
-    vec3 col = albedo * (uSunColor * ndl + ambientLight(n)) + uSunColor * spec;
+    float shd = shadowAt(vPos, ndl);
+    vec3 col = albedo * (uSunColor * ndl * shd + ambientLight(n)) + uSunColor * spec * shd;
     float fd = length(uFlashPos - vPos);
     col += albedo * uFlashColor * (1.0 / (1.0 + fd * fd * 0.0004));
     col = mix(col, albedo * 3.0, uEmissive);
@@ -370,7 +392,7 @@ void main() {
         line *= step(0.45, texture(uNoise, floor(vObj.xz * vec2(0.32, 0.41)) / 37.0).b);
         base *= 1.0 - line * 0.16;
         // weathering
-        base *= 0.88 + 0.24 * texture(uNoise, vObj.xz / 3.0).b;
+        base *= 0.94 + 0.12 * texture(uNoise, vObj.xz / 5.0).b;
         metal = 0.22; rough = uRoughness;
     } else if (mat > 0.25) {
         base = vColor.rgb; metal = 0.85; rough = 0.42;
@@ -389,7 +411,8 @@ void main() {
     vec3 F = F0 + (1.0 - F0) * pow(1.0 - max(dot(h, v), 0.0), 5.0);
     float spec = D_GGX(NoH, max(a, 0.02)) * 0.25 / max(NoL * NoV, 0.1);
     vec3 diffuse = base * (1.0 - metal) * NoL;
-    vec3 col = (diffuse + F * spec * NoL) * uSunColor;
+    float shd = shadowAt(vPos, NoL);
+    vec3 col = (diffuse + F * spec * NoL) * uSunColor * shd;
     // environment: sky above, darker ground below (horizon line reflects like real metal)
     vec3 r = reflect(-v, n);
     vec3 env = r.y > 0.0 ? skyColor(r, 0.0) : mix(uGroundHaze * 0.7, uGroundHaze * 0.4, clamp(-r.y * 3.0, 0.0, 1.0));
@@ -542,7 +565,7 @@ void main() {
     paint = clamp(paint, 0.0, 1.0) * (0.75 + 0.25 * n);
     vec3 albedo = mix(asphalt, uKind > 0.5 ? vec3(0.85, 0.7, 0.15) : vec3(0.86), paint);
     vec3 nrm = vec3(0, 1, 0);
-    vec3 col = albedo * (uSunColor * max(uSunDir.y, 0.0) + ambientLight(nrm));
+    vec3 col = albedo * (uSunColor * max(uSunDir.y, 0.0) * shadowAt(vPos, uSunDir.y) + ambientLight(nrm));
     vec3 v = normalize(uCamPos - vPos);
     vec3 h = normalize(uSunDir + v);
     col += uSunColor * pow(max(h.y, 0.0), 60.0) * 0.08;

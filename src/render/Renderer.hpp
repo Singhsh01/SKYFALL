@@ -41,6 +41,8 @@ struct FrameParams {
     bool bloom = true;
     GraphicsQuality quality = GraphicsQuality::High;
     float exposureBoost = 1.0f;
+    bool shadows = true;
+    Vector3 shadowFocus{0, 0, 0};
 };
 
 class Renderer {
@@ -81,6 +83,7 @@ public:
 
 private:
     void buildGroundModels();
+    void renderShadows(const FrameParams& f);
     void buildClouds(const Terrain& t);
     void drawSky(const FrameParams& f);
     void drawTerrain(const FrameParams& f);
@@ -104,6 +107,12 @@ private:
     Material terrainMat_{}, waterMat_{}, litMat_{}, jetMat_{}, flameMat_{}, cloudMat_{}, runwayMat_{};
 
     RenderTexture2D scene_{}, bloomA_{}, bloomB_{}, bloomC_{}, bloomD_{};
+    RenderTexture2D shadowRT_{};
+    Texture2D shadowDepth_{};
+    Matrix lightVP_{};
+    bool shadowsActive_ = false;
+    Prog shadowP_;
+    Material shadowMat_{};
     int w_ = 0, h_ = 0;
     bool hdr_ = true;
     double worldMs_ = 0;

@@ -47,6 +47,17 @@ void main() {
 }
 )GLSL";
 
+const char* kShadowVS = R"GLSL(#version 330
+in vec3 vertexPosition;
+uniform mat4 mvp;
+void main() { gl_Position = mvp * vec4(vertexPosition, 1.0); }
+)GLSL";
+const char* kShadowFS = R"GLSL(#version 330
+out vec4 finalColor;
+void main() { finalColor = vec4(1.0); }
+)GLSL";
+constexpr int kShadowSize = 2048;
+
 Vector3 paintFor(const Jet& j, Vector3& b, float& camo) {
     camo = 0;
     if (j.team == Team::Blue) { b = {0.25f, 0.26f, 0.28f}; return {0.33f, 0.345f, 0.36f}; }
@@ -143,6 +154,33 @@ bool Renderer::init(const Terrain& t, int width, int height) {
         m.shader = p.sh;
         return m;
     };
+    // sun shadow map (depth texture) around the player aircraft
+    shadowP_.sh = LoadShaderFromMemory(kShadowVS, kShadowFS);
+    shadowMat_ = LoadMaterialDefault();
+    shadowMat_.shader = shadowP_.sh;
+    shadowRT_.id = rlLoadFramebuffer();
+    if (shadowRT_.id) {
+        rlEnableFramebuffer(shadowRT_.id);
+        shadowRT_.texture.id = rlLoadTexture(nullptr, kShadowSize, kShadowSize, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE, 1);
+        shadowRT_.texture.width = shadowRT_.texture.height = kShadowSize;
+        shadowRT_.texture.format = PIXELFORMAT_UNCOMPRESSED_GRAYSCALE; shadowRT_.texture.mipmaps = 1;
+        shadowRT_.depth.id = rlLoadTextureDepth(kShadowSize, kShadowSize, false);
+        shadowRT_.depth.width = shadowRT_.depth.height = kShadowSize;
+        rlFramebufferAttach(shadowRT_.id, shadowRT_.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
+        rlFramebufferAttach(shadowRT_.id, shadowRT_.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);
+        bool ok = rlFramebufferComplete(shadowRT_.id);
+        rlDisableFramebuffer();
+        if (!ok) { TraceLog(LOG_WARNING, "SKYFALL: shadow map unavailable"); rlUnloadFramebuffer(shadowRT_.id); shadowRT_.id = 0; }
+        shadowDepth_ = shadowRT_.depth;
+        shadowDepth_.mipmaps = 1;
+        shadowDepth_.format = PIXELFORMAT_UNCOMPRESSED_R32;
+    }
+    auto bindShadow = [&](Prog& p, Material& m) {
+        if (!shadowRT_.id) return;
+        p.sh.locs[SHADER_LOC_MAP_ROUGHNESS] = p.loc("uShadowMap");
+        m.maps[MATERIAL_MAP_ROUGHNESS].texture = shadowDepth_;
+        m.shader = p.sh;
+    };
     terrainMat_ = mat(terrain_p_, true, false);
     waterMat_ = mat(water_, true, true);
     litMat_ = mat(lit_, false, false);
@@ -150,6 +188,10 @@ bool Renderer::init(const Terrain& t, int width, int height) {
     flameMat_ = mat(flameP_, true, false);
     cloudMat_ = mat(cloud_, true, false);
     runwayMat_ = mat(runway_, true, false);
+    bindShadow(terrain_p_, terrainMat_);
+    bindShadow(lit_, litMat_);
+    bindShadow(jet_, jetMat_);
+    bindShadow(runway_, runwayMat_);
     resize(width, height);
     return true;
 }
@@ -257,6 +299,8 @@ void Renderer::setAtmosphere(Prog& p, const FrameParams& f) {
     p.setF("uFogFalloff", f.L.fogFalloff);
     p.setF("uTime", static_cast<float>(f.time));
     p.setF("uCloudCover", f.L.cloudCover);
+    p.setF("uShadowOn", (shadowsActive_ && f.shadows) ? 1.0f : 0.0f);
+    p.setM("uLightVP", lightVP_);
     const FlashLight& fl = effects_.flash();
     p.setV3("uFlashPos", fl.pos);
     p.setV3("uFlashColor", Vector3Scale(fl.color, fl.intensity));
@@ -555,9 +599,50 @@ void Renderer::drawCloudPuffs(const FrameParams& f) {
     EndShaderMode();
 }
 
+void Renderer::renderShadows(const FrameParams& f) {
+    shadowsActive_ = false;
+    if (!shadowRT_.id || !f.battle || !f.shadows || f.quality == GraphicsQuality::Low) return;
+    Vector3 focus = f.shadowFocus;
+    Vector3 sd = f.L.sunDir;
+    if (sd.y < 0.03f) return;
+    Camera3D lc{};
+    lc.position = Vector3Add(focus, Vector3Scale(sd, 300.0f));
+    lc.target = focus;
+    lc.up = std::fabs(sd.y) > 0.95f ? Vector3{1, 0, 0} : Vector3{0, 1, 0};
+    lc.fovy = 72.0f;  // orthographic height in metres
+    lc.projection = CAMERA_ORTHOGRAPHIC;
+    BeginTextureMode(shadowRT_);
+    ClearBackground(WHITE);
+    rlSetClipPlanes(10.0, 700.0);
+    BeginMode3D(lc);
+    lightVP_ = MatrixMultiply(rlGetMatrixModelview(), rlGetMatrixProjection());
+    rlDisableBackfaceCulling();
+    for (const auto& jp : f.battle->jets()) {
+        const Jet& j = *jp;
+        if (!j.alive) continue;
+        const FlightState& s = j.fm->state();
+        if (Vector3Distance(toRl(s.pos), focus) > 60.0f) continue;
+        const JetModel& jm = jets_[static_cast<int>(j.fm->profile().style)];
+        Matrix M = bodyMatrix(s.pos, s.q);
+        DrawMesh(jm.body, shadowMat_, M);
+        DrawMesh(jm.canopy, shadowMat_, M);
+        if (jm.stabL.vertexCount) {
+            float a = static_cast<float>(-j.lastInput.pitch * 15.0) * DEG2RAD;
+            DrawMesh(jm.stabL, shadowMat_, MatrixMultiply(MatrixMultiply(MatrixRotateZ(a), MatrixTranslate(jm.stabPivotL.x, jm.stabPivotL.y, jm.stabPivotL.z)), M));
+            DrawMesh(jm.stabR, shadowMat_, MatrixMultiply(MatrixMultiply(MatrixRotateZ(a), MatrixTranslate(jm.stabPivotR.x, jm.stabPivotR.y, jm.stabPivotR.z)), M));
+        }
+        if (s.gearPos > 0.02) DrawMesh(jm.gear, shadowMat_, MatrixMultiply(MatrixTranslate(0, (1.0f - static_cast<float>(s.gearPos)) * 1.6f, 0), M));
+    }
+    rlEnableBackfaceCulling();
+    EndMode3D();
+    EndTextureMode();
+    shadowsActive_ = true;
+}
+
 void Renderer::renderWorld(const FrameParams& f) {
     auto t0 = std::chrono::steady_clock::now();
     drawCalls_ = 0;
+    renderShadows(f);
     BeginTextureMode(scene_);
     ClearBackground(BLACK);
     drawSky(f);

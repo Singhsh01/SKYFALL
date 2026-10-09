@@ -574,6 +574,7 @@ FrameParams Game::makeFrameParams() {
     f.showRunwayLights = tod_ == TimeOfDay::GoldenHour || mode_ == GameMode::Mission01;
     f.bloom = settings_.bloom;
     f.quality = settings_.quality;
+    f.shadowFocus = toRl(battle_.player().fm->state().pos);
     return f;
 }
 
@@ -599,6 +600,7 @@ void Game::renderFrame() {
         renderer_.beginOverlay3D(local, 0.03f, 80.0f);
         FrameParams fo = f;
         fo.cam = local;
+        fo.shadows = false;
         fo.nearPlane = 0.03f;
         fo.farPlane = 80.0f;
         renderer_.setAtmosphere(renderer_.jetProg(), fo);
@@ -869,6 +871,25 @@ int Game::runCapture() {
                 snap(std::string("jet_") + p.fm->profile().shortName);
             }
         }
+        return 0;
+    }
+    if (set == "shadow") {
+        hideHud_ = true;
+        startMission01();
+        tod_ = TimeOfDay::Noon; lighting_ = Lighting::preset(tod_);
+        camMode_ = CameraMode::External; orbitYaw_ = 1.2; orbitPitch_ = 0.9; zoom_ = 1.4;
+        scriptedStep(0.2, [&](double) {});
+        snap("shadow_noon_runway", 2);
+        tod_ = TimeOfDay::Morning; lighting_ = Lighting::preset(tod_);
+        orbitYaw_ = 3.9; orbitPitch_ = 0.5;
+        snap("shadow_morning_runway", 2);
+        startArena(false);
+        battle_.clearCombatants();
+        battle_.player().fm->resetAirborne({-4000, 2200, 1000}, 0.0, 230, 0.8);
+        tod_ = TimeOfDay::Noon; lighting_ = Lighting::preset(tod_);
+        orbitYaw_ = 0.6; orbitPitch_ = 1.0; zoom_ = 1.0;
+        scriptedStep(0.2, [&](double) {});
+        snap("shadow_self_air", 2);
         return 0;
     }
     if (set == "cockpit") {

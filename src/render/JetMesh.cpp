@@ -244,7 +244,7 @@ Geo geoFor(AirframeStyle s) {
             g.canX0 = 6.9f; g.canX1 = 2.4f; g.canW = 0.56f; g.canH = 0.6f; g.canY = 0.5f;
             g.wing = {2.2f, -6.4f, -3.7f, -5.0f, 1.9f, 6.8f, -0.05f, -0.12f, 0.32f};
             g.stab = {-6.3f, -9.0f, -8.5f, -9.7f, 1.55f, 4.5f, -0.1f, 0.0f, 0.12f};
-            g.tails = {{-4.4f, -8.0f, -6.9f, -8.6f, 3.2f, 1.75f, 0.45f, 0.49f}};
+            g.tails = {{-4.4f, -8.0f, -6.7f, -8.5f, 2.8f, 1.75f, 0.40f, 0.49f}};
             g.engines = 2; g.engineZ = 0.68f; g.nozzleX = -8.9f; g.nozzleR = 0.5f; g.nozzleLen = 1.0f; g.squareNozzle = true;
             g.intakeX = 3.4f; g.intakeZ = 1.5f; g.intakeW = 0.8f; g.intakeH = 0.9f; g.intakeY = -0.2f;
             break;
