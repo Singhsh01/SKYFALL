@@ -85,6 +85,16 @@ int Game::run(const Options& opt) {
         dt = std::min(dt, 0.25);
         frame(dt);
         stats_.push(dt * 1000.0);
+        sessionFrames_.push_back(dt * 1000.0);
+        if (sessionFrames_.size() > 200000) sessionFrames_.erase(sessionFrames_.begin(), sessionFrames_.begin() + 100000);
+    }
+    {
+        // session summary for diagnostics (skip the first 120 frames: loading / warm-up)
+        std::vector<double> v(sessionFrames_.begin() + std::min<size_t>(120, sessionFrames_.size()), sessionFrames_.end());
+        Percentiles p = FrameStats::computeFrom(v);
+        TraceLog(LOG_INFO, "SKYFALL: session %zu frames, mean %.2f ms (%.0f fps), p50 %.2f, p95 %.2f, p99 %.2f ms, scene %dx%d, window %dx%d, quality %d",
+                 p.samples, p.mean, p.mean > 0 ? 1000.0 / p.mean : 0.0, p.p50, p.p95, p.p99, renderer_.width(), renderer_.height(),
+                 GetScreenWidth(), GetScreenHeight(), static_cast<int>(settings_.quality));
     }
     settings_.save(settingsPath_);
     shutdown();

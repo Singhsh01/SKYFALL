@@ -120,6 +120,7 @@ private:
     double titleTime_ = 0;
     bool capturing_ = false;
     bool hideHud_ = false;
+    std::vector<double> sessionFrames_;
 };
 
 }  // namespace sky

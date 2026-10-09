@@ -11,3 +11,4 @@ skyfall_*.tgz
 screenshots- to be deleted later./
 .skyfall_update*.tgz
 build_config.log
+logs/

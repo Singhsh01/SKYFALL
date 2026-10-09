@@ -11,7 +11,9 @@ command -v cmake >/dev/null || { echo "cmake missing: brew install cmake"; exit 
 
 configure() { rm -rf build; cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "$@" >build_config.log 2>&1; }
 
-if configure; then
+if [ -f build/CMakeCache.txt ] && [ -f build/Makefile ]; then
+  echo "Reusing existing build directory (delete build/ to reconfigure)."
+elif configure; then
   echo "Configured with the default SDK."
 else
   echo "Default SDK failed to link a test program - trying other installed SDKs..."
