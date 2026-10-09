@@ -62,6 +62,12 @@ private:
 
 /// Mission 01 — Cold Start & Takeoff.
 Mission makeMission01();
+/// Mission 02 — First Solo Flight (attitude, turns, climb, level-off, power).
+Mission makeMission02();
+/// Mission 03 — Runway Landing (gear, 3-degree glide path, touchdown, stop).
+Mission makeMission03();
+/// Ideal 3-degree glide-path height above the runway for a horizontal distance to the threshold.
+double glidePathHeight(double distanceToThreshold);
 
 /// Catalogue of the 20 planned campaign missions (only some are playable in this build).
 struct MissionInfo {

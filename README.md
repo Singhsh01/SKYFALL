@@ -53,7 +53,10 @@ ctest --test-dir build --output-on-failure
 ./build/skyfall
 ```
 
-Or simply `./scripts/build_mac.sh` (configure + build + test + launch).
+Or simply `./scripts/build_mac.sh` (configure + build + test + launch; it also works around a
+Command Line Tools linker/SDK mismatch by falling back to an older installed SDK). Afterwards,
+`./scripts/run.sh` rebuilds incrementally and launches in seconds. Every run writes
+`logs/skyfall.log` (GPU info, warnings, and a frame-time summary on exit).
 
 Useful flags: `--mode arena` / `--mode m01` (skip the menu), `--size 1440x900`, `--windowed`,
 `--quality 0|1|2`, `--bench 30` (writes `benchmarks/benchmark.json` + `frame_times.csv`),

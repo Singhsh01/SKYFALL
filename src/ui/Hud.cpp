@@ -2,6 +2,7 @@
 
 #include "../render/Convert.hpp"
 #include "Font.hpp"
+#include "../sim/Terrain.hpp"
 #include "raymath.h"
 
 #include <algorithm>
@@ -82,6 +83,7 @@ void Hud::draw(const HudContext& c) {
     }
     killFeed(c);
     missionPanel(c);
+    if (c.mission && c.mission->id() == "M03" && !c.dead) glidePath(c);
     radioPanel(c);
     popups(c);
     // hit marker
@@ -583,7 +585,7 @@ void Hud::missionPanel(const HudContext& c) {
         float h = 52 * s + lineH * m.stepCount() + 38 * s;
         Rectangle r = {18 * s, 18 * s, w, h};
         ui::panel(r, kPanel, kPanelBorder);
-        ui::text("MISSION 01", r.x + 12 * s, r.y + 8 * s, 13 * s, Color{150, 255, 205, 200});
+        ui::text(std::string("MISSION ") + m.id().substr(1), r.x + 12 * s, r.y + 8 * s, 13 * s, Color{150, 255, 205, 200});
         ui::text(m.title(), r.x + 12 * s, r.y + 24 * s, 19 * s, WHITE);
         float y = r.y + 52 * s;
         for (size_t i = 0; i < m.stepCount(); ++i) {
@@ -619,7 +621,7 @@ void Hud::missionPanel(const HudContext& c) {
         }
         if (m.status() == MissionStatus::Complete && c.missionDone) {
             ui::textShadow("MISSION COMPLETE", c.w * 0.5f, c.h * 0.16f, 40 * s, Color{120, 255, 170, 255}, Align::Center);
-            ui::textShadow(fmt("TIME %.0f s     PRESS ENTER TO ENGAGE INBOUND BANDITS", m.elapsed()), c.w * 0.5f, c.h * 0.16f + 50 * s, 17 * s, WHITE, Align::Center);
+            ui::textShadow(fmt("TIME %.0f s     ", m.elapsed()) + c.missionNext, c.w * 0.5f, c.h * 0.16f + 50 * s, 17 * s, WHITE, Align::Center);
         }
     } else if (c.arena && c.battle) {
         Rectangle r = {18 * s, 18 * s, 250 * s, 78 * s};
@@ -635,6 +637,30 @@ void Hud::missionPanel(const HudContext& c) {
             ui::textShadow(fmti("%d BANDITS INBOUND", c.battle->enemiesAlive()), c.w * 0.5f, c.h * 0.19f + 52 * s, 18 * s, ui::withAlpha(kEnemy, a), Align::Center);
         }
     }
+}
+
+void Hud::glidePath(const HudContext& c) {
+    // ILS-style glide-slope and localiser deviation for Mission 03
+    const FlightState& st = c.player->fm->state();
+    const RunwayInfo rw = Terrain().runway();
+    float s = c.h / 720.0f;
+    double d = rw.threshold().x - st.pos.x;
+    double hAbove = st.pos.y - rw.center.y;
+    double dev = hAbove - glidePathHeight(d);          // + = above the path
+    double lat = st.pos.z - rw.center.z;               // + = right of centreline (south)
+    float cx = c.w * 0.5f, cy = c.h * 0.5f;
+    float sx = cx + 150 * s, top = cy - 90 * s, hgt = 180 * s;
+    for (int k = -2; k <= 2; ++k) DrawCircleLines(static_cast<int>(sx), static_cast<int>(cy + k * hgt / 4), 4 * s, kHudDim);
+    float gy = cy + static_cast<float>(std::clamp(dev / 120.0, -1.0, 1.0)) * hgt / 2;   // above path -> diamond low ("fly down")
+    DrawPoly({sx, gy}, 4, 8 * s, 45, kHud);
+    ui::text("GS", sx - 6 * s, top - 20 * s, 13 * s, kHud);
+    float ly = cy + 120 * s, lw = 180 * s;
+    for (int k = -2; k <= 2; ++k) DrawCircleLines(static_cast<int>(cx + k * lw / 4), static_cast<int>(ly), 4 * s, kHudDim);
+    float lx = cx - static_cast<float>(std::clamp(lat / 150.0, -1.0, 1.0)) * lw / 2;    // right of centreline -> bar left ("fly left")
+    DrawPoly({lx, ly}, 4, 8 * s, 45, kHud);
+    ui::text("LOC", cx - lw / 2 - 40 * s, ly - 7 * s, 13 * s, kHud);
+    ui::textShadow(fmt("RWY %.1f KM", d / 1000.0), sx, top + hgt + 10 * s, 15 * s, kHud, Align::Center);
+    ui::textShadow(dev > 45 ? "HIGH" : dev < -45 ? "LOW" : "ON PATH", sx, top + hgt + 28 * s, 14 * s, std::fabs(dev) > 45 ? kWarn : kHud, Align::Center);
 }
 
 void Hud::radioPanel(const HudContext& c) {

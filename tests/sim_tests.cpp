@@ -263,6 +263,55 @@ TEST(mission01_completes_with_real_flying) {
     std::printf("    mission 01 completed at t = %.1f s\n", m.elapsed());
 }
 
+TEST(mission03_scripted_approach_lands_and_stops) {
+    FlightModel fm(profile(AircraftId::F22), terrain());
+    const RunwayInfo& rw = terrain().runway();
+    Vec3 th = rw.threshold();
+    double d0 = 7000.0;
+    fm.resetAirborne({th.x - d0, rw.center.y + glidePathHeight(d0), th.z}, 0.0, 95.0, 0.45);
+    fm.mutableState().vel = Quat::fromEuler(0.0, -3.0 * kDeg, 0.0).forward() * 95.0;
+    Mission m = makeMission03();
+    MissionContext ctx{&fm.state(), &fm.profile(), &terrain(), 0};
+    fm.toggleGear();  // gear was up after resetAirborne -> lower it
+    for (int i = 0; i < 120 * 240 && m.status() == MissionStatus::Running; ++i) {
+        const FlightState& s = fm.state();
+        ControlInputs in;
+        double d = th.x - s.pos.x;
+        double h = s.pos.y - rw.center.y;
+        double target = glidePathHeight(d);
+        Euler e = toEuler(s.q);
+        in.roll = clampd(-e.bank * 2.0 - (s.pos.z - th.z) * 0.002, -1, 1);
+        if (!s.onGround) {
+            // glide-path tracking: flight-path command from the height error, flare below 12 m
+            double vsCmd = -std::tan(3.0 * kDeg) * s.airspeed + (target - h) * 0.15;
+            if (h < 14.0) vsCmd = -1.2;
+            in.pitch = clampd((vsCmd - s.vel.y) * 0.08, -0.6, 0.6);
+            double spd = h < 14.0 ? 70.0 : 88.0;
+            double lever = clampd(0.45 + (spd - s.airspeed) * 0.03, 0.0, 0.85);
+            in.throttleRate = clampd((lever - s.throttle) * 8.0, -1, 1);
+        } else {
+            in.throttleRate = -1;
+            in.brake = true;
+        }
+        fm.step(in);
+        m.update(ctx, FlightModel::kDt);
+    }
+    if (fm.state().crashed) std::printf("    crash: %s\n", crashReasonText(fm.state().crashReason));
+    CHECK(!fm.state().crashed);
+    CHECK(m.status() == MissionStatus::Complete);
+    std::printf("    landed and stopped at x=%.0f (runway %.0f..%.0f), t=%.0f s\n", fm.state().pos.x,
+                rw.center.x - rw.length / 2, rw.center.x + rw.length / 2, m.elapsed());
+}
+
+TEST(mission02_does_not_complete_without_flying) {
+    FlightModel fm(profile(AircraftId::F22), terrain());
+    fm.resetAirborne({0, 1250, 0}, 0.0, 200.0, 0.62);
+    Mission m = makeMission02();
+    MissionContext ctx{&fm.state(), &fm.profile(), &terrain(), 0};
+    for (int i = 0; i < 120 * 60; ++i) { fm.step(ControlInputs{}); m.update(ctx, FlightModel::kDt); }
+    CHECK(m.stepIndex() <= 1);   // straight & level can pass on its own, banking cannot
+}
+
 TEST(mission_fails_on_crash) {
     FlightModel fm(profile(AircraftId::F22), terrain());
     fm.resetOnRunway();

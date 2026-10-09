@@ -30,7 +30,7 @@ struct Options {
     int quality = -1;
 };
 
-enum class Screen { Title, Hangar, Settings, Playing, Paused, Help };
+enum class Screen { Title, Campaign, Hangar, Settings, Playing, Paused, Help };
 enum class GameMode { None, Mission01, Arena };
 
 class Game {
@@ -43,7 +43,8 @@ private:
     void shutdown();
     // modes
     void startTitle();
-    void startMission01();
+    void startMission01() { startMission(1); }
+    void startMission(int n);
     void startArena(bool keepPlayerState);
     void startHangar();
     void respawnPlayer();
@@ -59,6 +60,7 @@ private:
     void renderFrame();
     void drawMenus();
     void drawTitle();
+    void drawCampaign();
     void drawHangar();
     void drawSettings();
     void drawPause();
@@ -120,6 +122,7 @@ private:
     double titleTime_ = 0;
     bool capturing_ = false;
     bool hideHud_ = false;
+    int missionNo_ = 1;
     std::vector<double> sessionFrames_;
 };
 

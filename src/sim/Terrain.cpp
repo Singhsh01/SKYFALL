@@ -72,7 +72,7 @@ double Terrain::rawHeight(double x, double z) const {
     // Mountain ranges in the north and south-east, ridged for sharp crests.
     double north = smoothstep(-2500.0, -8500.0, z);
     double south = smoothstep(8000.0, 13000.0, z) * 0.8;
-    double west = smoothstep(-12500.0, -15500.0, x) * 0.7;
+    double west = smoothstep(-17000.0, -21000.0, x) * 0.7;
     double mask = std::min(1.0, north + south + west);
     double warp = fbm2(x / 9000.0 + 3.1, z / 9000.0 - 1.7, 3, 5u);
     double ridges = ridged2(x / 4200.0 + warp, z / 4200.0 - warp, 6, 23u);
@@ -98,6 +98,18 @@ double Terrain::height(double x, double z) const {
         double outside = std::sqrt(std::max(dx, 0.0) * std::max(dx, 0.0) + std::max(dz, 0.0) * std::max(dz, 0.0));
         double w = 1.0 - smoothstep(0.0, 1400.0, outside);
         h = lerpd(h, runway_.center.y - 0.6, w);
+    }
+    // Approach corridor west of runway 09: keep terrain below a 1.5-degree slope so a normal
+    // 3-degree approach never meets a hill (Mission 03).
+    {
+        double thX = runway_.center.x - runway_.length * 0.5;
+        double along = thX - x;  // metres before the threshold
+        if (along > 0.0) {
+            double wz = 1.0 - smoothstep(500.0, 1500.0, std::fabs(z - runway_.center.z));
+            double wx = 1.0 - smoothstep(9000.0, 11000.0, along);
+            double cap = runway_.center.y - 0.6 + along * std::tan(1.5 * kDeg);
+            if (h > cap) h = lerpd(h, cap, wz * wx);
+        }
     }
     // Town valley: flatten a disc so buildings/vehicles sit on level ground.
     {

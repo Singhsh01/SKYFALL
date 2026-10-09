@@ -41,6 +41,7 @@ struct HudContext {
     bool dead = false;
     std::string deathReason;
     bool missionDone = false;
+    std::string missionNext;
     double fixedHz = 120;
     int droppedSteps = 0;
     bool gamepad = false;
@@ -64,6 +65,7 @@ private:
     void killFeed(const HudContext& c);
     void warnings(const HudContext& c);
     void missionPanel(const HudContext& c);
+    void glidePath(const HudContext& c);
     void radioPanel(const HudContext& c);
     void popups(const HudContext& c);
     void debug(const HudContext& c);

@@ -140,26 +140,44 @@ void Game::startTitle() {
     applySettings();
 }
 
-void Game::startMission01() {
+void Game::startMission(int n) {
     screen_ = Screen::Playing;
-    mode_ = GameMode::Mission01;
-    tod_ = TimeOfDay::Morning;
+    mode_ = GameMode::Mission01;   // "guided mission" mode
+    missionNo_ = n;
+    tod_ = n == 3 ? TimeOfDay::Noon : TimeOfDay::Morning;
     lighting_ = Lighting::preset(tod_);
     Jet& p = battle_.createPlayer(AircraftId::F22);
-    p.fm->resetOnRunway(false);
     battle_.setAiEnabled(true);
-    mission_ = makeMission01();
+    const RunwayInfo& rw = terrain_.runway();
+    if (n == 2) {
+        p.fm->resetAirborne({rw.center.x + 2000.0, 1250.0, rw.center.z}, 0.0, 200.0, 0.62);
+        mission_ = makeMission02();
+        camMode_ = CameraMode::Chase;
+    } else if (n == 3) {
+        Vec3 th = rw.threshold();
+        double d = 7000.0;
+        p.fm->resetAirborne({th.x - d, rw.center.y + glidePathHeight(d), th.z}, 0.0, 95.0, 0.45);
+        p.fm->mutableState().q = Quat::fromEuler(0.0, 2.0 * kDeg, 0.0);
+        p.fm->mutableState().vel = Quat::fromEuler(0.0, -3.0 * kDeg, 0.0).forward() * 95.0;
+        mission_ = makeMission03();
+        camMode_ = CameraMode::Cockpit;
+    } else {
+        p.fm->resetOnRunway(false);
+        mission_ = makeMission01();
+        camMode_ = CameraMode::Cockpit;
+    }
     missionDone_ = false;
     radioStage_ = 0;
     playerDead_ = false;
     respawnTimer_ = -1;
     renderer_.effects().clear();
     hud_.clear();
-    camMode_ = CameraMode::Cockpit;
     chaseInit_ = false;
     headYaw_ = headPitch_ = 0;
     applySettings();
-    hud_.radio("TOWER", "Skyfall One, runway 09, wind calm. Start-up approved.", 7);
+    if (n == 1) hud_.radio("TOWER", "Skyfall One, runway 09, wind calm. Start-up approved.", 7);
+    else if (n == 2) hud_.radio("INSTRUCTOR", "Your aircraft. Let's see some clean flying, Skyfall One.", 6);
+    else hud_.radio("TOWER", "Skyfall One, cleared to land runway 09, wind calm.", 7);
     audio_.play(Sfx::Radio);
 }
 
@@ -244,6 +262,7 @@ void Game::frame(double dt, bool render) {
     switch (screen_) {
         case Screen::Playing: updatePlaying(dt); break;
         case Screen::Title: titleTime_ += dt; updateTitleScene(dt); break;
+        case Screen::Campaign: titleTime_ += dt; if (mode_ == GameMode::None) updateTitleScene(dt); break;
         case Screen::Hangar: updateTitleScene(dt); break;
         default: break;
     }
@@ -328,7 +347,7 @@ void Game::updatePlaying(double dt) {
     if (in.help) showHelp_ = !showHelp_;
     if (in.camera) { camMode_ = nextCamera(camMode_); chaseInit_ = false; headYaw_ = headPitch_ = 0; }
     if (in.reset) {
-        if (mode_ == GameMode::Mission01 && !missionDone_) { startMission01(); return; }
+        if (mode_ == GameMode::Mission01 && !missionDone_) { startMission(missionNo_); return; }
         respawnPlayer();
     }
     if (!playerDead_) {
@@ -346,8 +365,16 @@ void Game::updatePlaying(double dt) {
         if (in.cycleTarget) pendingCmd_.cycleTarget = true;
     }
     if (mode_ == GameMode::Mission01 && missionDone_ && in.confirm) {
-        startArena(true);
-        hud_.radio("AWACS", "Bandits inbound from the east. Skyfall One, engage!", 6);
+        if (missionNo_ == 1) {
+            startArena(true);
+            hud_.radio("AWACS", "Bandits inbound from the east. Skyfall One, engage!", 6);
+        } else if (missionNo_ == 2) {
+            startMission(3);
+        } else {
+            screen_ = Screen::Campaign;
+            nav_.focus = 0;
+        }
+        return;
     }
     simulate(dt, !playerDead_);
     processEvents();
@@ -355,12 +382,15 @@ void Game::updatePlaying(double dt) {
     // mission narration / completion
     if (mission_) {
         size_t idx = mission_->stepIndex();
+        if (missionNo_ != 1) radioStage_ = 99;
         if (radioStage_ == 0 && idx >= 1) { hud_.radio("TOWER", "Engine start confirmed. Release brakes when ready.", 5); audio_.play(Sfx::Radio); radioStage_ = 1; }
         if (radioStage_ == 1 && idx >= 3) { hud_.radio("TOWER", "Skyfall One, cleared for take-off runway 09.", 5); audio_.play(Sfx::Radio); radioStage_ = 2; }
         if (radioStage_ == 2 && idx >= 6) { hud_.radio("TOWER", "Positive climb. Gear up, contact AWACS.", 5); audio_.play(Sfx::Radio); radioStage_ = 3; }
         if (mission_->status() == MissionStatus::Complete && !missionDone_) {
             missionDone_ = true;
-            hud_.radio("AWACS", "Skyfall One, picture: bandits inbound from the east. Press ENTER to engage.", 9);
+            if (missionNo_ == 1) hud_.radio("AWACS", "Skyfall One, picture: bandits inbound from the east. Press ENTER to engage.", 9);
+            else if (missionNo_ == 2) hud_.radio("INSTRUCTOR", "Nicely flown. Press ENTER for the landing lesson.", 8);
+            else hud_.radio("TOWER", "Skyfall One, welcome home. Taxi to the apron.", 8);
             audio_.play(Sfx::Radio);
         }
         if (mission_->status() == MissionStatus::Failed && !playerDead_) {
@@ -581,7 +611,7 @@ FrameParams Game::makeFrameParams() {
     f.redout = redout_;
     f.damage = static_cast<float>(damagePulse_);
     f.speedFx = static_cast<float>(std::clamp((battle_.player().fm->state().airspeed - 250.0) / 300.0, 0.0, 1.0));
-    f.showRunwayLights = tod_ == TimeOfDay::GoldenHour || mode_ == GameMode::Mission01;
+    f.showRunwayLights = true;
     f.bloom = settings_.bloom;
     f.quality = settings_.quality;
     f.shadowFocus = toRl(battle_.player().fm->state().pos);
@@ -653,6 +683,7 @@ void Game::renderFrame() {
         hc.deathReason = deathReason_;
         hc.respawnTimer = respawnTimer_;
         hc.missionDone = missionDone_;
+        hc.missionNext = missionNo_ == 1 ? "PRESS ENTER TO ENGAGE INBOUND BANDITS" : missionNo_ == 2 ? "PRESS ENTER FOR MISSION 03: RUNWAY LANDING" : "PRESS ENTER FOR THE CAMPAIGN MENU";
         hc.droppedSteps = stepper_.droppedSteps;
         hc.gamepad = input_.gamepadConnected();
         hud_.draw(hc);
@@ -679,6 +710,7 @@ void Game::saveScreenshot(const std::string& path) {
 void Game::drawMenus() {
     switch (screen_) {
         case Screen::Title: drawTitle(); break;
+        case Screen::Campaign: drawCampaign(); break;
         case Screen::Hangar: drawHangar(); break;
         case Screen::Settings: drawSettings(); break;
         case Screen::Paused: drawPause(); break;
@@ -695,7 +727,7 @@ void Game::drawTitle() {
     ui::logo(70 * s, 70 * s, s, titleTime_);
     nav_.begin(5, in.up, in.down, in.confirm, in.left, in.right);
     float x = 70 * s, y = 250 * s, bw = 430 * s, bh = 52 * s, gap = 10 * s;
-    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "Mission 01 - Cold Start & Takeoff")) { audio_.play(Sfx::Click); startMission01(); return; }
+    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "Training missions 01-03 playable, 20 planned")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; nav_.focus = 0; return; }
     y += bh + gap;
     if (ui::button(nav_, 1, {x, y, bw, bh}, "DOGFIGHT ARENA", "Waves of fictional bandits, SAM sites and ground targets")) { audio_.play(Sfx::Click); startArena(false); return; }
     y += bh + gap;
@@ -706,6 +738,35 @@ void Game::drawTitle() {
     if (ui::button(nav_, 4, {x, y, bw, bh}, "QUIT")) { quit_ = true; return; }
     ui::text("v0.3  -  C++20 / raylib  -  fictional simulation, illustrative aircraft data", 70 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Left, false);
     ui::text("ENTER select   ARROWS navigate", w - 30 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Right, false);
+}
+
+void Game::drawCampaign() {
+    const InputState& in = input_.state();
+    float w = static_cast<float>(GetScreenWidth()), h = static_cast<float>(GetScreenHeight());
+    float s = h / 720.0f;
+    DrawRectangleGradientH(0, 0, static_cast<int>(w * 0.62f), static_cast<int>(h), Color{0, 0, 0, 200}, Color{0, 0, 0, 0});
+    ui::title("CAMPAIGN", 60 * s, 34 * s, 38 * s);
+    const auto& cat = campaignCatalogue();
+    nav_.begin(static_cast<int>(cat.size()) + 1, in.up, in.down, in.confirm, in.left, in.right);
+    // two columns of ten
+    for (size_t i = 0; i < cat.size(); ++i) {
+        const MissionInfo& m = cat[i];
+        float col = static_cast<float>(i / 10), row = static_cast<float>(i % 10);
+        Rectangle r = {60 * s + col * 360 * s, 100 * s + row * 52 * s, 345 * s, 46 * s};
+        char label[96];
+        std::snprintf(label, sizeof label, "%02d  %s", m.number, m.title);
+        bool playable = m.playable && (m.number <= 3);
+        if (ui::button(nav_, static_cast<int>(i), r, label, playable ? m.summary : "Planned", playable)) {
+            audio_.play(Sfx::Click);
+            if (m.number <= 3) startMission(m.number);
+            else startArena(false);   // 08 / 19 map onto the Dogfight Arena
+            return;
+        }
+    }
+    if (ui::button(nav_, static_cast<int>(cat.size()), {60 * s, h - 76 * s, 200 * s, 46 * s}, "BACK") || in.back) {
+        if (mode_ == GameMode::None) screen_ = Screen::Title; else startTitle();
+        nav_.focus = 0;
+    }
 }
 
 void Game::drawHangar() {
@@ -802,7 +863,7 @@ void Game::drawPause() {
     bool resume = ui::button(nav_, 0, {x, y, bw, bh}, "RESUME") || (in.pause && screen_ == Screen::Paused && !in.confirm);
     y += bh + gap;
     if (resume) { screen_ = Screen::Playing; audio_.setPaused(false); stepper_.accumulator = 0; return; }
-    if (ui::button(nav_, 1, {x, y, bw, bh}, "RESTART")) { if (mode_ == GameMode::Mission01) startMission01(); else startArena(false); return; }
+    if (ui::button(nav_, 1, {x, y, bw, bh}, "RESTART")) { if (mode_ == GameMode::Mission01) startMission(missionNo_); else startArena(false); return; }
     y += bh + gap;
     if (ui::button(nav_, 2, {x, y, bw, bh}, "SETTINGS")) { settingsReturn_ = Screen::Paused; screen_ = Screen::Settings; nav_.focus = 0; return; }
     y += bh + gap;
@@ -881,6 +942,20 @@ int Game::runCapture() {
                 snap(std::string("jet_") + p.fm->profile().shortName);
             }
         }
+        return 0;
+    }
+    if (set == "missions") {
+        startMission(3);
+        scriptedStep(0.5, [&](double) { setInput(0, 0, 0, 0); });
+        snap("m03_cockpit_approach", 3);
+        camMode_ = CameraMode::Chase; chaseInit_ = false;
+        snap("m03_chase_approach", 4);
+        startMission(2);
+        scriptedStep(1.0, [&](double) { setInput(0, -0.6, 0, 0); });
+        snap("m02_chase_bank", 4);
+        screen_ = Screen::Campaign; mode_ = GameMode::None;
+        startTitle(); screen_ = Screen::Campaign;
+        snap("campaign_menu", 1);
         return 0;
     }
     if (set == "shadow") {
