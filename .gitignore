@@ -7,3 +7,5 @@ screenshots/
 *.a
 .cache/
 compile_commands.json
+skyfall_*.tgz
+screenshots- to be deleted later./

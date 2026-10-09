@@ -36,14 +36,25 @@ endif()
 # Game executable (raylib)
 # ---------------------------------------------------------------------------
 if(SKYFALL_BUILD_GAME)
-  find_package(raylib 5.0 QUIET)
-  if(NOT raylib_FOUND AND SKYFALL_FETCH_RAYLIB)
+  # Prefer an installed raylib (e.g. Homebrew), otherwise download and build raylib 5.5.
+  find_path(SKYFALL_RAYLIB_INCLUDE raylib.h HINTS /opt/homebrew/include /usr/local/include)
+  find_library(SKYFALL_RAYLIB_LIB raylib HINTS /opt/homebrew/lib /usr/local/lib)
+  if(SKYFALL_RAYLIB_INCLUDE AND SKYFALL_RAYLIB_LIB)
+    message(STATUS "SKYFALL: using installed raylib ${SKYFALL_RAYLIB_LIB}")
+    add_library(skyfall_raylib INTERFACE)
+    target_include_directories(skyfall_raylib INTERFACE ${SKYFALL_RAYLIB_INCLUDE})
+    target_link_libraries(skyfall_raylib INTERFACE ${SKYFALL_RAYLIB_LIB})
+  elseif(SKYFALL_FETCH_RAYLIB)
+    message(STATUS "SKYFALL: raylib not found - downloading raylib 5.5")
     include(FetchContent)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(raylib
-      URL https://github.com/raysan5/raylib/archive/refs/tags/5.5.tar.gz)
+    FetchContent_Declare(raylib GIT_REPOSITORY https://github.com/raysan5/raylib.git GIT_TAG 5.5 GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(raylib)
+    add_library(skyfall_raylib INTERFACE)
+    target_link_libraries(skyfall_raylib INTERFACE raylib)
+  else()
+    message(FATAL_ERROR "raylib not found: brew install raylib, or enable SKYFALL_FETCH_RAYLIB")
   endif()
 
   add_executable(skyfall
@@ -60,7 +71,7 @@ if(SKYFALL_BUILD_GAME)
     src/ui/Font.cpp
     src/audio/Audio.cpp
   )
-  target_link_libraries(skyfall PRIVATE skyfall_core raylib)
+  target_link_libraries(skyfall PRIVATE skyfall_core skyfall_raylib)
   if(APPLE)
     target_link_libraries(skyfall PRIVATE "-framework IOKit" "-framework Cocoa" "-framework OpenGL" "-framework CoreAudio" "-framework CoreVideo")
   elseif(UNIX)
