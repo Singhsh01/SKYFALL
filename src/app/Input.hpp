@@ -7,6 +7,8 @@
 //   E              engine start                 G                 landing gear
 //   Space / LMB    cannon                       F / RMB           missile
 //   X              flares                       T / Tab           cycle target
+//   Q              toggle ATA / ATS missiles    1 / 2             select ATA / ATS
+//   double-tap Left/Right arrow: aileron roll   U                 HUD style
 //   C              camera                       H                 help overlay
 //   R              reset / respawn              Esc / P           pause menu
 //   F3             telemetry overlay            F12               screenshot
@@ -26,7 +28,9 @@ struct InputState {
     // edges (pressed this frame)
     bool missile = false, flares = false, cycleTarget = false, gear = false, camera = false, engine = false,
          parkingBrake = false, help = false, reset = false, pause = false, screenshot = false, debug = false,
-         confirm = false, back = false, up = false, down = false, left = false, right = false, timeOfDay = false;
+         confirm = false, back = false, up = false, down = false, left = false, right = false, timeOfDay = false,
+         weaponToggle = false, selectATA = false, selectATS = false, hudToggle = false;
+    int barrelRoll = 0;   // -1 / +1 when Left / Right arrow was double-tapped this frame
 };
 
 class Input {
@@ -39,6 +43,7 @@ private:
     InputState st_;
     double kPitch_ = 0, kRoll_ = 0, kYaw_ = 0;
     int pad_ = -1;
+    double now_ = 0, lastLeft_ = -10, lastRight_ = -10;
 };
 
 }  // namespace sky

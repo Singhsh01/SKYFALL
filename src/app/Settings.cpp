@@ -54,10 +54,11 @@ bool Settings::load(const std::string& path) {
             else if (k == "ui_scale") uiScale = std::clamp(std::stod(v), 0.75, 1.5);
             else if (k == "show_fps") showFps = toBool(v);
             else if (k == "high_contrast_hud") highContrastHud = toBool(v);
+            else if (k == "hud_style") hudStyle = std::clamp(std::stoi(v), 0, 1);
             else if (k == "invert_pitch") invertPitch = toBool(v);
             else if (k == "sensitivity") sensitivity = std::clamp(std::stod(v), 0.3, 2.0);
             else if (k == "deadzone") deadzone = std::clamp(std::stod(v), 0.0, 0.5);
-            else if (k == "simulation_handling") simulationHandling = toBool(v);
+            else if (k == "handling") handling = std::clamp(std::stoi(v), 0, 2);
             else if (k == "master") master = std::clamp(std::stod(v), 0.0, 1.0);
             else if (k == "music") music = std::clamp(std::stod(v), 0.0, 1.0);
             else if (k == "engine") engine = std::clamp(std::stod(v), 0.0, 1.0);
@@ -84,9 +85,9 @@ bool Settings::save(const std::string& path) const {
       << "quality=" << static_cast<int>(quality) << "\nwidth=" << width << "\nheight=" << height
       << "\nfullscreen=" << fullscreen << "\nvsync=" << vsync << "\nfov=" << fovDeg << "\nbloom=" << bloom
       << "\ncamera_shake=" << cameraShake << "\ng_effects=" << gEffects << "\nui_scale=" << uiScale
-      << "\nshow_fps=" << showFps << "\nhigh_contrast_hud=" << highContrastHud << "\n[input]\n"
+      << "\nshow_fps=" << showFps << "\nhigh_contrast_hud=" << highContrastHud << "\nhud_style=" << hudStyle << "\n[input]\n"
       << "invert_pitch=" << invertPitch << "\nsensitivity=" << sensitivity << "\ndeadzone=" << deadzone
-      << "\nsimulation_handling=" << simulationHandling << "\n[audio]\n"
+      << "\nhandling=" << handling << "\n[audio]\n"
       << "master=" << master << "\nmusic=" << music << "\nengine=" << engine << "\nradio=" << radio
       << "\neffects=" << effects << "\nmusic_enabled=" << musicEnabled << "\ncaptions=" << captions << "\n";
     if (!extra.empty()) {

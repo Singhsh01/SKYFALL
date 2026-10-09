@@ -22,11 +22,12 @@ struct Settings {
     double uiScale = 1.0;
     bool showFps = true;
     bool highContrastHud = false;
+    int hudStyle = 0;           // 0 Minimal (Battlefield-like), 1 Full flight symbology
     // Input
     bool invertPitch = false;
     double sensitivity = 1.0;
     double deadzone = 0.12;
-    bool simulationHandling = false;
+    int handling = 0;  // 0 Arcade (default), 1 Assisted, 2 Simulation
     // Audio (0..1)
     double master = 0.8, music = 0.5, engine = 0.85, radio = 0.65, effects = 0.9;
     bool musicEnabled = false;  // background music OFF by default (listen to your own)

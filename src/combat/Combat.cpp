@@ -182,7 +182,8 @@ void Battle::pushFeed(const std::string& k, const std::string& v, const std::str
 }
 
 void Battle::fireMissile(Jet& j) {
-    if (j.missiles <= 0 || j.missileCooldown > 0) return;
+    bool ag = j.isPlayer && j.weaponAG;
+    if ((ag ? j.agms : j.missiles) <= 0 || j.missileCooldown > 0) return;
     const FlightState& s = j.fm->state();
     Missile m;
     m.id = nextMissileId_++;
@@ -196,8 +197,10 @@ void Battle::fireMissile(Jet& j) {
         if (j.lockTarget >= 0) m.targetJet = j.lockTarget;
         else if (j.lockTarget <= -1000) m.targetGround = -1000 - j.lockTarget;
     }
+    m.airToSurface = ag;
+    if (ag) { m.targetJet = -1; m.motor = 6.0; }
     missiles_.push_back(m);
-    j.missiles--;
+    if (ag) j.agms--; else j.missiles--;
     j.missileCooldown = j.isPlayer ? 0.7 : (j.skill == AiSkill::Ace ? 5.0 : 8.0);
     events_.push_back({EventType::MissileLaunch, m.pos, 1.0, j.id, m.targetJet, ""});
     if (j.isPlayer) {
@@ -306,7 +309,8 @@ void Battle::updateLock(Jet& j, double dt, bool cycle) {
         Vec3 d = tp - s.pos;
         distOut = length(d);
         angleOut = std::acos(clampd(dot(normalize(d), fwd), -1.0, 1.0));
-        double cone = tid <= -1000 ? kLockCone * 0.7 : kLockCone;
+        double cone = tid <= -1000 ? kLockCone * 0.8 : kLockCone;
+        if (j.isPlayer && (tid <= -1000) != j.weaponAG) return false;  // lock follows the selected missile type
         return distOut < kLockRange && angleOut < cone && lineOfSight(s.pos, tp);
     };
     double ang = 0, dist = 0;
@@ -314,11 +318,13 @@ void Battle::updateLock(Jet& j, double dt, bool cycle) {
     if (!currentValid || cycle) {
         // choose best candidate (air first)
         std::vector<std::pair<double, int>> cands;
-        for (auto& t : jets_) {
-            double a, d;
-            if (valid(t->id, a, d)) cands.push_back({a + d / 20000.0, t->id});
+        if (!j.weaponAG) {
+            for (auto& t : jets_) {
+                double a, d;
+                if (valid(t->id, a, d)) cands.push_back({a + d / 20000.0, t->id});
+            }
         }
-        if (j.isPlayer && cands.empty()) {
+        if (j.isPlayer && j.weaponAG) {
             for (int gi = 0; gi < static_cast<int>(ground_.size()); ++gi) {
                 double a, d;
                 if (valid(-1000 - gi, a, d)) cands.push_back({a + d / 20000.0, -1000 - gi});
@@ -491,6 +497,10 @@ void Battle::updateJet(Jet& j, double dt, const ControlInputs* override, const P
         j.gunHeat += dt;
         if (j.gunHeat > 10.0) { j.missiles++; j.gunHeat = 0; }
     }
+    if (j.isPlayer && active_ && j.agms < 4) {
+        j.agReload += dt;
+        if (j.agReload > 14.0) { j.agms++; j.agReload = 0; }
+    }
     // flare burst
     if (j.flareBurstTimer > 0) {
         double before = j.flareBurstTimer;
@@ -590,8 +600,11 @@ void Battle::updateMissiles(double dt) {
                 if (!ground_[gi].alive) continue;
                 if (segmentPointDistance(prev, m.pos, ground_[gi].pos) < 14.0) {
                     m.active = false;
-                    events_.push_back({EventType::Explosion, m.pos, 1.8, m.owner, -1, ""});
-                    damageGround(gi, 150.0, m.owner);
+                    events_.push_back({EventType::Explosion, m.pos, m.airToSurface ? 2.6 : 1.8, m.owner, -1, ""});
+                    damageGround(gi, 200.0, m.owner);
+                    if (m.airToSurface)  // blast radius against nearby vehicles
+                        for (int gk = 0; gk < static_cast<int>(ground_.size()); ++gk)
+                            if (gk != gi && ground_[gk].alive && length(ground_[gk].pos - m.pos) < 45.0) damageGround(gk, 120.0, m.owner);
                     break;
                 }
             }
@@ -610,7 +623,7 @@ void Battle::updateMissiles(double dt) {
             events_.push_back({terrain_->isWater(m.pos.x, m.pos.z) ? EventType::Splash : EventType::Explosion, m.pos, 1.2, -1, -1, ""});
             // splash damage to ground targets
             for (int gi = 0; gi < static_cast<int>(ground_.size()); ++gi)
-                if (ground_[gi].alive && length(ground_[gi].pos - m.pos) < 30.0) damageGround(gi, 120.0, m.owner);
+                if (ground_[gi].alive && length(ground_[gi].pos - m.pos) < (m.airToSurface ? 45.0 : 30.0)) damageGround(gi, 120.0, m.owner);
             continue;
         }
         if (m.life > kMissileMaxLife) {

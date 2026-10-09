@@ -247,6 +247,7 @@ Geo geoFor(AirframeStyle s) {
             g.tails = {{-4.4f, -8.0f, -6.7f, -8.5f, 2.8f, 1.75f, 0.40f, 0.49f}};
             g.engines = 2; g.engineZ = 0.68f; g.nozzleX = -8.9f; g.nozzleR = 0.5f; g.nozzleLen = 1.0f; g.squareNozzle = true;
             g.intakeX = 3.4f; g.intakeZ = 1.5f; g.intakeW = 0.8f; g.intakeH = 0.9f; g.intakeY = -0.2f;
+            g.pylonMissiles = 4;   // 2 ATA + 2 ATS shown on wing stations
             break;
         case AirframeStyle::StealthSingle:
             g.fus = {{7.85f, 0.02f, 0.02f, 0.02f, 0.0f}, {6.9f, 0.40f, 0.32f, 0.32f, -0.02f}, {5.4f, 0.80f, 0.66f, 0.56f, -0.05f},

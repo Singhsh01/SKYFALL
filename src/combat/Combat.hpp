@@ -23,7 +23,10 @@ struct Jet {
     double health = 100.0;
     bool alive = true;
     double deadTimer = 0;
-    int missiles = 6;
+    int missiles = 6;       // ATA (air-to-air)
+    int agms = 4;           // ATS (air-to-surface)
+    bool weaponAG = false;  // selected missile type: false = ATA, true = ATS
+    double agReload = 0;
     int rounds = 480;
     int flareCharges = 3;
     double flareCooldown = 0;     // recharge timer for one charge
@@ -60,6 +63,7 @@ struct Missile {
     double motor = 4.0;     // remaining boost/sustain time
     bool active = true;
     bool surfaceLaunched = false;
+    bool airToSurface = false;  // ATS / air-to-ground missile (bigger warhead, ground lock)
 };
 
 struct Bullet {

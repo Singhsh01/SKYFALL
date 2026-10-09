@@ -113,7 +113,7 @@ void Game::applySettings() {
     audio_.applySettings(settings_);
     battle_.player();  // ensure exists
     if (!battle_.jets().empty())
-        battle_.player().fm->setHandling(settings_.simulationHandling ? HandlingMode::Simulation : HandlingMode::Assisted);
+        battle_.player().fm->setHandling(static_cast<HandlingMode>(settings_.handling));
 }
 
 // ------------------------------------------------------------------------------------------
@@ -228,7 +228,7 @@ void Game::respawnPlayer() {
     const AircraftProfile& prof = p.fm->profile();
     p.fm = std::make_unique<FlightModel>(prof, terrain_);
     p.fm->resetAirborne({-7000, 2200, 2400}, 0.0, 230.0, 0.8);
-    p.fm->setHandling(settings_.simulationHandling ? HandlingMode::Simulation : HandlingMode::Assisted);
+    p.fm->setHandling(static_cast<HandlingMode>(settings_.handling));
     p.alive = true;
     p.health = 100;
     p.missiles = prof.missiles;
@@ -273,6 +273,8 @@ void Game::frame(double dt, bool render) {
 
 void Game::handleGlobalKeys() {
     const InputState& in = input_.state();
+    if (IsKeyPressed(KEY_Q) && (IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER) || IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL))) quit_ = true;
+    if (in.hudToggle) settings_.hudStyle = 1 - settings_.hudStyle;
     if (in.debug) showDebug_ = !showDebug_;
     if (in.timeOfDay) {
         tod_ = static_cast<TimeOfDay>((static_cast<int>(tod_) + 1) % static_cast<int>(TimeOfDay::Count));
@@ -324,6 +326,10 @@ void Game::simulate(double dt, bool withPlayerInput) {
         ci.throttleRate = in.throttleRate;
         ci.brake = in.brake;
         ci.airbrake = in.airbrake;
+        if (rollDir_ != 0) {
+            ci.roll = rollDir_;
+            ci.pitch = std::max(ci.pitch, 0.12);   // keep the nose up through the roll
+        }
     }
     PlayerCommands cmd = pendingCmd_;
     cmd.fireGun = withPlayerInput && in.gun;
@@ -331,6 +337,11 @@ void Game::simulate(double dt, bool withPlayerInput) {
     for (int i = 0; i < n; ++i) {
         battle_.update(FlightModel::kDt, ci, cmd);
         cmd.fireMissile = cmd.flares = cmd.cycleTarget = false;  // edges only once
+        if (rollDir_ != 0) {
+            rollDone_ += std::fabs(battle_.player().fm->state().omega.x) * FlightModel::kDt;
+            if (rollDone_ >= 2.0 * kPi - 0.15) { rollDir_ = 0; rollDone_ = 0; }
+            else ci.roll = rollDir_;
+        }
         if (mission_) {
             MissionContext ctx{&battle_.player().fm->state(), &battle_.player().fm->profile(), &terrain_, 0};
             mission_->update(ctx, FlightModel::kDt);
@@ -343,7 +354,7 @@ void Game::updatePlaying(double dt) {
     const InputState& in = input_.state();
     Jet& p = battle_.player();
     FlightModel& fm = *p.fm;
-    if (in.pause) { screen_ = Screen::Paused; nav_.focus = 0; audio_.setPaused(true); return; }
+    if (in.pause) { screen_ = Screen::Paused; nav_.focus = 0; audio_.setPaused(true); pauseJustOpened_ = true; return; }
     if (in.help) showHelp_ = !showHelp_;
     if (in.camera) { camMode_ = nextCamera(camMode_); chaseInit_ = false; headYaw_ = headPitch_ = 0; }
     if (in.reset) {
@@ -358,11 +369,23 @@ void Game::updatePlaying(double dt) {
             else hud_.radio("SYSTEM", "Gear handle locked: weight on wheels.", 3);
         }
         if (in.missile) {
-            if (p.missiles <= 0) hud_.radio("SYSTEM", "Missiles reloading...", 2);
+            if ((p.weaponAG ? p.agms : p.missiles) <= 0) hud_.radio("SYSTEM", "Missiles reloading...", 2);
             pendingCmd_.fireMissile = true;
         }
         if (in.flares) pendingCmd_.flares = true;
         if (in.cycleTarget) pendingCmd_.cycleTarget = true;
+        bool wantAG = p.weaponAG;
+        if (in.weaponToggle) wantAG = !wantAG;
+        if (in.selectATA) wantAG = false;
+        if (in.selectATS) wantAG = true;
+        if (wantAG != p.weaponAG) {
+            p.weaponAG = wantAG;
+            p.lockTarget = -1;
+            p.lockProgress = 0;
+            audio_.play(Sfx::Click);
+            hud_.popup(wantAG ? "ATS  AIR-TO-SURFACE MISSILES" : "ATA  AIR-TO-AIR MISSILES", Color{150, 255, 205, 255});
+        }
+        if (in.barrelRoll != 0 && rollDir_ == 0 && !fm.state().onGround) { rollDir_ = in.barrelRoll; rollDone_ = 0; }
     }
     if (mode_ == GameMode::Mission01 && missionDone_ && in.confirm) {
         if (missionNo_ == 1) {
@@ -520,11 +543,12 @@ void Game::updateCamera(double dt) {
         }
         case CameraMode::Chase: {
             if (!chaseInit_) { chaseQ_ = s.q; chaseInit_ = true; }
-            double k = 1.0 - std::exp(-dt * 4.5);
+            double k = 1.0 - std::exp(-dt * 7.0);
             chaseQ_ = slerp(chaseQ_, s.q, k);
             if (in.looking) { orbitYaw_ += in.lookYaw; orbitPitch_ = std::clamp(orbitPitch_ + in.lookPitch, -0.5, 1.0); }
-            double dist = prof.chaseDistance * zoom_;
-            double height = prof.chaseHeight * zoom_;
+            // Battlefield-style: close behind and slightly above, rolling with the jet
+            double dist = prof.chaseDistance * 0.95 * zoom_;
+            double height = dist * 0.2;
             Quat q = chaseQ_;
             if (s.onGround) {
                 Euler e = toEuler(s.q);
@@ -537,10 +561,10 @@ void Game::updateCamera(double dt) {
             if (terrain_.onRunway(pos.x, pos.z, 50)) gy = std::max(gy, terrain_.runway().center.y + 2.5);
             pos.y = std::max(pos.y, gy);
             cam_.position = Vector3Add(toRl(pos), Vector3Scale(jitter, 0.12f));
-            cam_.target = toRl(s.pos + q.forward() * 30.0 + q.up() * 2.5);
-            Vec3 up = normalize(Vec3{0, 1, 0} * 0.2 + q.up() * 0.8);
+            cam_.target = toRl(s.pos + q.forward() * 45.0 + q.up() * 4.2);
+            Vec3 up = s.onGround ? Vec3{0, 1, 0} : normalize(Vec3{0, 1, 0} * 0.05 + q.up() * 0.95);
             cam_.up = toRl(up);
-            fovTarget = settings_.fovDeg + std::clamp((s.airspeed - 120.0) / 300.0, 0.0, 1.0) * 12.0 + s.abLevel * 4.0;
+            fovTarget = settings_.fovDeg + 4.0 + std::clamp((s.airspeed - 120.0) / 250.0, 0.0, 1.0) * 10.0 + s.abLevel * 5.0;
             nearPlane_ = 0.5f;
             break;
         }
@@ -841,7 +865,8 @@ void Game::drawSettings() {
     changed |= ui::slider(nav_, 11, {x2, y2, cw, rh}, "Camera shake", settings_.cameraShake); y2 += rh + g;
     changed |= ui::toggle(nav_, 12, {x2, y2, cw, rh}, "G blackout / redout", settings_.gEffects); y2 += rh + g;
     changed |= ui::toggle(nav_, 13, {x2, y2, cw, rh}, "Invert pitch", settings_.invertPitch); y2 += rh + g;
-    changed |= ui::toggle(nav_, 14, {x2, y2, cw, rh}, "Handling", settings_.simulationHandling, "SIMULATION", "ASSISTED"); y2 += rh + g;
+    if (ui::cycle(nav_, 14, {x2, y2, cw, rh}, "Handling", settings_.handling, {"ARCADE", "ASSISTED", "SIMULATION"})) changed = true;
+    y2 += rh + g;
     changed |= ui::slider(nav_, 15, {x2, y2, cw, rh}, "Control sensitivity", settings_.sensitivity, 0.3, 2.0); y2 += rh + g;
     if (ui::button(nav_, 16, {x1, h - 80 * s, 200 * s, 46 * s}, "BACK") || in.back) {
         settings_.save(settingsPath_);
@@ -860,7 +885,9 @@ void Game::drawPause() {
     ui::title("PAUSED", 70 * s, 70 * s, 40 * s);
     nav_.begin(6, in.up, in.down, in.confirm, in.left, in.right);
     float x = 70 * s, y = 170 * s, bw = 380 * s, bh = 50 * s, gap = 10 * s;
-    bool resume = ui::button(nav_, 0, {x, y, bw, bh}, "RESUME") || (in.pause && screen_ == Screen::Paused && !in.confirm);
+    bool resume = ui::button(nav_, 0, {x, y, bw, bh}, "RESUME") || (in.pause && !pauseJustOpened_ && !in.confirm);
+    pauseJustOpened_ = false;
+    if (IsKeyPressed(KEY_Q) && (IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER) || IsKeyDown(KEY_LEFT_CONTROL))) { quit_ = true; return; }
     y += bh + gap;
     if (resume) { screen_ = Screen::Playing; audio_.setPaused(false); stepper_.accumulator = 0; return; }
     if (ui::button(nav_, 1, {x, y, bw, bh}, "RESTART")) { if (mode_ == GameMode::Mission01) startMission(missionNo_); else startArena(false); return; }

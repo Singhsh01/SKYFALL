@@ -60,7 +60,7 @@ constexpr int kShadowSize = 2048;
 
 Vector3 paintFor(const Jet& j, Vector3& b, float& camo) {
     camo = 0;
-    if (j.team == Team::Blue) { b = {0.25f, 0.26f, 0.28f}; return {0.33f, 0.345f, 0.36f}; }
+    if (j.team == Team::Blue) { b = {0.19f, 0.2f, 0.215f}; return {0.26f, 0.27f, 0.285f}; }
     switch (j.fm->profile().style) {
         case AirframeStyle::FlankerFamily: camo = 1; b = {0.17f, 0.22f, 0.30f}; return {0.40f, 0.46f, 0.53f};
         case AirframeStyle::StealthTwinTail: camo = 1; b = {0.18f, 0.20f, 0.25f}; return {0.44f, 0.48f, 0.54f};

@@ -66,6 +66,8 @@ private:
     void warnings(const HudContext& c);
     void missionPanel(const HudContext& c);
     void glidePath(const HudContext& c);
+    void minimalSymbology(const HudContext& c);
+    void hintsBar(const HudContext& c);
     void radioPanel(const HudContext& c);
     void popups(const HudContext& c);
     void debug(const HudContext& c);

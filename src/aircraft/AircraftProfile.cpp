@@ -28,7 +28,7 @@ AircraftProfile make(AircraftId id, const char* name, const char* shortName, Air
 
 const std::array<AircraftProfile, static_cast<size_t>(AircraftId::Count)> kProfiles = {
     //   id                name                 short     style                         playable empty   fuel   S     span  len   mil   AB   roll pitch g   Vr   eyeX chase msl
-    make(AircraftId::F22,    "F-22 Raptor",        "F-22",  AirframeStyle::StealthTwinTail, true,  19700, 8200, 78.0, 13.6, 18.9, 140, 232, 220, 32, 9.0, 72, 5.6, 26, 6),
+    make(AircraftId::F22,    "F-22 Raptor",        "F-22",  AirframeStyle::StealthTwinTail, true,  19700, 8200, 78.0, 13.6, 18.9, 232, 312, 220, 32, 9.0, 72, 5.6, 26, 6),
     make(AircraftId::F35,    "F-35 Lightning II",  "F-35",  AirframeStyle::StealthSingle,   false, 13300, 8300, 42.7, 10.7, 15.7, 125, 191, 200, 28, 9.0, 74, 4.8, 23, 4),
     make(AircraftId::Rafale, "Dassault Rafale",    "RAFALE",AirframeStyle::DeltaCanard,     false,  9900, 4700, 45.7, 10.9, 15.3, 100, 150, 240, 32, 9.0, 68, 4.6, 22, 6),
     make(AircraftId::Su57,   "Su-57 Felon",        "SU-57", AirframeStyle::StealthTwinTail, false, 18000, 8000, 78.8, 14.1, 20.1, 176, 284, 220, 32, 9.0, 72, 6.0, 27, 6),

@@ -74,7 +74,8 @@ void Hud::draw(const HudContext& c) {
             flightSymbology(c, true);
             EndScissorMode();
         } else if (!cockpit) {
-            flightSymbology(c, false);
+            if (c.settings && c.settings->hudStyle == 0) minimalSymbology(c);
+            else flightSymbology(c, false);
         }
         targets(c);
         weapons(c);
@@ -111,6 +112,7 @@ void Hud::draw(const HudContext& c) {
         else
             ui::textShadow("PRESS  R  TO RETRY     ESC  FOR MENU", c.w * 0.5f, c.h * 0.40f + 46 * s, 22 * s, WHITE, Align::Center);
     }
+    if (!c.dead && !c.showHelp) hintsBar(c);
     if (c.showDebug) debug(c);
     if (c.showHelp) help(c);
 }
@@ -403,7 +405,7 @@ void Hud::targets(const HudContext& c) {
 void Hud::weapons(const HudContext& c) {
     const Jet& p = *c.player;
     float s = c.h / 720.0f;
-    float w = 230 * s, h = 118 * s;
+    float w = 230 * s, h = 138 * s;
     Rectangle r = {c.w - w - 18 * s, c.h - h - 18 * s, w, h};
     ui::panel(r, kPanel, kPanelBorder);
     float x = r.x + 12 * s, y = r.y + 10 * s;
@@ -423,14 +425,18 @@ void Hud::weapons(const HudContext& c) {
     ui::text(fmti("%d", p.rounds), x + w - 24 * s, y, 15 * s, p.gunFiring ? kWarn : WHITE, Align::Right);
     y += 20 * s;
     // missiles pips
-    ui::text("MISSILE", x, y, 13 * s, Color{200, 210, 210, 230});
-    int maxM = p.fm->profile().missiles;
-    for (int i = 0; i < maxM; ++i) {
-        Rectangle pip = {x + 66 * s + i * 17 * s, y + 2 * s, 12 * s, 10 * s};
-        if (i < p.missiles) DrawRectangleRec(pip, WHITE);
-        else DrawRectangleLinesEx(pip, 1, Color{255, 255, 255, 90});
-    }
-    y += 20 * s;
+    auto missileRow = [&](const char* name, int have, int max, bool selected) {
+        if (selected) DrawRectangle(static_cast<int>(x - 6 * s), static_cast<int>(y - 2 * s), static_cast<int>(w - 12 * s), static_cast<int>(18 * s), Color{150, 255, 205, 40});
+        ui::text(name, x, y, 13 * s, selected ? Color{150, 255, 205, 255} : Color{200, 210, 210, 200});
+        for (int i = 0; i < max; ++i) {
+            Rectangle pip = {x + 66 * s + i * 17 * s, y + 2 * s, 12 * s, 10 * s};
+            if (i < have) DrawRectangleRec(pip, selected ? WHITE : Color{255, 255, 255, 150});
+            else DrawRectangleLinesEx(pip, 1, Color{255, 255, 255, 90});
+        }
+        y += 20 * s;
+    };
+    missileRow("ATA MSL", p.missiles, p.fm->profile().missiles, !p.weaponAG);
+    missileRow("ATS MSL", p.agms, 4, p.weaponAG);
     ui::text("FLARES", x, y, 13 * s, Color{200, 210, 210, 230});
     for (int i = 0; i < 3; ++i) {
         Rectangle pip = {x + 66 * s + i * 30 * s, y + 2 * s, 24 * s, 10 * s};
@@ -500,6 +506,49 @@ void Hud::minimap(const HudContext& c) {
     Vector2 north = {cx + (0 * rt.x + -1 * rt.y) * size * 0.44f, cy - (0 * fw.x + -1 * fw.y) * size * 0.44f};
     ui::textShadow("N", north.x, north.y - 7 * s, 14 * s, WHITE, Align::Center);
     ui::text(fmt("%.0f KM", range / 1000.0), r.x + 4 * s, r.y + 4 * s, 11 * s, Color{255, 255, 255, 140});
+}
+
+void Hud::minimalSymbology(const HudContext& c) {
+    // Battlefield-like: small aiming reticle, flight path dot, compact speed/altitude readouts
+    const FlightState& st = c.player->fm->state();
+    float s = c.h / 720.0f;
+    bool f1, f2;
+    Vector2 bore = project(c, toRl(st.pos + st.q.forward() * 1000.0), &f1);
+    if (f1) {
+        DrawRing(bore, 9 * s, 10.6f * s, 0, 360, 32, Color{255, 255, 255, 210});
+        DrawCircleV(bore, 1.6f * s, Color{255, 255, 255, 230});
+        ui::textShadow(fmt("%.0f", st.airspeed * 3.6), bore.x - 22 * s, bore.y - 7 * s, 14 * s, Color{255, 255, 255, 200}, Align::Right);
+        ui::textShadow(fmt("%.0f", st.pos.y), bore.x + 22 * s, bore.y - 7 * s, 14 * s, Color{255, 255, 255, 200}, Align::Left);
+    }
+    if (st.airspeed > 20) {
+        Vector2 fpm = project(c, toRl(st.pos + normalize(st.vel) * 1000.0), &f2);
+        if (f2) DrawCircleLinesV(fpm, 4 * s, Color{150, 255, 205, 200});
+    }
+    // compact heading at the top
+    double hdg = compassHeadingDeg(st.q);
+    ui::textShadow(fmt("%03.0f", hdg), c.w * 0.5f, 14 * s, 16 * s, Color{255, 255, 255, 210}, Align::Center);
+    // throttle / afterburner under the minimap-side
+    float tx = c.w * 0.5f - 60 * s, ty = c.h - 58 * s;
+    DrawRectangle(static_cast<int>(tx), static_cast<int>(ty), static_cast<int>(120 * s), static_cast<int>(5 * s), Color{255, 255, 255, 50});
+    float fill = static_cast<float>(std::min(st.throttle / FlightModel::kAbDetent, 1.0));
+    DrawRectangle(static_cast<int>(tx), static_cast<int>(ty), static_cast<int>(108 * s * fill), static_cast<int>(5 * s), Color{255, 255, 255, 200});
+    if (st.abLevel > 0.1) DrawRectangle(static_cast<int>(tx + 108 * s), static_cast<int>(ty), static_cast<int>(12 * s), static_cast<int>(5 * s), kWarn);
+    if (st.stalled) ui::textShadow("STALL", c.w * 0.5f, c.h * 0.62f, 18 * s, kWarn, Align::Center);
+}
+
+void Hud::hintsBar(const HudContext& c) {
+    float s = c.h / 720.0f;
+    const char* items[][2] = {{"W", "AFTERBURNER"}, {"F", c.player->weaponAG ? "ATS MISSILE" : "ATA MISSILE"}, {"Q", "SWAP MSL"},
+                              {"X", "FLARES"}, {"<<", "ROLL"}, {"C", "CAMERA"}, {"ESC", "MENU"}};
+    float x = c.w * 0.5f - 300 * s, y = c.h - 30 * s;
+    for (auto& it : items) {
+        float kw = ui::measure(it[0], 11 * s) + 10 * s;
+        DrawRectangleRounded({x, y, kw, 16 * s}, 0.3f, 4, Color{255, 255, 255, 200});
+        ui::text(it[0], x + kw / 2, y + 2 * s, 11 * s, BLACK, Align::Center);
+        x += kw + 5 * s;
+        ui::textShadow(it[1], x, y + 1 * s, 12 * s, Color{255, 255, 255, 190});
+        x += ui::measure(it[1], 12 * s) + 16 * s;
+    }
 }
 
 void Hud::killFeed(const HudContext& c) {
@@ -709,23 +758,24 @@ void Hud::debug(const HudContext& c) {
     row(fmt("CL %.2f", st.cl) + fmt("  CD %.3f", st.cd) + fmt("  n %.2f g", st.gLoad));
     row(fmt("thrust %.0f kN", st.thrustN / 1000.0) + fmt("  rpm %.0f%%", st.rpm * 100.0));
     row(fmt("fuel %.0f kg", st.fuelKg) + fmt("  mass %.0f kg", c.player->fm->massKg()));
-    row(std::string("handling ") + (c.player->fm->handling() == HandlingMode::Assisted ? "ASSISTED" : "SIMULATION"));
+    row(std::string("handling ") + (c.player->fm->handling() == HandlingMode::Arcade ? "ARCADE" : c.player->fm->handling() == HandlingMode::Assisted ? "ASSISTED" : "SIMULATION"));
     row(std::string("time of day ") + c.timeOfDay + (c.gamepad ? "   PAD" : ""));
     row(std::string("camera ") + cameraName(c.camMode));
 }
 
 void Hud::help(const HudContext& c) {
     float s = c.h / 720.0f;
-    Rectangle r = {c.w * 0.5f - 300 * s, c.h * 0.5f - 210 * s, 600 * s, 420 * s};
+    Rectangle r = {c.w * 0.5f - 300 * s, c.h * 0.5f - 250 * s, 600 * s, 500 * s};
     ui::panel(r, Color{0, 0, 0, 200}, kPanelBorder);
     ui::text("CONTROLS", r.x + 20 * s, r.y + 14 * s, 22 * s, WHITE);
     const char* rows[][2] = {
         {"W / S", "Throttle up / down (full = afterburner)"}, {"Arrow Up / Down", "Pitch (Down = pull up)"},
         {"Arrow Left / Right", "Roll"}, {"A / D", "Yaw / nosewheel steering"}, {"E", "Engine start"},
         {"B", "Parking brake"}, {"Left Ctrl", "Wheel brakes / air brake (hold)"}, {"G", "Landing gear"},
-        {"Space / Left mouse", "Cannon"}, {"F", "Missile (lock first)"}, {"X", "Flares"}, {"T / Tab", "Cycle target"},
+        {"Space / Left mouse", "Cannon"}, {"F", "Fire missile (lock first)"}, {"Q  /  1  /  2", "Swap / select ATA or ATS missiles"},
+        {"Double-tap Left/Right", "Aileron roll"}, {"X", "Flares"}, {"T / Tab", "Cycle target"},
         {"C", "Camera: cockpit / chase / external"}, {"Right mouse drag, I J K L", "Look around / orbit"},
-        {"R", "Reset / respawn"}, {"F3  /  F5", "Telemetry  /  time of day"}, {"Esc / P", "Pause menu"}, {"H", "Close help"}};
+        {"R", "Reset / respawn"}, {"F3 / F5 / U", "Telemetry / time of day / HUD style"}, {"Esc / P", "Pause menu (Cmd+Q quits)"}, {"H", "Close help"}};
     float y = r.y + 50 * s;
     for (auto& row : rows) {
         ui::text(row[0], r.x + 20 * s, y, 15 * s, Color{150, 255, 205, 255});

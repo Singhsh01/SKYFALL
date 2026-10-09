@@ -123,6 +123,9 @@ private:
     bool capturing_ = false;
     bool hideHud_ = false;
     int missionNo_ = 1;
+    bool pauseJustOpened_ = false;
+    int rollDir_ = 0;          // active aileron roll (double-tap)
+    double rollDone_ = 0;      // radians rolled so far
     std::vector<double> sessionFrames_;
 };
 

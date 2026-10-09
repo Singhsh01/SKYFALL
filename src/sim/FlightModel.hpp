@@ -18,7 +18,10 @@
 
 namespace sky {
 
-enum class HandlingMode { Assisted, Simulation };
+// Arcade: Battlefield-style handling — the flight path follows the nose, energy bleeds in hard
+//         turns, generous thrust; physics forces still drive speed, gravity and ground contact.
+// Assisted: force-based flight with a G-command fly-by-wire. Simulation: no limiter/assists.
+enum class HandlingMode { Arcade, Assisted, Simulation };
 enum class EngineState { Off, Starting, Running, Flameout };
 enum class CrashReason { None, HardLanding, WingStrike, BellyLanding, NoseFirst, Terrain, Water, Destroyed, TailStrike };
 
@@ -106,6 +109,7 @@ private:
     void updateEngine(const ControlInputs& in, double dt, double rho);
     void updateAttitude(const ControlInputs& in, double dt);
     void handleGround(const ControlInputs& in, double dt, Vec3& force);
+    void arcadeVelocity(const ControlInputs& in, double dt, double rho);
 
     const AircraftProfile* prof_;
     const Terrain* terrain_;

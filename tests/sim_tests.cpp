@@ -221,6 +221,47 @@ TEST(banked_pull_turns_and_respects_g_limit) {
     std::printf("    heading change %.0f deg in 6 s, max G %.2f\n", dh / kDeg, maxG);
 }
 
+TEST(arcade_turns_sharply_and_keeps_energy_sane) {
+    FlightModel fm(profile(AircraftId::F22), terrain());
+    fm.setHandling(HandlingMode::Arcade);
+    fm.resetAirborne({0, 3000, 0}, 0.0, 200.0, 0.85);
+    double prevH = toEuler(fm.state().q).heading, dh = 0;
+    for (int i = 0; i < 120 * 4; ++i) {
+        ControlInputs in;
+        double bank = toEuler(fm.state().q).bank;
+        in.roll = clampd((80 * kDeg - bank) * 3.0, -1, 1);
+        in.pitch = i > 30 ? 1.0 : 0.0;
+        fm.step(in);
+        double h = toEuler(fm.state().q).heading;
+        dh += wrapPi(h - prevH);
+        prevH = h;
+    }
+    CHECK(!fm.state().crashed);
+    CHECK(dh > 150 * kDeg);                        // ~180 degrees in 4 s: dogfight-grade turn
+    CHECK(fm.state().airspeed > 90.0);            // bleeds energy but keeps flying
+    std::printf("    arcade: %.0f deg in 4 s, speed %.0f m/s\n", dh / kDeg, fm.state().airspeed);
+}
+
+TEST(arcade_pull_up_recovers_from_low_altitude_dive) {
+    FlightModel fm(profile(AircraftId::F22), terrain());
+    fm.setHandling(HandlingMode::Arcade);
+    // 25 degree dive at 400 m over the sea, full back stick + afterburner
+    fm.resetAirborne({12000, 400, 0}, 0.0, 180.0, 1.0);
+    fm.mutableState().q = Quat::fromEuler(0, -25 * kDeg, 0);
+    fm.mutableState().vel = fm.state().q.forward() * 180.0;
+    double minAlt = 1e9;
+    for (int i = 0; i < 120 * 10; ++i) {
+        ControlInputs in;
+        in.pitch = toEuler(fm.state().q).pitch < 30 * kDeg ? 1.0 : 0.0;
+        in.throttleRate = 1.0;
+        fm.step(in);
+        minAlt = std::min(minAlt, fm.state().pos.y);
+    }
+    CHECK(!fm.state().crashed);
+    CHECK(fm.state().pos.y > 600.0);   // climbs away
+    std::printf("    lowest point %.0f m, after 10 s %.0f m at %.0f m/s\n", minAlt, fm.state().pos.y, fm.state().airspeed);
+}
+
 TEST(diving_into_terrain_crashes) {
     FlightModel fm(profile(AircraftId::F22), terrain());
     fm.resetAirborne({0, 600, 0}, 0.0, 200.0, 0.8);

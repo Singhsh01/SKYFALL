@@ -25,6 +25,7 @@ double shape(double v, double deadzone, double sens) {
 
 void Input::update(double dt, const Settings& s) {
     InputState n;
+    now_ += dt;
     // --- keyboard axes with smoothing (keyboards are digital) ---
     double kp = 0, kr = 0, ky = 0;
     if (IsKeyDown(KEY_DOWN)) kp += 1;
@@ -58,6 +59,13 @@ void Input::update(double dt, const Settings& s) {
     n.screenshot = IsKeyPressed(KEY_F12);
     n.debug = IsKeyPressed(KEY_F3);
     n.timeOfDay = IsKeyPressed(KEY_F5);
+    n.weaponToggle = IsKeyPressed(KEY_Q);
+    n.selectATA = IsKeyPressed(KEY_ONE);
+    n.selectATS = IsKeyPressed(KEY_TWO);
+    n.hudToggle = IsKeyPressed(KEY_U);
+    // double-tap Left/Right arrow -> full aileron roll
+    if (IsKeyPressed(KEY_LEFT)) { if (now_ - lastLeft_ < 0.3) { n.barrelRoll = -1; lastLeft_ = -10; } else lastLeft_ = now_; }
+    if (IsKeyPressed(KEY_RIGHT)) { if (now_ - lastRight_ < 0.3) { n.barrelRoll = 1; lastRight_ = -10; } else lastRight_ = now_; }
     n.confirm = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER);
     n.back = IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_BACKSPACE);
     n.up = IsKeyPressed(KEY_UP);

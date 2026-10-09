@@ -150,6 +150,30 @@ void FlightModel::updateEngine(const ControlInputs& in, double dt, double rho) {
     }
 }
 
+void FlightModel::arcadeVelocity(const ControlInputs& in, double dt, double rho) {
+    const AircraftProfile& p = *prof_;
+    const double m = massKg();
+    double V = length(s_.vel);
+    Vec3 dir = s_.vel / V;
+    Vec3 fwd = s_.q.forward();
+    // speed along the path: thrust - drag - gravity - energy bleed from manoeuvring
+    double qS = 0.5 * rho * V * V * p.wingAreaM2;
+    double cd = (p.cd0 * 3.0 + p.gearCd * s_.gearPos + (s_.airbrake ? p.airbrakeCd * 2.5 : 0.0));
+    double turnRate = std::sqrt(s_.omega.z * s_.omega.z + s_.omega.y * s_.omega.y);
+    double cosA = clampd(dot(fwd, dir), -1.0, 1.0);
+    double accel = (s_.thrustN * cosA - qS * cd) / m - kG * dir.y - 0.045 * turnRate * V;
+    V = std::max(0.0, V + accel * dt);
+    // the flight path follows the nose; authority fades below ~60 m/s (arcade "stall")
+    double auth = smoothstep(32.0, 75.0, V);
+    double k = 4.5 * auth;
+    Vec3 newDir = normalize(dir + (fwd - dir) * (1.0 - std::exp(-k * dt)));
+    s_.vel = newDir * V;
+    // below flying speed gravity takes over again
+    s_.vel.y -= kG * (1.0 - auth) * dt;
+    s_.gLoad = 1.0 + turnRate * V / kG * (s_.omega.z >= 0 ? 1.0 : -1.0) * (std::fabs(s_.omega.z) / std::max(turnRate, 1e-6));
+    s_.stalled = auth < 0.25;
+}
+
 void FlightModel::updateAttitude(const ControlInputs& in, double dt) {
     const AircraftProfile& p = *prof_;
     const double V = std::max(s_.airspeed, 1.0);
@@ -167,6 +191,26 @@ void FlightModel::updateAttitude(const ControlInputs& in, double dt) {
         double heading = e.heading + steer * speedFactor * dt;
         s_.q = Quat::fromEuler(heading, pitch, 0.0);
         s_.omega = {0.0, -steer * speedFactor, pitchRate};
+        return;
+    }
+
+    if (mode_ == HandlingMode::Arcade) {
+        double auth = 0.35 + 0.65 * smoothstep(40.0, 120.0, V);
+        Vec3 target{in.roll * 4.9 * auth, -in.yaw * 0.62 * auth, in.pitch * (in.pitch > 0 ? 1.15 : 0.8) * auth};
+        s_.omega = s_.omega + (target - s_.omega) * approachFactor(dt, 0.07);
+        s_.q = s_.q.integrated(s_.omega, dt);
+        // when too slow the nose falls through towards the flight path (weathervane)
+        double weak = 1.0 - smoothstep(32.0, 75.0, V);
+        if (weak > 0.0 && V > 1.0) {
+            Vec3 fwd = s_.q.forward();
+            Vec3 dir = normalize(s_.vel + Vec3{0, -15.0, 0});
+            Vec3 axis = cross(fwd, dir);
+            double ang = std::asin(clampd(length(axis), 0.0, 1.0));
+            if (ang > 1e-4) {
+                Quat r = Quat::fromAxisAngle(axis, std::min(ang, weak * 1.4 * dt));
+                s_.q = (r * s_.q).normalized();
+            }
+        }
         return;
     }
 
@@ -266,7 +310,8 @@ void FlightModel::step(const ControlInputs& in, double dt) {
     s_.gLoad = dot(fAero + fThrust, s_.q.up()) / (m * kG);
 
     // Semi-implicit Euler: velocity first, then position with the new velocity.
-    s_.vel += fTotal / m * dt;
+    if (mode_ == HandlingMode::Arcade && !s_.onGround && V > 1.0) arcadeVelocity(in, dt, atm.density);
+    else s_.vel += fTotal / m * dt;
 
     // Ground friction (applied as a velocity change for unconditional stability).
     if (s_.onGround) {
@@ -276,7 +321,7 @@ void FlightModel::step(const ControlInputs& in, double dt) {
         double vAlong = dot(s_.vel, fwdH);
         Vec3 vSide = Vec3{s_.vel.x, 0, s_.vel.z} - fwdH * vAlong;
         double mu = 0.022;
-        if (s_.parkingBrake) mu = 0.6;
+        if (s_.parkingBrake) mu = 0.9;
         else if (s_.wheelBrake) mu = 0.5;
         if (s_.gearPos < 0.9) mu = 0.65;
         double dv = mu * normalForce / m * dt;

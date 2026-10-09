@@ -72,10 +72,12 @@ Useful flags: `--mode arena` / `--mode m01` (skip the menu), `--size 1440x900`, 
 | `A` / `D` | yaw / nosewheel steering | `G` | landing gear |
 | `Space` / left mouse | cannon | `F` | missile (lock first) |
 | `X` | flares | `T` / `Tab` | cycle target |
+| `Q` / `1` / `2` | swap / select ATA (air-to-air) or ATS (air-to-surface) missiles | double-tap `←`/`→` | aileron roll |
+| `U` | HUD style (minimal / full) | `Cmd+Q` | quit immediately |
 | `C` | camera: cockpit → chase → external | right-drag, `I J K L` | look / orbit, wheel = zoom |
 | `R` | reset / respawn | `H` | help overlay |
 | `F3` | telemetry (p50/p95/p99 frame times, physics) | `F5` | time of day |
-| `F12` | screenshot | `Esc` / `P` | pause menu (quit from there) |
+| `F12` | screenshot | `Esc` / `P` | pause menu (Esc again resumes) |
 
 Gamepad: left stick fly, triggers throttle, RB cannon, LB missile, A flares, B target,
 X gear, Y camera, d-pad yaw.
