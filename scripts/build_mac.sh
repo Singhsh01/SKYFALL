@@ -16,7 +16,7 @@ if configure; then
 else
   echo "Default SDK failed to link a test program - trying other installed SDKs..."
   ok=0
-  for sdk in $(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX[0-9]*.sdk 2>/dev/null | sort -t X -k 3 -V -r) \
+  for sdk in $(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX[0-9]*.sdk 2>/dev/null | sort -t X -k 2 -V -r) \
              $(ls -d /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX[0-9]*.sdk 2>/dev/null); do
     echo "  trying $sdk"
     if configure -DCMAKE_OSX_SYSROOT="$sdk"; then echo "Configured with $sdk"; ok=1; break; fi
