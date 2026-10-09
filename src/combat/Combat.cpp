@@ -653,6 +653,18 @@ void Battle::updateBullets(double dt) {
             hit = true;
         }
         if (hit) b.life = 0;
+        else if (b.life <= 0 && b.owner < 0 && rng_.uniform() < 0.35) {
+            // AAA shell self-destructs: flak burst near the closest hostile aircraft
+            for (auto& jp : jets_) {
+                if (!jp->alive || jp->team == b.team) continue;
+                double d = length(jp->fm->state().pos - b.pos);
+                if (d < 900.0) {
+                    events_.push_back({EventType::Flak, b.pos, 1.0, -1, jp->id, ""});
+                    if (d < 25.0) damageJet(*jp, 6.0, -1, "FLAK");
+                    break;
+                }
+            }
+        }
     }
     bullets_.erase(std::remove_if(bullets_.begin(), bullets_.end(), [](const Bullet& b) { return b.life <= 0; }), bullets_.end());
 }

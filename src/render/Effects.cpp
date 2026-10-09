@@ -144,6 +144,16 @@ void Effects::onEvent(const CombatEvent& e, const Battle& b) {
             if (wrecks_.size() > 24) wrecks_.erase(wrecks_.begin());
             wrecks_.push_back({p, 0.0f, static_cast<float>(e.size)});
             break;
+        case EventType::Flak: {
+            Particle f; f.pos = p; f.size0 = 6; f.size1 = 10; f.maxLife = 0.12f; f.color = {1, 0.7f, 0.35f}; f.kind = PKind::Glow;
+            if (particles_.size() < kMaxParticles) particles_.push_back(f);
+            for (int i = 0; i < 5; ++i)
+                spawnSmokePuff(Vector3Add(p, V(static_cast<float>(rng_.range(-3, 3)), static_cast<float>(rng_.range(-3, 3)), static_cast<float>(rng_.range(-3, 3)))),
+                               V(0, 0.5f, 0), 4.0f, 14.0f, 6.0f, V(0.05f, 0.05f, 0.05f), 0.85f);
+            float d = Vector3Distance(p, camPos_);
+            if (d < 500.0f) shake_ += 0.3f * (1.0f - d / 500.0f);
+            break;
+        }
         case EventType::Splash:
             spawnExplosion(p, 1.5f, false, true);
             break;
@@ -201,6 +211,27 @@ void Effects::update(double dt, const Battle& b, const Lighting& L, Vector3 camP
         t.alive = false;
     }
 
+    // speed streaks around the camera (sense of speed)
+    if (!b.jets().empty() && b.player().alive) {
+        const FlightState& ps = b.player().fm->state();
+        float sp = static_cast<float>(ps.airspeed);
+        if (sp > 140.0f && !ps.onGround) {
+            float rate = (sp - 140.0f) * 0.25f * fdt;
+            int n = static_cast<int>(rate) + (rng_.uniform() < (rate - std::floor(rate)) ? 1 : 0);
+            Vector3 vel = toRl(ps.vel);
+            Vector3 dir = Vector3Normalize(vel);
+            for (int i = 0; i < n && particles_.size() < kMaxParticles; ++i) {
+                Vector3 off = V(static_cast<float>(rng_.range(-30, 30)), static_cast<float>(rng_.range(-18, 18)), static_cast<float>(rng_.range(-30, 30)));
+                Particle q;
+                q.pos = Vector3Add(Vector3Add(camPos, Vector3Scale(dir, 60.0f)), off);
+                q.vel = Vector3Scale(vel, 0.0f);
+                q.size0 = 0.05f; q.size1 = 0.05f; q.maxLife = 0.45f; q.kind = PKind::Spark; q.stretch = true;
+                q.color = {0.12f, 0.12f, 0.13f}; q.drag = 0; q.lift = 0;
+                q.vel = Vector3Scale(dir, -sp * 0.5f);  // streaks rush past the camera
+                particles_.push_back(q);
+            }
+        }
+    }
     // missiles: thick white smoke ribbons
     for (const Missile& m : b.missiles()) {
         Vector3 pos = toRl(m.pos);
@@ -377,6 +408,9 @@ void Effects::draw(const Camera3D& cam, const Battle& b, const Lighting& L, Shad
         float t = q->life / q->maxLife;
         float size = q->size0 + (q->size1 - q->size0) * sqrtf(t);
         float a = q->alpha * (1.0f - t) * std::min(1.0f, q->life * 8.0f);
+        float dcam = sqrtf(d2);
+        a *= std::clamp((dcam - size * 0.3f) / (size * 1.2f), 0.0f, 1.0f);  // fade when the camera is inside the puff
+        if (a < 0.004f) continue;
         Vector3 lit = Vector3Multiply(q->color, litBase);
         float fog = L.fogAmount(camPos, q->pos);
         lit = Vector3Lerp(lit, L.fogColor(camPos, q->pos), fog);

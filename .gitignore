@@ -9,3 +9,4 @@ screenshots/
 compile_commands.json
 skyfall_*.tgz
 screenshots- to be deleted later./
+.skyfall_update*.tgz

@@ -93,7 +93,7 @@ struct GroundTarget {
 };
 
 enum class EventType { Explosion, SmallExplosion, Hit, JetKilled, GroundKilled, MissileLaunch, FlaresOut,
-                       PlayerHit, PlayerKilled, MissileWarningStart, LockAcquired, Splash, MissileMissed };
+                       PlayerHit, PlayerKilled, MissileWarningStart, LockAcquired, Splash, MissileMissed, Flak };
 
 struct CombatEvent {
     EventType type;
