@@ -25,6 +25,65 @@ const Color kPanelBorder = {150, 255, 205, 60};
 std::string fmt(const char* f, double v) { char b[64]; std::snprintf(b, sizeof b, f, v); return b; }
 std::string fmti(const char* f, int v) { char b[64]; std::snprintf(b, sizeof b, f, v); return b; }
 
+/// Odometer-style rolling readout: every digit is a drum; the lowest drum rolls continuously
+/// and higher drums roll over (carry) as the lower ones pass 9 -> 0. `step` quantises the
+/// rolling unit (10 => the last digit is a fixed '0' and the tens drum rolls).
+void drawRoller(Rectangle box, double value, int digits, int step, float size, Color col, Color bg, bool clipBlank = true) {
+    double v = std::max(0.0, value) / step;
+    float digitW = ui::measure("0", size) + size * 0.06f;
+    int fixedTail = step == 10 ? 1 : 0;
+    float right = box.x + box.width - 6.0f - (fixedTail ? digitW : 0.0f);
+    DrawRectangleRec(box, bg);
+    DrawRectangleLinesEx(box, 1.0f, col);
+    float cy = box.y + box.height * 0.5f - size * 0.5f;
+    float lineH = std::max(size * 1.05f, box.height * 0.92f);   // the next digit stays hidden until it rolls in
+    BeginScissorMode(static_cast<int>(box.x), static_cast<int>(box.y + 1), static_cast<int>(box.width), static_cast<int>(box.height - 2));
+    double pow10 = 1.0;
+    long long total = static_cast<long long>(std::floor(v));
+    for (int k = 0; k < digits; ++k) {
+        long long d = (total / static_cast<long long>(pow10)) % 10;
+        double below = std::fmod(v, pow10);                       // value held by the lower drums
+        // each drum holds its digit, then rolls through the last 30 % of the step (mechanical counter)
+        double frac = k == 0 ? v - std::floor(v) : std::clamp((below - (pow10 - 1.0)), 0.0, 1.0);
+        double f = std::clamp((frac - 0.7) / 0.3, 0.0, 1.0);
+        f = f * f * (3.0 - 2.0 * f);
+        float x = right - (k + 1) * digitW;
+        bool leading = clipBlank && k > 0 && total < static_cast<long long>(pow10);  // drum still above the number
+        char a[2] = {static_cast<char>('0' + d), 0}, b[2] = {static_cast<char>('0' + (d + 1) % 10), 0};
+        if (!leading) ui::text(a, x, cy - static_cast<float>(f) * lineH, size, col);
+        if (!leading || f > 0.0) ui::text(b, x, cy + (1.0f - static_cast<float>(f)) * lineH, size, col);
+        pow10 *= 10.0;
+    }
+    if (fixedTail) ui::text("0", right, cy, size, col);
+    EndScissorMode();
+    // drum shading: darker band top and bottom
+    DrawRectangleGradientV(static_cast<int>(box.x + 1), static_cast<int>(box.y + 1), static_cast<int>(box.width - 2), static_cast<int>(box.height * 0.28f), Color{0, 0, 0, 120}, Color{0, 0, 0, 0});
+    DrawRectangleGradientV(static_cast<int>(box.x + 1), static_cast<int>(box.y + box.height * 0.72f), static_cast<int>(box.width - 2), static_cast<int>(box.height * 0.28f - 1), Color{0, 0, 0, 0}, Color{0, 0, 0, 120});
+}
+
+/// Vertical moving scale behind a roller (major ticks labelled).
+void drawTape(float x, float cy, float halfH, double value, double step, int labelEvery, bool leftSide, float s, Color col) {
+    float pxPer = 26.0f * s / static_cast<float>(step);
+    double base = std::floor(value / step) * step;
+    int n = static_cast<int>(halfH / (26.0f * s)) + 2;
+    for (int k = -n; k <= n; ++k) {
+        double v = base + k * step;
+        if (v < 0) continue;
+        float y = cy - static_cast<float>((v - value) * pxPer);
+        if (std::fabs(y - cy) > halfH) continue;
+        float fade = 1.0f - std::fabs(y - cy) / halfH;
+        bool major = static_cast<long long>(std::llround(v / step)) % labelEvery == 0;
+        float len = (major ? 11.0f : 6.0f) * s;
+        Color c = ui::withAlpha(col, 0.25f + 0.75f * fade);
+        ui::line({leftSide ? x - len : x, y}, {leftSide ? x : x + len, y}, 1.4f * s, c, false);
+        if (major) {
+            char b[16];
+            std::snprintf(b, sizeof b, "%d", static_cast<int>(std::llround(v)));
+            ui::text(b, leftSide ? x - len - 4 * s : x + len + 4 * s, y - 6 * s, 11.5f * s, c, leftSide ? Align::Right : Align::Left);
+        }
+    }
+}
+
 const char* groundName(GroundKind k) {
     switch (k) {
         case GroundKind::Tank: return "TANK";
@@ -65,6 +124,7 @@ Vector2 Hud::project(const HudContext& c, Vector3 p, bool* inFront) const {
 
 void Hud::draw(const HudContext& c) {
     if (!c.player) return;
+    if (c.replay) { replayOverlay(c); return; }
     bool cockpit = c.camMode == CameraMode::Cockpit;
     float s = static_cast<float>(c.h) / 720.0f * static_cast<float>(c.settings ? c.settings->uiScale : 1.0);
     if (!c.dead) {
@@ -112,6 +172,7 @@ void Hud::draw(const HudContext& c) {
         else
             ui::textShadow("PRESS  R  TO RETRY     ESC  FOR MENU", c.w * 0.5f, c.h * 0.40f + 46 * s, 22 * s, WHITE, Align::Center);
     }
+    if (c.pipActive) pipPanel(c);
     if (!c.dead && !c.showHelp) hintsBar(c);
     if (c.showDebug) debug(c);
     if (c.showHelp) help(c);
@@ -218,10 +279,8 @@ void Hud::flightSymbology(const HudContext& c, bool cockpit) {
     };
     tape(sb.x + bw + 4 * s, kmh, 50, 2, true);
     tape(ab.x - 4 * s, alt, 100, 5, false);
-    ui::panel(sb, Color{0, 0, 0, 70}, col);
-    ui::panel(ab, Color{0, 0, 0, 70}, col);
-    ui::text(fmti("%d", static_cast<int>(kmh)), sb.x + bw - 8 * s, sb.y + 4 * s, 22 * s, col, Align::Right);
-    ui::text(fmti("%d", static_cast<int>(alt)), ab.x + bw - 8 * s, ab.y + 4 * s, 22 * s, col, Align::Right);
+    drawRoller(sb, kmh, 4, 1, 22 * s, col, Color{0, 0, 0, 80});
+    drawRoller(ab, alt, 5, 10, 22 * s, col, Color{0, 0, 0, 80});
     ui::text("KM/H", sb.x, sb.y - 18 * s, 13 * s, kHudDim);
     ui::text("ALT M", ab.x, ab.y - 18 * s, 13 * s, kHudDim);
     ui::text(fmti("%d KT", static_cast<int>(kt)), sb.x, sb.y + bh + 6 * s, fs * 0.8f, col);
@@ -517,8 +576,32 @@ void Hud::minimalSymbology(const HudContext& c) {
     if (f1) {
         DrawRing(bore, 9 * s, 10.6f * s, 0, 360, 32, Color{255, 255, 255, 210});
         DrawCircleV(bore, 1.6f * s, Color{255, 255, 255, 230});
-        ui::textShadow(fmt("%.0f", st.airspeed * 3.6), bore.x - 22 * s, bore.y - 7 * s, 14 * s, Color{255, 255, 255, 200}, Align::Right);
-        ui::textShadow(fmt("%.0f", st.pos.y), bore.x + 22 * s, bore.y - 7 * s, 14 * s, Color{255, 255, 255, 200}, Align::Left);
+    }
+    {
+        // rolling airspeed (km/h) and altitude (m) drums with moving tapes, either side of centre
+        Color white = {255, 255, 255, 225};
+        Color bg = {0, 0, 0, 110};
+        float cx = c.w * 0.5f, cy = c.h * 0.5f;
+        float off = 230.0f * s, bw = 78.0f * s, bh = 30.0f * s;
+        double kmh = st.airspeed * 3.6;
+        Rectangle sb = {cx - off - bw, cy - bh * 0.5f, bw, bh};
+        Rectangle ab = {cx + off, cy - bh * 0.5f, bw + 8 * s, bh};
+        drawTape(sb.x + bw + 6 * s, cy, 95 * s, kmh, 20.0, 5, false, s, white);
+        drawTape(ab.x - 6 * s, cy, 95 * s, st.pos.y, 50.0, 4, true, s, white);
+        drawRoller(sb, kmh, 4, 1, 20 * s, white, bg);
+        drawRoller(ab, st.pos.y, 5, 10, 20 * s, white, bg);
+        ui::textShadow("KM/H", sb.x, sb.y - 16 * s, 11 * s, ui::withAlpha(white, 0.8f));
+        ui::textShadow("ALT M", ab.x, ab.y - 16 * s, 11 * s, ui::withAlpha(white, 0.8f));
+        // vertical speed arrow next to the altimeter
+        double vs = st.vel.y;
+        float vlen = static_cast<float>(std::clamp(vs / 120.0, -1.0, 1.0)) * 40 * s;
+        if (std::fabs(vlen) > 2 * s) {
+            float vx = ab.x + ab.width + 8 * s;
+            ui::line({vx, cy}, {vx, cy - vlen}, 2.0f * s, white);
+            ui::textShadow(fmt("%+.0f", vs), vx + 5 * s, cy - vlen - 6 * s, 11 * s, white);
+        }
+        ui::textShadow(fmt("G %.1f", st.gLoad), sb.x, sb.y + bh + 6 * s, 12 * s, st.gLoad > 8.0 ? kWarn : white);
+        if (st.agl < 600 && !st.onGround) ui::textShadow(fmt("R %.0f", st.agl), ab.x, ab.y + bh + 6 * s, 12 * s, st.agl < 150 ? kWarn : white);
     }
     if (st.airspeed > 20) {
         Vector2 fpm = project(c, toRl(st.pos + normalize(st.vel) * 1000.0), &f2);
@@ -548,6 +631,131 @@ void Hud::hintsBar(const HudContext& c) {
         x += kw + 5 * s;
         ui::textShadow(it[1], x, y + 1 * s, 12 * s, Color{255, 255, 255, 190});
         x += ui::measure(it[1], 12 * s) + 16 * s;
+    }
+}
+
+void Hud::pipPanel(const HudContext& c) {
+    const PipState& p = *c.pip;
+    float s = c.h / 720.0f;
+    float w = 300 * s, h = w * c.pipH / c.pipW;
+    Rectangle r = {c.w - w - 18 * s, c.h - 18 * s - 138 * s - 14 * s - h, w, h};
+    bool hitCam = p.mode == PipMode::Hit;
+    Color frame = hitCam ? (p.result > 0 ? Color{255, 90, 70, 255} : Color{255, 200, 90, 255}) : kHud;
+    // video feed (render textures are stored bottom-up)
+    DrawTexturePro(c.pipTex, {0, 0, static_cast<float>(c.pipW), static_cast<float>(-c.pipH)}, r, {0, 0}, 0, WHITE);
+    // sensor-video look: scanlines + slight green cast for the target camera
+    if (p.mode == PipMode::Target) DrawRectangleRec(r, Color{40, 80, 50, 40});
+    for (float y = r.y; y < r.y + r.height; y += 3 * s) DrawLineEx({r.x, y}, {r.x + r.width, y}, 1, Color{0, 0, 0, 28});
+    if (p.flash > 0) DrawRectangleRec(r, Color{255, 255, 255, static_cast<unsigned char>(std::min(1.0, p.flash) * 200)});
+    DrawRectangleLinesEx(r, 2.0f * s, frame);
+    // corner brackets
+    float k = 14 * s;
+    for (int i = 0; i < 4; ++i) {
+        float x = (i & 1) ? r.x + r.width - 4 * s : r.x + 4 * s, y = (i & 2) ? r.y + r.height - 4 * s : r.y + 4 * s;
+        float dx = (i & 1) ? -k : k, dy = (i & 2) ? -k : k;
+        DrawLineEx({x, y}, {x + dx, y}, 2 * s, frame);
+        DrawLineEx({x, y}, {x, y + dy}, 2 * s, frame);
+    }
+    const char* label = p.mode == PipMode::Target ? (p.targetGround >= 0 ? "TGT POD" : "TGT CAM")
+                      : p.mode == PipMode::Missile ? (p.ats ? "ATS CAM" : "ATA CAM") : "HIT CAM";
+    ui::textShadow(label, r.x + 10 * s, r.y + 8 * s, 14 * s, frame);
+    if (std::fmod(time_, 1.0) < 0.6) {
+        DrawCircleV({r.x + r.width - 50 * s, r.y + 15 * s}, 4 * s, Color{255, 50, 40, 255});
+        ui::textShadow("REC", r.x + r.width - 42 * s, r.y + 8 * s, 12 * s, Color{255, 255, 255, 230});
+    }
+    // projected target track box inside the feed
+    auto toFeed = [&](const Vec3& wp, bool& ok) {
+        Vector3 d = Vector3Subtract(toRl(wp), p.cam.position);
+        Vector3 f = Vector3Normalize(Vector3Subtract(p.cam.target, p.cam.position));
+        ok = Vector3DotProduct(d, f) > 1.0f;
+        Vector2 q = GetWorldToScreenEx(toRl(wp), p.cam, c.pipW, c.pipH);
+        return Vector2{r.x + q.x / c.pipW * r.width, r.y + q.y / c.pipH * r.height};
+    };
+    if (p.mode != PipMode::Hit && p.haveTarget) {
+        bool ok;
+        Vector2 q = toFeed(p.lastTarget, ok);
+        if (ok && CheckCollisionPointRec(q, r)) {
+            float b = 16 * s;
+            Color tc = p.mode == PipMode::Missile ? Color{255, 90, 70, 255} : kHud;
+            for (int i = 0; i < 4; ++i) {
+                float sx = (i & 1) ? 1.0f : -1.0f, sy = (i & 2) ? 1.0f : -1.0f;
+                Vector2 cpt = {q.x + sx * b, q.y + sy * b};
+                DrawLineEx(cpt, {cpt.x - sx * 6 * s, cpt.y}, 2 * s, tc);
+                DrawLineEx(cpt, {cpt.x, cpt.y - sy * 6 * s}, 2 * s, tc);
+            }
+            DrawLineEx({q.x - 4 * s, q.y}, {q.x + 4 * s, q.y}, 1.5f * s, tc);
+            DrawLineEx({q.x, q.y - 4 * s}, {q.x, q.y + 4 * s}, 1.5f * s, tc);
+            ui::textShadow("TRK", q.x + b + 4 * s, q.y - b, 11 * s, tc);
+        }
+    }
+    // bottom data line
+    std::string info;
+    if (p.mode == PipMode::Target) {
+        info = fmt("RNG %.1f KM", p.lastDist / 1000.0) + (c.player->lockProgress >= 1.0 ? "   LOCKED - FIRE [F]" : fmt("   LOCKING %.0f%%", c.player->lockProgress * 100.0));
+    } else if (p.mode == PipMode::Missile) {
+        double closing = 680.0;
+        info = p.haveTarget ? fmt("RNG %.0f M", p.lastDist) + fmt("   TTI %.1f S", p.lastDist / closing) : std::string("NO TRACK - BALLISTIC");
+    } else {
+        info = p.result == 2 ? "TARGET DESTROYED" : (p.result == 1 ? "HIT" : "MISSED");
+        if (p.missDist > 0 && p.missDist < 400) info += fmt("   MISS DIST %.1f M", p.missDist);
+    }
+    DrawRectangle(static_cast<int>(r.x + 2 * s), static_cast<int>(r.y + r.height - 24 * s), static_cast<int>(r.width - 4 * s), static_cast<int>(22 * s), Color{0, 0, 0, 120});
+    ui::text(info, r.x + 10 * s, r.y + r.height - 20 * s, 13 * s, hitCam && p.result > 0 ? Color{255, 120, 100, 255} : frame);
+    if (hitCam && p.result > 0) {
+        float a = static_cast<float>(std::min(1.0, p.timer));
+        ui::textShadow(p.result == 2 ? "SPLASH" : "HIT", r.x + r.width * 0.5f, r.y + r.height * 0.38f, 26 * s, ui::withAlpha(Color{255, 80, 60, 255}, a), Align::Center);
+    }
+}
+
+void Hud::replayOverlay(const HudContext& c) {
+    float s = c.h / 720.0f;
+    float bar = c.h * 0.085f;
+    DrawRectangle(0, 0, c.w, static_cast<int>(bar), BLACK);
+    DrawRectangle(0, static_cast<int>(c.h - bar), c.w, static_cast<int>(bar), BLACK);
+    if (std::fmod(time_, 1.0) < 0.65) DrawCircleV({28 * s, bar * 0.5f}, 7 * s, Color{235, 40, 35, 255});
+    ui::text("REPLAY", 42 * s, bar * 0.5f - 11 * s, 22 * s, WHITE);
+    bool slow = c.replayT > c.deathTime - 1.4 && c.replayT < c.deathTime + 0.5;
+    if (slow) ui::text("SLOW MOTION  x0.33", 160 * s, bar * 0.5f - 8 * s, 15 * s, Color{255, 200, 90, 255});
+    ui::text("ENTER / SPACE  skip", c.w - 24 * s, bar * 0.5f - 8 * s, 14 * s, Color{255, 255, 255, 170}, Align::Right);
+    double tRel = c.replayT - c.deathTime;
+    ui::text(fmt("T %+.1f S", tRel), c.w * 0.5f, bar * 0.5f - 9 * s, 18 * s, tRel < 0 ? WHITE : Color{255, 90, 70, 255}, Align::Center);
+    // progress
+    float prog = static_cast<float>((c.replayT - c.replayFrom) / std::max(0.1, c.replayTo - c.replayFrom));
+    DrawRectangle(0, static_cast<int>(bar - 3 * s), static_cast<int>(c.w * std::clamp(prog, 0.0f, 1.0f)), static_cast<int>(3 * s), Color{235, 40, 35, 255});
+    // analysis panel
+    if (!c.loss) return;
+    const LossReport& L = *c.loss;
+    float pw = 600 * s;
+    auto wrap = [&](const std::string& text, float maxW) {
+        std::vector<std::string> out;
+        std::string line, word;
+        auto flush = [&]() {
+            if (word.empty()) return;
+            std::string cand = line.empty() ? word : line + " " + word;
+            if (ui::measure(cand, 14 * s, false) > maxW && !line.empty()) { out.push_back(line); line = word; }
+            else line = cand;
+            word.clear();
+        };
+        for (char ch : text) { if (ch == ' ') flush(); else word += ch; }
+        flush();
+        if (!line.empty()) out.push_back(line);
+        return out;
+    };
+    std::vector<std::pair<std::string, bool>> rows;   // text, isAdvice
+    for (const std::string& f : L.facts) for (auto& l : wrap(f, pw - 30 * s)) rows.push_back({l, false});
+    for (const std::string& a : L.advice) {
+        auto ls = wrap(a, pw - 44 * s);
+        for (size_t i = 0; i < ls.size(); ++i) rows.push_back({(i == 0 ? "> " : "   ") + ls[i], true});
+    }
+    float ph = (64 + rows.size() * 21.0f) * s;
+    Rectangle r = {28 * s, c.h - bar - ph - 18 * s, pw, ph};
+    ui::panel(r, Color{0, 0, 0, 175}, Color{255, 90, 70, 120});
+    ui::text("WHAT WENT WRONG", r.x + 14 * s, r.y + 10 * s, 13 * s, Color{255, 120, 100, 255});
+    ui::text(L.title, r.x + 14 * s, r.y + 28 * s, 19 * s, WHITE);
+    float y = r.y + 56 * s;
+    for (const auto& row : rows) {
+        ui::text(row.first, r.x + 14 * s, y, 14 * s, row.second ? Color{150, 255, 205, 255} : Color{200, 210, 215, 255}, Align::Left, false);
+        y += 21 * s;
     }
 }
 

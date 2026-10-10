@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 namespace sky {
 
@@ -90,16 +91,62 @@ Texture2D makeSprite(int kind) {
     return t;
 }
 
-Color surfaceTint(const Terrain& t, double x, double z, double h, double forest, double town) {
-    // vertex mask colour for the terrain shader (r forest, g town, b unused)
-    return {u8(forest), u8(town), 0, 255};
+/// Cumulus sprite: several overlapping lobes with eroded edges, a flat base and baked
+/// top-lit shading in RGB (drawn upright, never rotated).
+Texture2D makeCloudSprite(unsigned seed) {
+    const int N = 256;
+    Image img = GenImageColor(N, N, BLANK);
+    Color* px = static_cast<Color*>(img.data);
+    Rng rng(seed);
+    struct Lobe { double x, y, r; };
+    std::vector<Lobe> lobes;
+    for (int i = 0; i < 16; ++i) {
+        double x = rng.range(0.22, 0.78);
+        double r = rng.range(0.10, 0.22) * (1.15 - std::fabs(x - 0.5));
+        double y = 0.70 - r * rng.range(0.55, 1.15) - (0.5 - std::fabs(x - 0.5)) * rng.range(0.1, 0.35);
+        lobes.push_back({x, y, r});
+    }
+    for (int y = 0; y < N; ++y)
+        for (int x = 0; x < N; ++x) {
+            double u = (x + 0.5) / N, v = (y + 0.5) / N;
+            double d = 0;
+            double topNormal = 0;
+            for (const Lobe& l : lobes) {
+                double dx = u - l.x, dy = v - l.y;
+                double q = 1.0 - std::sqrt(dx * dx + dy * dy) / l.r;
+                if (q > d) { d = q; topNormal = -dy / l.r; }
+            }
+            double n = periodicFbm(u, v, 8, 5, seed + 3);
+            double dens = d + (n - 0.5) * 0.35;
+            double a = smoothstep(0.02, 0.22, dens);
+            a *= 1.0 - smoothstep(0.66, 0.74, v + (n - 0.5) * 0.03);   // flat cloud base
+            double lit = 0.58 + 0.30 * std::clamp(topNormal, -0.2, 1.0) + 0.22 * (1.0 - v) + (n - 0.5) * 0.18;
+            lit = std::clamp(lit, 0.35, 1.0);
+            unsigned char c = u8(lit);
+            px[y * N + x] = {c, c, u8(std::min(1.0, lit * 1.03)), u8(a)};
+        }
+    Texture2D t = LoadTextureFromImage(img);
+    UnloadImage(img);
+    GenTextureMipmaps(&t);
+    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
+    return t;
 }
 
+Color surfaceTint(const Terrain& t, double x, double z, double h, double forest, double town) {
+    // vertex mask colour for the terrain shader (r scrub, g town, b dry river bed)
+    return {u8(forest), u8(town), u8(0.0), 255};
+}
+
+// Desert scrub: sparse, in low gentle ground and along the dry river bed.
 double forestMask(double x, double z, double h) {
-    double f = smoothstep(0.47, 0.60, fbm2(x / 900.0, z / 900.0, 3, 99u));
-    f *= 1.0 - smoothstep(850.0, 1150.0, h);
-    f *= smoothstep(6.0, 20.0, h);
+    double f = smoothstep(0.50, 0.66, fbm2(x / 700.0, z / 700.0, 3, 99u)) * 0.55;
+    f *= 1.0 - smoothstep(250.0, 520.0, h);
+    f *= smoothstep(6.0, 18.0, h);
     return f;
+}
+double wadiMask(double x, double z) {
+    double wadiZ = 3700.0 + (fbm2(x / 3000.0, 4.2, 3, 71u) - 0.5) * 2200.0;
+    return (1.0 - smoothstep(30.0, 200.0, std::fabs(z - wadiZ))) * smoothstep(-6000.0, -2000.0, x) * (1.0 - smoothstep(7500.0, 8500.0, x));
 }
 double townMask(const Terrain& t, double x, double z) {
     Vec3 c = t.townCenter();
@@ -122,7 +169,9 @@ Mesh buildGridMesh(const Terrain& t, double x0, double z0, double size, int n, d
             double tm = townMask(t, x, z);
             double fm = forestMask(x, z, h) * (1.0 - tm);
             if (t.onRunway(x, z, 400.0)) fm = 0;
-            mb.vertex(V3(x, h - lower, z), nn, surfaceTint(t, x, z, h, fm, tm));
+            Color tint = surfaceTint(t, x, z, h, fm, tm);
+            tint.b = u8(wadiMask(x, z) * (1.0 - tm));
+            mb.vertex(V3(x, h - lower, z), nn, tint);
         }
     auto id = [&](int i, int j) { return static_cast<unsigned short>(j * n + i); };
     for (int j = 0; j < n - 1; ++j)
@@ -162,6 +211,29 @@ Mesh buildGridMesh(const Terrain& t, double x0, double z0, double size, int n, d
 
 void addTree(MeshBuilder& mb, Vector3 p, float height, float radius, Color c, int kind) {
     const int sides = kind == 0 ? 5 : 6;
+    if (kind == 2) {  // palm: slim trunk + drooping fronds
+        Color trunk = {92, 76, 58, 255};
+        float tr = height * 0.035f;
+        for (int i = 0; i < 5; ++i) {
+            float a0 = 2 * PI * i / 5, a1 = 2 * PI * (i + 1) / 5;
+            Vector3 b0 = {p.x + cosf(a0) * tr, p.y, p.z + sinf(a0) * tr}, b1 = {p.x + cosf(a1) * tr, p.y, p.z + sinf(a1) * tr};
+            Vector3 t0 = {p.x + cosf(a0) * tr * 0.7f + height * 0.04f, p.y + height, p.z + sinf(a0) * tr * 0.7f};
+            Vector3 t1 = {p.x + cosf(a1) * tr * 0.7f + height * 0.04f, p.y + height, p.z + sinf(a1) * tr * 0.7f};
+            mb.quad(b0, t0, t1, b1, trunk);
+        }
+        Vector3 top = {p.x + height * 0.04f, p.y + height, p.z};
+        for (int f = 0; f < 7; ++f) {
+            float a = 2 * PI * f / 7 + 0.3f;
+            Vector3 dir = {cosf(a), 0, sinf(a)};
+            Vector3 side = {-dir.z * radius * 0.22f, 0, dir.x * radius * 0.22f};
+            Vector3 mid = {top.x + dir.x * radius * 0.55f, top.y + radius * 0.12f, top.z + dir.z * radius * 0.55f};
+            Vector3 tip = {top.x + dir.x * radius, top.y - radius * 0.45f, top.z + dir.z * radius};
+            Vector3 m0 = Vector3Add(mid, side), m1 = Vector3Subtract(mid, side);
+            mb.tri2(top, m0, tip, c);
+            mb.tri2(top, tip, m1, c);
+        }
+        return;
+    }
     if (kind == 0) {  // conifer
         Vector3 top = {p.x, p.y + height, p.z};
         for (int i = 0; i < sides; ++i) {
@@ -181,8 +253,9 @@ void addTree(MeshBuilder& mb, Vector3 p, float height, float radius, Color c, in
         float mid = height * 0.55f;
         for (int i = 0; i < sides; ++i) {
             float a0 = 2 * PI * i / sides, a1 = 2 * PI * (i + 1) / sides;
-            Vector3 m0 = {p.x + cosf(a0) * radius, p.y + mid, p.z + sinf(a0) * radius};
-            Vector3 m1 = {p.x + cosf(a1) * radius, p.y + mid, p.z + sinf(a1) * radius};
+            float r0 = radius * (0.85f + 0.3f * fabsf(sinf(a0 * 2.7f + p.x))), r1 = radius * (0.85f + 0.3f * fabsf(sinf(a1 * 2.7f + p.x)));
+            Vector3 m0 = {p.x + cosf(a0) * r0, p.y + mid, p.z + sinf(a0) * r0};
+            Vector3 m1 = {p.x + cosf(a1) * r1, p.y + mid, p.z + sinf(a1) * r1};
             Vector3 n0 = Vector3Normalize({cosf(a0), 0.3f, sinf(a0)});
             Vector3 n1 = Vector3Normalize({cosf(a1), 0.3f, sinf(a1)});
             mb.triN(top, m1, m0, {0, 1, 0}, n1, n0, c);
@@ -194,8 +267,10 @@ void addTree(MeshBuilder& mb, Vector3 p, float height, float radius, Color c, in
 }  // namespace
 
 void WorldMeshes::build(const Terrain& t) {
+    terrain = &t;
     noise = makeNoiseTexture();
     puff = makeSprite(0);
+    for (int i = 0; i < 4; ++i) cloud[i] = makeCloudSprite(100u + i * 17u);
     glow = makeSprite(1);
     spark = makeSprite(2);
 
@@ -205,6 +280,7 @@ void WorldMeshes::build(const Terrain& t) {
         for (int cx = 0; cx < kChunks; ++cx) {
             TerrainChunk& c = chunks[cz * kChunks + cx];
             double x0 = -Terrain::kHalfSize + cx * kChunkSize, z0 = -Terrain::kHalfSize + cz * kChunkSize;
+            c.x0 = x0; c.z0 = z0;
             c.hi = buildGridMesh(t, x0, z0, kChunkSize, 65, 40.0, 0.0, false);
             c.lo = buildGridMesh(t, x0, z0, kChunkSize, 17, 80.0, 0.0, false);
             double cy = t.height(x0 + kChunkSize / 2, z0 + kChunkSize / 2);
@@ -220,21 +296,72 @@ void WorldMeshes::build(const Terrain& t) {
                     double px = x + rng.range(0, step), pz = z + rng.range(0, step);
                     double h = t.height(px, pz);
                     double f = forestMask(px, pz, h) * (1.0 - townMask(t, px, pz));
-                    double sparse = 0.04 * smoothstep(10.0, 40.0, h) * (1.0 - smoothstep(800, 1000, h));
-                    if (rng.uniform() > f * 0.95 + sparse) { rng.next(); continue; }
+                    double wadi = wadiMask(px, pz);
+                    if (rng.uniform() > f * 0.55 + wadi * 0.5) { rng.next(); continue; }
                     if (t.onRunway(px, pz, 450.0)) continue;
                     Vec3 n = t.normal(px, pz, 8.0);
-                    if (n.y < 0.8) continue;
-                    double kind = rng.uniform() < 0.55 ? 0 : 1;
-                    float hgt = static_cast<float>(rng.range(9, 17));
-                    float rad = static_cast<float>(hgt * rng.range(0.28, 0.42));
+                    if (n.y < 0.85) continue;
+                    // palms along the wadi, low acacia-like shrubs elsewhere
+                    bool palm = wadi > 0.4 && rng.uniform() < 0.5;
+                    float hgt = palm ? static_cast<float>(rng.range(9, 14)) : static_cast<float>(rng.range(2.5, 5.5));
+                    float rad = palm ? hgt * 0.28f : static_cast<float>(hgt * rng.range(0.7, 1.1));
                     double v = rng.uniform();
-                    Color col = kind == 0 ? Color{u8(0.10 + 0.04 * v), u8(0.17 + 0.06 * v), u8(0.08 + 0.03 * v), 255}
-                                          : Color{u8(0.17 + 0.07 * v), u8(0.23 + 0.07 * v), u8(0.09 + 0.03 * v), 255};
-                    addTree(tb, V3(px, h - 1.0, pz), hgt, rad, col, static_cast<int>(kind));
+                    Color col = palm ? Color{u8(0.16 + 0.05 * v), u8(0.22 + 0.06 * v), u8(0.10 + 0.03 * v), 255}
+                                     : Color{u8(0.24 + 0.06 * v), u8(0.25 + 0.05 * v), u8(0.15 + 0.03 * v), 255};
+                    addTree(tb, V3(px, h - 0.6, pz), hgt, palm ? hgt * 0.42f : rad, col, palm ? 2 : 1);
                 }
             if (tb.vertexCount() > 0) { c.trees = tb.build(); c.hasTrees = true; }
         }
+
+    // ---- terrain data texture: per-pixel normal + ambient occlusion (+ sun shadow, baked later) ----
+    {
+        const int N = 2048;
+        const double cell = 2.0 * Terrain::kHalfSize / N;
+        std::vector<float> H(static_cast<size_t>(N) * N);
+        unsigned threads = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
+        auto par = [&](auto&& fn) {
+            std::vector<std::thread> pool;
+            for (unsigned k = 0; k < threads; ++k)
+                pool.emplace_back([&, k] { for (int j = static_cast<int>(k); j < N; j += static_cast<int>(threads)) fn(j); });
+            for (auto& th : pool) th.join();
+        };
+        par([&](int j) {
+            for (int i = 0; i < N; ++i)
+                H[static_cast<size_t>(j) * N + i] = static_cast<float>(t.height(-Terrain::kHalfSize + (i + 0.5) * cell, -Terrain::kHalfSize + (j + 0.5) * cell));
+        });
+        auto Hc = [&](int i, int j) { i = std::clamp(i, 0, N - 1); j = std::clamp(j, 0, N - 1); return double(H[static_cast<size_t>(j) * N + i]); };
+        dataPixels.assign(static_cast<size_t>(N) * N * 4, 255);
+        const int dirs = 8;
+        const int radii[] = {2, 5, 12, 28};
+        par([&](int j) {
+            for (int i = 0; i < N; ++i) {
+                double h = Hc(i, j);
+                Vec3 nn = normalize(Vec3{Hc(i - 1, j) - Hc(i + 1, j), 2 * cell, Hc(i, j - 1) - Hc(i, j + 1)});
+                // horizon-based ambient occlusion over four radii and eight directions
+                double occ = 0;
+                for (int d = 0; d < dirs; ++d) {
+                    double a = d * 2.0 * kPi / dirs;
+                    double cx = std::cos(a), cz = std::sin(a);
+                    double maxTan = 0;
+                    for (int r : radii) {
+                        double dh = Hc(i + static_cast<int>(std::lround(cx * r)), j + static_cast<int>(std::lround(cz * r))) - h;
+                        maxTan = std::max(maxTan, dh / (r * cell));
+                    }
+                    occ += std::atan(maxTan) / (kPi * 0.5);
+                }
+                double ao = std::clamp(1.0 - 1.35 * occ / dirs, 0.0, 1.0);
+                size_t o = (static_cast<size_t>(j) * N + i) * 4;
+                dataPixels[o + 0] = u8(nn.x * 0.5 + 0.5);
+                dataPixels[o + 1] = u8(nn.z * 0.5 + 0.5);
+                dataPixels[o + 2] = u8(ao);
+                dataPixels[o + 3] = 255;
+            }
+        });
+        Image img = {dataPixels.data(), N, N, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+        terrainData = LoadTextureFromImage(img);
+        SetTextureFilter(terrainData, TEXTURE_FILTER_BILINEAR);
+        SetTextureWrap(terrainData, TEXTURE_WRAP_CLAMP);
+    }
 
     // ---- far ring (coarse terrain out to the horizon) ----
     farRing = buildGridMesh(t, -60000.0, -60000.0, 120000.0, 101, 0.0, 12.0, true);
@@ -439,12 +566,12 @@ void WorldMeshes::build(const Terrain& t) {
                 double shade = std::clamp(0.55 + 0.9 * dot(n, normalize(Vec3{-0.6, 0.7, -0.4})) - 0.45, 0.25, 1.15);
                 double r, g, b;
                 if (h < 0) { double d = std::clamp(-h / 60.0, 0.0, 1.0); r = 0.05; g = 0.18 - 0.08 * d; b = 0.28 - 0.06 * d; shade = 1; }
-                else if (h < 8) { r = 0.55; g = 0.52; b = 0.40; }
-                else if (h > 1300) { r = g = b = 0.85; }
+                else if (h < 8) { r = 0.72; g = 0.66; b = 0.52; }
+                else if (h > 1500) { r = g = b = 0.80; }
                 else {
                     double f = forestMask(wx, wz, h);
-                    r = 0.30 - 0.12 * f; g = 0.34 - 0.08 * f; b = 0.20 - 0.08 * f;
-                    if (n.y < 0.8) { r = 0.40; g = 0.38; b = 0.34; }
+                    r = 0.64 - 0.2 * f; g = 0.56 - 0.12 * f; b = 0.43 - 0.14 * f;
+                    if (n.y < 0.8) { r = 0.46; g = 0.42; b = 0.38; }
                 }
                 if (townMask(t, wx, wz) > 0.5) { r = 0.50; g = 0.48; b = 0.44; }
                 if (t.onRunway(wx, wz, 20.0)) { r = g = b = 0.9; shade = 1; }
@@ -456,8 +583,88 @@ void WorldMeshes::build(const Terrain& t) {
     }
 }
 
+void WorldMeshes::bakeSunShadows(Vector3 sunDir) {
+    if (!terrain || dataPixels.empty()) return;
+    bakedSun = sunDir;
+    const int N = 2048, M = 1024;
+    const double cellM = 2.0 * Terrain::kHalfSize / M;
+    const Terrain& t = *terrain;
+    // heights straight from the shared grid (every 2nd sample = 31.25 m)
+    auto H = [&](double x, double z) {
+        double gx = (x + Terrain::kHalfSize) / Terrain::kCell, gz = (z + Terrain::kHalfSize) / Terrain::kCell;
+        if (gx < 0 || gz < 0 || gx >= Terrain::kGridCells || gz >= Terrain::kGridCells) return 0.0;
+        int i = static_cast<int>(gx), j = static_cast<int>(gz);
+        double u = gx - i, v = gz - j;
+        double a = t.gridAt(i, j), b = t.gridAt(i + 1, j), c = t.gridAt(i, j + 1), d = t.gridAt(i + 1, j + 1);
+        return (a + (b - a) * u) * (1 - v) + (c + (d - c) * u) * v;
+    };
+    Vec3 sd = normalize(Vec3{sunDir.x, std::max(sunDir.y, 0.02f), sunDir.z});
+    double horiz = std::sqrt(sd.x * sd.x + sd.z * sd.z);
+    Vec3 hd = horiz > 1e-6 ? Vec3{sd.x / horiz, 0, sd.z / horiz} : Vec3{1, 0, 0};
+    double rise = sd.y / std::max(horiz, 1e-6);
+    std::vector<float> sh(static_cast<size_t>(M) * M, 1.0f);
+    unsigned threads = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
+    auto par = [&](int rows, auto&& fn) {
+        std::vector<std::thread> pool;
+        for (unsigned k = 0; k < threads; ++k)
+            pool.emplace_back([&, k] { for (int j = static_cast<int>(k); j < rows; j += static_cast<int>(threads)) fn(j); });
+        for (auto& th : pool) th.join();
+    };
+    par(M, [&](int j) {
+        for (int i = 0; i < M; ++i) {
+            double x = -Terrain::kHalfSize + (i + 0.5) * cellM, z = -Terrain::kHalfSize + (j + 0.5) * cellM;
+            double h0 = std::max(H(x, z), 0.0) + 2.0;
+            double lit = 1.0;
+            for (double d = cellM * 0.75; d < 8000.0; d += std::max(cellM * 0.75, d * 0.09)) {
+                double ray = h0 + d * rise;
+                if (ray > 2300.0) break;
+                lit = std::min(lit, (ray - H(x + hd.x * d, z + hd.z * d)) / (d * 0.04 + 3.0));
+                if (lit <= 0.0) { lit = 0.0; break; }
+            }
+            sh[static_cast<size_t>(j) * M + i] = static_cast<float>(lit);
+        }
+    });
+    par(N, [&](int j) {
+        for (int i = 0; i < N; ++i) {
+            double gx = std::clamp((i + 0.5) * 0.5 - 0.5, 0.0, M - 1.001), gz = std::clamp((j + 0.5) * 0.5 - 0.5, 0.0, M - 1.001);
+            int a = static_cast<int>(gx), b = static_cast<int>(gz);
+            double u = gx - a, v = gz - b;
+            auto S = [&](int p, int q) { return double(sh[static_cast<size_t>(std::min(q, M - 1)) * M + std::min(p, M - 1)]); };
+            double val = (S(a, b) * (1 - u) + S(a + 1, b) * u) * (1 - v) + (S(a, b + 1) * (1 - u) + S(a + 1, b + 1) * u) * v;
+            dataPixels[(static_cast<size_t>(j) * N + i) * 4 + 3] = u8(std::clamp(val, 0.0, 1.0));
+        }
+    });
+    UpdateTexture(terrainData, dataPixels.data());
+}
+
+bool WorldMeshes::ensureL0(TerrainChunk& c, double now, int& budget) {
+    c.l0Used = now;
+    if (c.hasL0) return true;
+    if (budget <= 0 || !terrain) return false;
+    --budget;
+    c.l0 = buildGridMesh(*terrain, c.x0, c.z0, kChunkSize, 129, 30.0, 0.0, false);
+    c.hasL0 = true;
+    return true;
+}
+
+void WorldMeshes::evictL0(Vector3 camPos, double now) {
+    int count = 0;
+    for (auto& c : chunks) count += c.hasL0;
+    if (count <= 20) return;
+    for (auto& c : chunks) {
+        if (!c.hasL0) continue;
+        if (now - c.l0Used > 2.0 && Vector3Distance(c.center, camPos) > 5000.0f) {
+            UnloadMesh(c.l0);
+            c.l0 = Mesh{};
+            c.hasL0 = false;
+            if (--count <= 20) break;
+        }
+    }
+}
+
 void WorldMeshes::unload() {
     for (auto& c : chunks) {
+        if (c.hasL0) UnloadMesh(c.l0);
         UnloadMesh(c.hi);
         UnloadMesh(c.lo);
         if (c.hasTrees) UnloadMesh(c.trees);
@@ -465,8 +672,9 @@ void WorldMeshes::unload() {
     chunks.clear();
     UnloadMesh(farRing); UnloadMesh(water); UnloadMesh(cloudPlane);
     UnloadMesh(runway); UnloadMesh(taxiways); UnloadMesh(airbase); UnloadMesh(town);
-    UnloadTexture(noise); UnloadTexture(depthMap); UnloadTexture(minimap);
+    UnloadTexture(noise); UnloadTexture(depthMap); UnloadTexture(minimap); UnloadTexture(terrainData);
     UnloadTexture(puff); UnloadTexture(glow); UnloadTexture(spark);
+    for (auto& c : cloud) UnloadTexture(c);
 }
 
 }  // namespace sky

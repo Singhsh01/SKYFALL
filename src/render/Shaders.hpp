@@ -133,8 +133,9 @@ void main() {
 inline const char* kTerrainFS = R"GLSL(
 in vec3 vPos;
 in vec3 vNormal;
-in vec4 vMask;  // r forest, g town, b beach/wet, a snow/rock bias
+in vec4 vMask;  // r scrub, g town, b dry river bed
 uniform sampler2D uNoise;
+uniform sampler2D uTerrainData;   // RG normal.xz, B ambient occlusion, A baked sun shadow
 uniform float uCloudCover;
 uniform vec3 uFlashPos;
 uniform vec3 uFlashColor;
@@ -143,75 +144,106 @@ out vec4 finalColor;
 float hash12(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
 float cloudShadow(vec3 p) {
-    // project onto the cloud layer (y = 2300) along the sun direction
     float t = (2300.0 - p.y) / max(uSunDir.y, 0.05);
     vec2 q = (p.xz + uSunDir.xz * t) / 9000.0 + vec2(uTime * 0.0025, uTime * 0.001);
     float n = texture(uNoise, q).r * 0.65 + texture(uNoise, q * 3.1).g * 0.35;
     float c = smoothstep(1.0 - uCloudCover - 0.02, 1.0 - uCloudCover + 0.22, n);
-    return 1.0 - c * 0.72;
+    return 1.0 - c * 0.68;
+}
+
+// small-scale height detail -> normal perturbation (rock grain, sand ripples)
+vec2 detailGrad(vec2 uv, float s) {
+    float e = 0.004;
+    float hx = texture(uNoise, uv + vec2(e, 0.0)).g - texture(uNoise, uv - vec2(e, 0.0)).g;
+    float hz = texture(uNoise, uv + vec2(0.0, e)).g - texture(uNoise, uv - vec2(0.0, e)).g;
+    return vec2(hx, hz) * s;
 }
 
 void main() {
+    float dist = length(uCamPos - vPos);
+    // ---- normal: baked high-resolution terrain normal, falling back to the mesh outside the map
+    vec2 tuv = vPos.xz / 32000.0 + 0.5;
+    bool inMap = all(greaterThan(tuv, vec2(0.0))) && all(lessThan(tuv, vec2(1.0)));
+    vec4 td = inMap ? texture(uTerrainData, tuv) : vec4(0.5, 0.5, 1.0, 1.0);
     vec3 n = normalize(vNormal);
-    // detail normal from noise
-    vec2 dUv = vPos.xz / 37.0;
-    float dx = texture(uNoise, dUv + vec2(0.01, 0.0)).g - texture(uNoise, dUv - vec2(0.01, 0.0)).g;
-    float dz = texture(uNoise, dUv + vec2(0.0, 0.01)).g - texture(uNoise, dUv - vec2(0.0, 0.01)).g;
-    n = normalize(n + vec3(-dx, 0.0, -dz) * 0.9);
-
-    float slope = 1.0 - n.y;
-    float macro = texture(uNoise, vPos.xz / 4100.0).r;
-    float meso = texture(uNoise, vPos.xz / 610.0).g;
-    float micro = texture(uNoise, vPos.xz / 23.0).b;
-
-    vec3 grassDry = vec3(0.36, 0.33, 0.18);
-    vec3 grassGreen = vec3(0.20, 0.26, 0.11);
-    vec3 grass = mix(grassGreen, grassDry, smoothstep(0.35, 0.7, macro + (meso - 0.5) * 0.4));
-    grass *= 0.82 + 0.36 * micro;
-    vec3 forest = vec3(0.10, 0.15, 0.07) * (0.75 + 0.5 * meso);
-    vec3 rock = mix(vec3(0.36, 0.34, 0.31), vec3(0.50, 0.46, 0.40), meso) * (0.8 + 0.35 * micro);
-    vec3 sand = vec3(0.70, 0.63, 0.47) * (0.9 + 0.2 * micro);
-    vec3 snow = vec3(0.92, 0.94, 0.98);
-    vec3 town = mix(vec3(0.48, 0.45, 0.40), vec3(0.62, 0.58, 0.50), micro);
-
-    vec3 albedo = grass;
-    // agricultural patchwork on gentle lowland (warped grid of fields with hedgerows)
-    {
-        vec2 wp = vPos.xz + (texture(uNoise, vPos.xz / 3300.0).rg - 0.5) * 520.0;
-        vec2 sz = vec2(230.0, 160.0);
-        vec2 cell = floor(wp / sz);
-        vec2 fr = fract(wp / sz);
-        float h1 = hash12(cell), h2 = hash12(cell + 17.3);
-        vec3 fc = vec3(0.24, 0.31, 0.12);
-        if (h1 < 0.22) fc = vec3(0.56, 0.49, 0.27);        // ripe wheat
-        else if (h1 < 0.40) fc = vec3(0.36, 0.29, 0.20);   // ploughed soil
-        else if (h1 < 0.62) fc = vec3(0.27, 0.35, 0.13);   // pasture
-        else if (h1 < 0.80) fc = vec3(0.19, 0.25, 0.10);   // dark crop
-        else fc = vec3(0.44, 0.43, 0.24);                  // dry grass
-        float ang = h2 * 3.14159;
-        float furrow = 0.9 + 0.1 * sin(dot(vPos.xz, vec2(cos(ang), sin(ang))) * 0.9);
-        fc *= furrow * (0.9 + 0.2 * micro);
-        float edge = min(min(fr.x, 1.0 - fr.x) * sz.x, min(fr.y, 1.0 - fr.y) * sz.y);
-        fc = mix(vec3(0.12, 0.16, 0.07), fc, smoothstep(2.0, 5.0, edge));
-        float farm = smoothstep(0.16, 0.02, 1.0 - normalize(vNormal).y) * smoothstep(420.0, 260.0, vPos.y) * smoothstep(12.0, 30.0, vPos.y);
-        farm *= smoothstep(0.38, 0.5, texture(uNoise, vPos.xz / 9000.0 + 0.37).g);
-        albedo = mix(albedo, fc, farm * 0.9);
+    if (inMap) {
+        vec2 nxz = td.rg * 2.0 - 1.0;
+        n = normalize(vec3(nxz.x, sqrt(max(0.0, 1.0 - dot(nxz, nxz))), nxz.y));
     }
-    albedo = mix(albedo, forest, clamp(vMask.r, 0.0, 1.0));
-    albedo = mix(albedo, town, clamp(vMask.g, 0.0, 1.0));
-    float rockW = smoothstep(0.16, 0.34, slope + (meso - 0.5) * 0.12);
-    albedo = mix(albedo, rock, rockW);
-    float snowW = smoothstep(1250.0, 1500.0, vPos.y + meso * 220.0) * (1.0 - smoothstep(0.35, 0.6, slope));
-    albedo = mix(albedo, snow, snowW);
-    float beach = smoothstep(9.0, 2.0, vPos.y);
-    albedo = mix(albedo, sand, beach);
-    albedo = mix(albedo, albedo * 0.55, smoothstep(1.0, -2.0, vPos.y)); // wet below waterline
+    float slope = 1.0 - n.y;
+    float h = vPos.y;
+    float near = 1.0 - smoothstep(600.0, 3500.0, dist);
+    vec2 g1 = detailGrad(vPos.xz / 260.0, 1.6) + detailGrad(vPos.xz / 41.0, 0.9 * near);
+    // craggy rock: extra high-frequency relief on steep ground, strongest close to the camera
+    float steep = smoothstep(0.05, 0.25, slope);
+    vec2 g2 = detailGrad(vPos.xz / 95.0 + vec2(0.37, 0.11), 2.6) + detailGrad(vPos.xz / 17.0, 1.6 * near);
+    vec3 nd = normalize(n + vec3(-g1.x, 0.0, -g1.y) * (0.35 + slope) + vec3(-g2.x, 0.0, -g2.y) * steep * 1.1);
 
-    float ndl = max(dot(n, uSunDir), 0.0);
-    float sh = cloudShadow(vPos) * shadowAt(vPos, ndl);
-    vec3 light = uSunColor * ndl * sh + ambientLight(n) * (0.75 + 0.25 * sh);
-    vec3 col = albedo * light;
-    // explosion flash
+    // ---- material layers (arid mountains) ----
+    float macro = texture(uNoise, vPos.xz / 5200.0).r;
+    float meso = texture(uNoise, vPos.xz / 700.0).g;
+    float micro = texture(uNoise, vPos.xz / 31.0).b;
+    float grain = texture(uNoise, vPos.xz / 7.0).a;
+
+    vec3 sandLight = vec3(0.47, 0.41, 0.32);
+    vec3 sandDark = vec3(0.39, 0.32, 0.24);
+    vec3 sand = mix(sandLight, sandDark, smoothstep(0.3, 0.75, macro + (meso - 0.5) * 0.5));
+    sand *= 0.92 + 0.12 * micro;
+    // wind-blown dune ripples on flat sand
+    float ripple = sin(dot(vPos.xz, vec2(0.21, 0.13)) + meso * 9.0) * 0.5 + 0.5;
+    sand *= 1.0 - 0.05 * ripple * near * (1.0 - slope * 3.0);
+    vec3 gravel = mix(vec3(0.36, 0.32, 0.27), vec3(0.29, 0.26, 0.22), meso) * (0.85 + 0.25 * grain);
+    // sedimentary rock strata: horizontal bands warped by noise
+    float strata = sin(h * 0.085 + meso * 6.0 + macro * 4.0) * 0.5 + 0.5;
+    float strata2 = sin(h * 0.31 + micro * 3.0) * 0.5 + 0.5;
+    vec3 rockA = vec3(0.33, 0.30, 0.27), rockB = vec3(0.23, 0.21, 0.19), rockC = vec3(0.40, 0.37, 0.33);
+    vec3 rock = mix(rockB, rockA, 0.35 + 0.65 * mix(meso, strata, 0.35));
+    rock = mix(rock, rockC, smoothstep(0.7, 0.95, strata2) * 0.25);
+    rock *= 0.80 + 0.32 * micro * grain + 0.1 * meso;
+    vec3 highRock = vec3(0.43, 0.42, 0.40) * (0.85 + 0.2 * micro);
+    vec3 snow = vec3(0.80, 0.82, 0.86);
+    vec3 town = mix(vec3(0.36, 0.34, 0.30), vec3(0.45, 0.42, 0.37), micro);
+    vec3 scrub = vec3(0.16, 0.16, 0.10) * (0.8 + 0.4 * meso);
+    vec3 wadi = vec3(0.52, 0.48, 0.41) * (0.88 + 0.18 * grain);
+
+    float ao = inMap ? td.b : 1.0;
+    float cav = smoothstep(0.55, 0.95, ao);              // 0 in gullies/valleys, 1 on ridges/flats
+    vec3 albedo = mix(gravel, sand, smoothstep(0.08, 0.02, slope) * 0.8 + 0.2);
+    // desert pavement: darker varnished gravel patches and pale alluvial fan streaks on the flats
+    float pave = smoothstep(0.55, 0.75, texture(uNoise, vPos.xz / 1900.0 + 0.31).g * 0.7 + meso * 0.3);
+    albedo = mix(albedo, gravel * 0.82, pave * 0.65 * (1.0 - slope * 4.0));
+    float fan = texture(uNoise, vec2(vPos.x / 2600.0, vPos.z / 330.0)).r;
+    albedo = mix(albedo, sandLight * 1.08, smoothstep(0.6, 0.8, fan) * 0.35 * (1.0 - slope * 4.0));
+    // sediment collects in concave ground: lighter, finer sand in the gully floors
+    albedo = mix(albedo, sandLight * 1.03, (1.0 - cav) * smoothstep(0.30, 0.10, slope) * 0.6);
+    float rockW = smoothstep(0.05, 0.17, slope + (meso - 0.5) * 0.08 - (1.0 - cav) * 0.05);
+    albedo = mix(albedo, rock, rockW);
+    albedo = mix(albedo, highRock, smoothstep(1050.0, 1500.0, h + meso * 200.0) * (0.6 + 0.4 * rockW));
+    float snowW = smoothstep(1650.0, 1900.0, h + meso * 180.0) * (1.0 - smoothstep(0.25, 0.5, slope));
+    albedo = mix(albedo, snow, snowW);
+    // sparse scrub: dark dots where the vegetation mask allows it
+    float dots = smoothstep(0.62, 0.70, texture(uNoise, vPos.xz / 23.0).r * 0.6 + texture(uNoise, vPos.xz / 9.0).g * 0.4);
+    albedo = mix(albedo, scrub, clamp(vMask.r * 1.6, 0.0, 1.0) * dots * (1.0 - rockW));
+    albedo = mix(albedo, wadi, clamp(vMask.b, 0.0, 1.0) * (1.0 - rockW));
+    albedo = mix(albedo, town, clamp(vMask.g, 0.0, 1.0));
+    // beach and wet sand at the waterline
+    albedo = mix(albedo, vec3(0.52, 0.47, 0.37), smoothstep(9.0, 2.0, h));
+    albedo = mix(albedo, albedo * 0.6, smoothstep(1.0, -2.0, h));
+
+    // ---- lighting ----
+    float sunShadow = inMap ? td.a : 1.0;
+    float sh = cloudShadow(vPos) * sunShadow;
+    float ndl = max(dot(nd, uSunDir), 0.0);
+    sh *= shadowAt(vPos, ndl);
+    float skyAO = mix(0.25, 1.0, ao * ao);
+    vec3 amb = ambientLight(nd) * skyAO;
+    // warm bounce light from sunlit sand fills the shadows (key to a desert look)
+    vec3 bounce = vec3(0.55, 0.45, 0.33) * uSunColor * 0.05 * (1.0 - nd.y * 0.5) * skyAO;
+    vec3 col = albedo * (uSunColor * ndl * sh * 1.05 + amb * 0.62 + bounce);
+    // dusty specular sheen at grazing sun
+    vec3 v = normalize(uCamPos - vPos);
+    vec3 hv = normalize(uSunDir + v);
+    col += uSunColor * pow(max(dot(nd, hv), 0.0), 24.0) * 0.025 * sh * (1.0 - rockW * 0.5);
     float fd = length(uFlashPos - vPos);
     col += albedo * uFlashColor * (1.0 / (1.0 + fd * fd * 0.0004));
     col = applyFog(col, vPos);
@@ -352,10 +384,10 @@ inline const char* kJetFS = R"GLSL(
 in vec3 vPos;
 in vec3 vObj;
 in vec3 vNormal;
-in vec4 vColor;      // rgb = part tint multiplier, a = material id (1 = paint, 0.5 = dark metal, 0 = glass)
+in vec4 vColor;      // rgb = part tint x baked ambient occlusion, a = material id (1 paint, 0.5 metal, 0 glass)
 uniform vec3 uPaintA;
 uniform vec3 uPaintB;
-uniform float uCamo;        // 0 = uniform grey, 1 = digital splinter camouflage
+uniform float uCamo;        // 0 = two-tone grey, 1 = digital splinter camouflage
 uniform float uRoughness;
 uniform float uHitFlash;
 uniform float uDamage;
@@ -365,16 +397,32 @@ uniform sampler2D uNoise;
 out vec4 finalColor;
 
 float D_GGX(float NoH, float a) { float a2 = a * a; float d = NoH * NoH * (a2 - 1.0) + 1.0; return a2 / (3.14159 * d * d); }
+float V_SmithJoint(float NoV, float NoL, float a) {
+    float a2 = a * a;
+    float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
+    float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+    return 0.5 / max(gv + gl, 1e-4);
+}
+vec3 envLight(vec3 r, float rough) {
+    // sky above, sunlit desert below; rough surfaces see a blurred, greyer environment
+    vec3 sky = skyColor(normalize(vec3(r.x, max(r.y, 0.02), r.z)), 0.0);
+    vec3 ground = mix(uGroundHaze * 0.55, uGroundHaze * 0.32, clamp(-r.y * 2.5, 0.0, 1.0));
+    vec3 env = r.y > 0.0 ? sky : ground;
+    float horizon = smoothstep(-0.08, 0.06, r.y);
+    env = mix(ground, sky, horizon);
+    float l = dot(env, vec3(0.3, 0.5, 0.2));
+    return mix(env, vec3(l) * 0.9, rough * 0.6);
+}
 
 void main() {
     vec3 n = normalize(vNormal);
     if (!gl_FrontFacing) n = -n;
     vec3 v = normalize(uCamPos - vPos);
     float mat = vColor.a;
+    float ao = clamp(max(vColor.r, max(vColor.g, vColor.b)), 0.0, 1.0);
     vec3 base;
-    float metal, rough;
+    float metal, rough, coat;
     if (mat > 0.75) {
-        // paint
         vec3 paint = uPaintA;
         if (uCamo > 0.5) {
             vec2 c = floor(vObj.xz * vec2(0.9, 1.4) + floor(vObj.y * 2.0));
@@ -382,22 +430,28 @@ void main() {
             float r2 = texture(uNoise, vObj.xz / 17.0).g;
             paint = mix(uPaintA, uPaintB, step(0.5, r * 0.7 + r2 * 0.5));
         } else {
-            float m = texture(uNoise, vObj.xz / 9.0).r;
-            paint = mix(uPaintA, uPaintB, smoothstep(0.45, 0.75, m) * 0.6);
+            // soft two-tone pattern with large, smooth blotches
+            float m = texture(uNoise, vObj.xz / 11.0 + vObj.y * 0.05).r;
+            paint = mix(uPaintA, uPaintB, smoothstep(0.42, 0.62, m) * 0.85);
         }
         base = paint * vColor.rgb;
-        // panel lines
+        // panel lines and fastener rows (thin, irregular)
         vec3 pl = abs(fract(vObj * vec3(0.32, 0.9, 0.41) + vec3(0.13, 0.0, 0.27)) - 0.5);
-        float line = smoothstep(0.488, 0.497, max(pl.x, pl.z));
+        float line = smoothstep(0.490, 0.4985, max(pl.x, pl.z));
         line *= step(0.45, texture(uNoise, floor(vObj.xz * vec2(0.32, 0.41)) / 37.0).b);
-        base *= 1.0 - line * 0.16;
-        // weathering
-        base *= 0.94 + 0.12 * texture(uNoise, vObj.xz / 5.0).b;
-        metal = 0.22; rough = uRoughness;
+        base *= 1.0 - line * 0.22;
+        // subtle RAM-coating mottling and wear
+        float mott = texture(uNoise, vObj.xz / 1.7 + vObj.y).b;
+        base *= 0.93 + 0.12 * mott;
+        // exhaust soot towards the tail
+        base *= mix(1.0, 0.72, smoothstep(-6.0, -9.5, vObj.x));
+        metal = 0.12; rough = uRoughness * (0.85 + 0.3 * mott); coat = 0.35;
     } else if (mat > 0.25) {
-        base = vColor.rgb; metal = 0.85; rough = 0.42;
+        base = vColor.rgb; metal = 0.9; rough = 0.38; coat = 0.0;
+        // heat tint on nozzles
+        base *= mix(vec3(1.0), vec3(1.05, 0.9, 1.15), smoothstep(-8.0, -10.0, vObj.x));
     } else {
-        base = vec3(0.04, 0.035, 0.02); metal = 0.0; rough = 0.06;
+        base = vec3(0.03, 0.028, 0.02); metal = 0.0; rough = 0.04; coat = 1.0;
     }
     base *= (1.0 - uDamage * 0.6 * texture(uNoise, vObj.xz / 2.0).r);
 
@@ -406,23 +460,27 @@ void main() {
     float NoL = max(dot(n, l), 0.0);
     float NoV = max(dot(n, v), 1e-3);
     float NoH = max(dot(n, h), 0.0);
-    float a = rough * rough;
+    float VoH = max(dot(v, h), 0.0);
+    float a = max(rough * rough, 0.02);
     vec3 F0 = mix(vec3(0.04), base, metal);
-    vec3 F = F0 + (1.0 - F0) * pow(1.0 - max(dot(h, v), 0.0), 5.0);
-    float spec = D_GGX(NoH, max(a, 0.02)) * 0.25 / max(NoL * NoV, 0.1);
-    vec3 diffuse = base * (1.0 - metal) * NoL;
+    vec3 F = F0 + (1.0 - F0) * pow(1.0 - VoH, 5.0);
+    vec3 specBase = D_GGX(NoH, a) * V_SmithJoint(NoV, NoL, a) * F;
+    // clear-coat: a second, sharp lobe on top of the paint
+    float Fc = 0.04 + 0.96 * pow(1.0 - VoH, 5.0);
+    float specCoat = D_GGX(NoH, 0.025) * V_SmithJoint(NoV, NoL, 0.025) * Fc * coat;
+    vec3 diffuse = base * (1.0 - metal) / 3.14159 * 3.14159;
     float shd = shadowAt(vPos, NoL);
-    vec3 col = (diffuse + F * spec * NoL) * uSunColor * shd;
-    // environment: sky above, darker ground below (horizon line reflects like real metal)
+    vec3 col = (diffuse + specBase + specCoat) * NoL * uSunColor * shd;
+    // image-based lighting approximation
     vec3 r = reflect(-v, n);
-    vec3 env = r.y > 0.0 ? skyColor(r, 0.0) : mix(uGroundHaze * 0.7, uGroundHaze * 0.4, clamp(-r.y * 3.0, 0.0, 1.0));
-    float envLum = dot(env, vec3(0.3, 0.5, 0.2));
-    env = mix(vec3(envLum), env, 0.55);   // desaturate reflections: paint is not a mirror
-    vec3 Fe = F0 + (1.0 - F0) * pow(1.0 - NoV, 5.0) * (1.0 - rough);
+    vec3 Fe = F0 + (max(vec3(1.0 - rough), F0) - F0) * pow(1.0 - NoV, 5.0);
     vec3 amb = ambientLight(n);
-    amb = mix(vec3(dot(amb, vec3(0.33))), amb, 0.6);
-    col += env * Fe * (mat < 0.25 ? 1.4 : 0.85) + base * amb * (1.0 - metal * 0.5) * 1.45;
-    if (mat < 0.25) col += vec3(0.35, 0.25, 0.06) * pow(1.0 - NoV, 2.0) * 0.6; // gold canopy tint
+    amb = mix(vec3(dot(amb, vec3(0.33))), amb, 0.65);
+    float specOcc = clamp(pow(NoV + ao, 2.0) - 1.0 + ao, 0.0, 1.0);
+    col += envLight(r, rough) * Fe * specOcc * (mat < 0.25 ? 1.3 : 0.7);
+    col += envLight(r, 0.0) * (0.04 + 0.96 * pow(1.0 - NoV, 5.0)) * coat * 0.35 * specOcc;
+    col += base * (1.0 - metal) * amb * ao * 0.85;
+    if (mat < 0.25) col += vec3(0.35, 0.25, 0.06) * pow(1.0 - NoV, 2.0) * 0.5;  // gold canopy coating
     float fd = length(uFlashPos - vPos);
     col += base * uFlashColor * (1.0 / (1.0 + fd * fd * 0.0004));
     col += vec3(1.0, 0.25, 0.1) * uHitFlash;
@@ -499,7 +557,7 @@ void main() {
     else col = mix(shade * 1.15, shade * 0.6, smoothstep(0.2, 1.0, dens)) + uSunColor * 0.08 * lam;
     // silver lining at thin edges
     col += uSunColor * towardSun * (1.0 - dens) * 0.7;
-    float a = smoothstep(0.0, 0.42, dens);
+    float a = smoothstep(0.05, 0.6, dens) * (above ? 1.0 : 0.72);
     float dist = length(vPos.xz - uCamPos.xz);
     a *= uLayerFade * (1.0 - smoothstep(30000.0, 42000.0, dist));
     col = applyFog(col, vPos);

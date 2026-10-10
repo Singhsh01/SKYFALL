@@ -161,7 +161,9 @@ void FlightModel::arcadeVelocity(const ControlInputs& in, double dt, double rho)
     double cd = (p.cd0 * 3.0 + p.gearCd * s_.gearPos + (s_.airbrake ? p.airbrakeCd * 2.5 : 0.0));
     double turnRate = std::sqrt(s_.omega.z * s_.omega.z + s_.omega.y * s_.omega.y);
     double cosA = clampd(dot(fwd, dir), -1.0, 1.0);
-    double accel = (s_.thrustN * cosA - qS * cd) / m - kG * dir.y - 0.045 * turnRate * V;
+    // arcade guarantees a full-afterburner thrust/weight of at least 1.25 for every aircraft
+    double thrustScale = std::max(1.0, 1.25 * m * kG / std::max(p.thrustAbN, 1.0));
+    double accel = (s_.thrustN * thrustScale * cosA - qS * cd) / m - kG * dir.y - 0.045 * turnRate * V;
     V = std::max(0.0, V + accel * dt);
     // the flight path follows the nose; authority fades below ~60 m/s (arcade "stall")
     double auth = smoothstep(32.0, 75.0, V);
@@ -196,7 +198,9 @@ void FlightModel::updateAttitude(const ControlInputs& in, double dt) {
 
     if (mode_ == HandlingMode::Arcade) {
         double auth = 0.35 + 0.65 * smoothstep(40.0, 120.0, V);
-        Vec3 target{in.roll * 4.9 * auth, -in.yaw * 0.62 * auth, in.pitch * (in.pitch > 0 ? 1.15 : 0.8) * auth};
+        // per-aircraft arcade rates derived from the profile (F-22: ~280 deg/s roll, ~66 deg/s pitch)
+        double rollRate = p.maxRollRate * 1.28, pitchRate = p.maxPitchRate * 2.05;
+        Vec3 target{in.roll * rollRate * auth, -in.yaw * 0.62 * auth, in.pitch * pitchRate * (in.pitch > 0 ? 1.0 : 0.7) * auth};
         s_.omega = s_.omega + (target - s_.omega) * approachFactor(dt, 0.07);
         s_.q = s_.q.integrated(s_.omega, dt);
         // when too slow the nose falls through towards the flight path (weathervane)

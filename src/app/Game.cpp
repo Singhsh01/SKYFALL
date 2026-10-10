@@ -65,6 +65,9 @@ int Game::run(const Options& opt) {
     ui::text("GENERATING TERRAIN, AIRBASE AND AIRCRAFT...", GetScreenWidth() * 0.5f, GetScreenHeight() * 0.62f, 16, Color{200, 210, 210, 200}, Align::Center);
     EndDrawing();
     renderer_.init(terrain_, GetScreenWidth(), GetScreenHeight());
+    replayStage_.createPlayer(AircraftId::F22);
+    replayStage_.player().fm->resetAirborne({0, -5000, 0}, 0.0, 1.0, 0.0);
+    replayStage_.player().alive = false;
     cockpit_.init();
     if (!capturing_ || opt.benchSeconds > 0) audio_.init();
     applySettings();
@@ -120,6 +123,9 @@ void Game::applySettings() {
 // Modes
 // ------------------------------------------------------------------------------------------
 void Game::startTitle() {
+    pip_ = PipState{};
+    replayActive_ = false;
+    deathWait_ = -1;
     screen_ = Screen::Title;
     mode_ = GameMode::None;
     mission_.reset();
@@ -146,7 +152,7 @@ void Game::startMission(int n) {
     missionNo_ = n;
     tod_ = n == 3 ? TimeOfDay::Noon : TimeOfDay::Morning;
     lighting_ = Lighting::preset(tod_);
-    Jet& p = battle_.createPlayer(AircraftId::F22);
+    Jet& p = battle_.createPlayer(static_cast<AircraftId>(settings_.aircraft));
     battle_.setAiEnabled(true);
     const RunwayInfo& rw = terrain_.runway();
     if (n == 2) {
@@ -174,6 +180,13 @@ void Game::startMission(int n) {
     hud_.clear();
     chaseInit_ = false;
     headYaw_ = headPitch_ = 0;
+    recorder_.clear();
+    pip_ = PipState{};
+    replayActive_ = false;
+    deathWait_ = -1;
+    lossCause_ = LossCause::Crash;
+    killerName_.clear();
+
     applySettings();
     if (n == 1) hud_.radio("TOWER", "Skyfall One, runway 09, wind calm. Start-up approved.", 7);
     else if (n == 2) hud_.radio("INSTRUCTOR", "Your aircraft. Let's see some clean flying, Skyfall One.", 6);
@@ -187,7 +200,7 @@ void Game::startArena(bool keepPlayerState) {
     if (!keepPlayerState) {
         tod_ = TimeOfDay::Morning;
         lighting_ = Lighting::preset(tod_);
-        Jet& p = battle_.createPlayer(AircraftId::F22);
+        Jet& p = battle_.createPlayer(static_cast<AircraftId>(settings_.aircraft));
         p.fm->resetAirborne({-7500, 2100, 2600}, 0.0, 230.0, 0.8);
         camMode_ = CameraMode::Chase;
         renderer_.effects().clear();
@@ -195,6 +208,12 @@ void Game::startArena(bool keepPlayerState) {
     mission_.reset();
     missionDone_ = false;
     battle_.setAiEnabled(true);
+    recorder_.clear();
+    pip_ = PipState{};
+    replayActive_ = false;
+    deathWait_ = -1;
+    lossCause_ = LossCause::Crash;
+    killerName_.clear();
     BattleConfig cfg;
     cfg.enemyJets = 3;
     cfg.allyJets = 2;
@@ -209,6 +228,7 @@ void Game::startArena(bool keepPlayerState) {
 }
 
 void Game::startHangar() {
+    pip_ = PipState{};
     screen_ = Screen::Hangar;
     tod_ = TimeOfDay::Morning;
     lighting_ = Lighting::preset(tod_);
@@ -224,6 +244,12 @@ void Game::startHangar() {
 }
 
 void Game::respawnPlayer() {
+    recorder_.clear();
+    pip_ = PipState{};
+    replayActive_ = false;
+    deathWait_ = -1;
+    lossCause_ = LossCause::Crash;
+    killerName_.clear();
     Jet& p = battle_.player();
     const AircraftProfile& prof = p.fm->profile();
     p.fm = std::make_unique<FlightModel>(prof, terrain_);
@@ -355,6 +381,7 @@ void Game::updatePlaying(double dt) {
     Jet& p = battle_.player();
     FlightModel& fm = *p.fm;
     if (in.pause) { screen_ = Screen::Paused; nav_.focus = 0; audio_.setPaused(true); pauseJustOpened_ = true; return; }
+    if (replayActive_) { updateReplay(dt); return; }
     if (in.help) showHelp_ = !showHelp_;
     if (in.camera) { camMode_ = nextCamera(camMode_); chaseInit_ = false; headYaw_ = headPitch_ = 0; }
     if (in.reset) {
@@ -429,7 +456,18 @@ void Game::updatePlaying(double dt) {
         deathReason_ = fm.state().crashReason == CrashReason::Destroyed ? "SHOT DOWN" : crashReasonText(fm.state().crashReason);
         deathCamPos_ = cam_.position;
         deathTarget_ = toRl(fm.state().pos);
-        if (mode_ == GameMode::Arena) respawnTimer_ = 5.0;
+        deathTime_ = time_;
+        crashPos_ = fm.state().pos;
+        if (fm.state().crashReason != CrashReason::Destroyed) lossCause_ = LossCause::Crash;
+        lossReport_ = analyzeLoss(recorder_, deathTime_, fm.state().crashReason, lossCause_, killerName_);
+        deathWait_ = 1.6;   // watch the impact live, then the replay starts
+    }
+    if (playerDead_ && deathWait_ > 0) {
+        deathWait_ -= dt;
+        if (deathWait_ <= 0) {
+            if (settings_.crashReplay) beginReplay();
+            if (!replayActive_ && mode_ == GameMode::Arena) respawnTimer_ = 3.0;
+        }
     }
     if (playerDead_ && respawnTimer_ > 0) {
         respawnTimer_ -= dt;
@@ -450,6 +488,8 @@ void Game::updatePlaying(double dt) {
             if (q.y < terrain_.surfaceHeight(q.x, q.z) + 20.0) { gpws_ = true; break; }
         }
     }
+    recordFrame();
+    updatePip(dt);
 }
 
 void Game::processEvents() {
@@ -464,6 +504,7 @@ void Game::processEvents() {
             case EventType::Explosion: audio_.play(Sfx::Explosion, 0.4f + 1.4f * att, pan); break;
             case EventType::JetKilled:
                 audio_.play(Sfx::BigExplosion, 0.5f + 1.5f * att, pan);
+                if (e.a == p.id) { lastKillTime_ = time_; lastKillPos_ = e.pos; }
                 if (e.a == p.id) {
                     hud_.popup("+100   ENEMY JET DESTROYED", Color{255, 225, 120, 255});
                     hud_.hitMarker(true);
@@ -473,16 +514,35 @@ void Game::processEvents() {
                 break;
             case EventType::GroundKilled:
                 audio_.play(Sfx::Explosion, 0.6f + 1.2f * att, pan);
+                if (e.a == p.id) { lastKillTime_ = time_; lastKillPos_ = e.pos; }
                 if (e.a == p.id) { hud_.popup("+50   GROUND TARGET DESTROYED", Color{255, 225, 120, 255}); hud_.hitMarker(true); }
                 break;
             case EventType::SmallExplosion: if (dist < 1500) audio_.play(Sfx::Impact, 0.6f * att, pan); break;
             case EventType::Splash: audio_.play(Sfx::Explosion, 0.5f * att, pan); break;
             case EventType::MissileLaunch:
                 audio_.play(Sfx::MissileLaunch, e.a == p.id ? 1.0f : 0.25f + att, pan);
+                if (e.a == p.id && e.c >= 0) {
+                    pip_.mode = PipMode::Missile;
+                    pip_.missileId = e.c;
+                    pip_.ats = e.text == "ATS";
+                    pip_.age = 0;
+                    pip_.launchRange = pip_.haveTarget ? pip_.lastDist : 0.0;
+                    pip_.lastPos = e.pos;
+                    pip_.lastDir = p.fm->state().q.forward();
+                }
                 if (e.text == "SAM" && e.b == p.id) hud_.radio("AWACS", "SAM launch! Skyfall One, defend!", 4);
                 break;
             case EventType::FlaresOut: if (e.a == p.id) audio_.play(Sfx::Flares, 0.8f); break;
-            case EventType::Hit: if (e.a == p.id) { hud_.hitMarker(false); audio_.play(Sfx::Hit, 0.35f); } break;
+            case EventType::Hit:
+                if (e.a == p.id) { hud_.hitMarker(false); audio_.play(Sfx::Hit, 0.35f); lastHitTime_ = time_; lastHitPos_ = e.pos; }
+                break;
+            case EventType::PlayerKilled: {
+                lossCause_ = e.text == "MISSILE" ? LossCause::ShotDownMissile
+                           : (e.text == "CANNON" || e.text == "FLAK") ? LossCause::ShotDownGun : LossCause::Crash;
+                const Jet* killer = battle_.jetById(e.a);
+                killerName_ = killer ? killer->callsign : (lossCause_ == LossCause::ShotDownMissile ? "SAM SITE" : (lossCause_ == LossCause::ShotDownGun ? "AAA" : ""));
+                break;
+            }
             case EventType::PlayerHit: damagePulse_ = 1.0; audio_.play(Sfx::Hit, 0.9f); shake_ += 0.6; break;
             case EventType::MissileWarningStart:
                 hud_.radio("WARDOG 2", "Skyfall, missile on your six! Flares!", 3.5);
@@ -498,6 +558,7 @@ void Game::processEvents() {
 // Cameras
 // ------------------------------------------------------------------------------------------
 void Game::updateCamera(double dt) {
+    if (replayActive_) return;   // the replay director owns the camera
     const InputState& in = input_.state();
     const Jet& p = battle_.player();
     const FlightState& s = p.fm->state();
@@ -643,11 +704,11 @@ FrameParams Game::makeFrameParams() {
 }
 
 void Game::renderFrame() {
-    FrameParams f = makeFrameParams();
+    FrameParams f = replayActive_ ? makeReplayFrameParams() : makeFrameParams();
     // effects need per-jet models for wingtips
     std::vector<const JetModel*> models;
     for (const auto& j : battle_.jets()) models.push_back(&renderer_.jetModel(j->fm->profile().style));
-    if (screen_ == Screen::Playing && !capturing_)
+    if (screen_ == Screen::Playing && !capturing_ && !replayActive_)
         renderer_.effects().update(GetFrameTime() > 0 ? std::min(GetFrameTime(), 0.1f) : 1.0 / 60.0, battle_, lighting_, cam_.position, models);
 
     bool cockpitView = f.hideJetId >= 0;
@@ -673,6 +734,20 @@ void Game::renderFrame() {
         cockpit_.draw3D(renderer_, battle_.player(), fo, origin);
         renderer_.endOverlay3D();
         combiner = cockpit_.combinerRect(cam_, battle_.player(), GetScreenWidth(), GetScreenHeight());
+        rlSetClipPlanes(nearPlane_, farPlane_);
+    }
+    // picture-in-picture: target / missile / hit camera
+    const int pipW = 480, pipH = 300;
+    bool pipOn = settings_.missileCam && !replayActive_ && !hideHud_ && pip_.mode != PipMode::Off &&
+                 (screen_ == Screen::Playing || screen_ == Screen::Paused);
+    if (pipOn) {
+        FrameParams pf = makeFrameParams();
+        pf.cam = pip_.cam;
+        pf.hideJetId = -1;
+        pf.bloom = false;
+        pf.nearPlane = 0.5f;
+        pf.quality = settings_.quality == GraphicsQuality::High ? GraphicsQuality::Medium : GraphicsQuality::Low;
+        renderer_.renderPip(pf, pipW, pipH);
         rlSetClipPlanes(nearPlane_, farPlane_);
     }
 
@@ -709,6 +784,13 @@ void Game::renderFrame() {
         hc.missionDone = missionDone_;
         hc.missionNext = missionNo_ == 1 ? "PRESS ENTER TO ENGAGE INBOUND BANDITS" : missionNo_ == 2 ? "PRESS ENTER FOR MISSION 03: RUNWAY LANDING" : "PRESS ENTER FOR THE CAMPAIGN MENU";
         hc.droppedSteps = stepper_.droppedSteps;
+        hc.pipActive = pipOn;
+        hc.pip = &pip_;
+        hc.pipTex = renderer_.pipTexture();
+        hc.pipW = pipW; hc.pipH = pipH;
+        hc.replay = replayActive_;
+        hc.replayT = replayT_; hc.replayFrom = replayFrom_; hc.replayTo = replayTo_; hc.deathTime = deathTime_;
+        hc.loss = &lossReport_;
         hc.gamepad = input_.gamepadConnected();
         hud_.draw(hc);
         if (settings_.showFps && !showDebug_) {
@@ -755,7 +837,7 @@ void Game::drawTitle() {
     y += bh + gap;
     if (ui::button(nav_, 1, {x, y, bw, bh}, "DOGFIGHT ARENA", "Waves of fictional bandits, SAM sites and ground targets")) { audio_.play(Sfx::Click); startArena(false); return; }
     y += bh + gap;
-    if (ui::button(nav_, 2, {x, y, bw, bh}, "HANGAR", "8 aircraft slots - data and roadmap")) { audio_.play(Sfx::Click); startHangar(); nav_.focus = 0; return; }
+    if (ui::button(nav_, 2, {x, y, bw, bh}, "HANGAR", "Choose from 8 aircraft")) { audio_.play(Sfx::Click); hangarSel_ = settings_.aircraft; startHangar(); nav_.focus = hangarSel_; return; }
     y += bh + gap;
     if (ui::button(nav_, 3, {x, y, bw, bh}, "SETTINGS", "Audio, graphics, controls")) { audio_.play(Sfx::Click); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 0; return; }
     y += bh + gap;
@@ -800,18 +882,25 @@ void Game::drawHangar() {
     DrawRectangleGradientH(0, 0, static_cast<int>(w * 0.45f), static_cast<int>(h), Color{0, 0, 0, 190}, Color{0, 0, 0, 0});
     ui::title("HANGAR", 60 * s, 40 * s, 38 * s);
     const auto& all = allProfiles();
-    nav_.begin(9, in.up, in.down, in.confirm, in.left, in.right);
-    float y = 110 * s;
+    nav_.begin(10, in.up, in.down, in.confirm, in.left, in.right);
+    float y = 100 * s;
     for (int i = 0; i < 8; ++i) {
         const AircraftProfile& p = all[i];
-        if (ui::button(nav_, i, {60 * s, y, 380 * s, 44 * s}, p.name, p.playableNow ? "PLAYABLE" : "PLANNED - needs licensed model + tuning")) {}
+        bool chosen = settings_.aircraft == i;
+        if (ui::button(nav_, i, {60 * s, y, 380 * s, 44 * s}, p.name, chosen ? "SELECTED - your aircraft" : "Press ENTER / click to select")) {
+            settings_.aircraft = i;
+            settings_.save(settingsPath_);
+            audio_.play(Sfx::Click);
+        }
+        if (chosen) DrawRectangle(static_cast<int>(430 * s), static_cast<int>(y + 14 * s), static_cast<int>(8 * s), static_cast<int>(16 * s), Color{150, 255, 205, 255});
         if (nav_.focus == i && hangarSel_ != i) { hangarSel_ = i; startHangar(); }
-        y += 50 * s;
+        y += 48 * s;
     }
-    if (ui::button(nav_, 8, {60 * s, y + 10 * s, 380 * s, 44 * s}, "BACK") || in.back) { startTitle(); return; }
+    if (ui::button(nav_, 8, {60 * s, y + 8 * s, 380 * s, 44 * s}, "FLY DOGFIGHT ARENA", all[settings_.aircraft].name)) { startArena(false); return; }
+    if (ui::button(nav_, 9, {60 * s, y + 58 * s, 380 * s, 40 * s}, "BACK") || in.back) { startTitle(); return; }
     // stats panel
     const AircraftProfile& p = all[hangarSel_];
-    Rectangle r = {w - 400 * s, 110 * s, 360 * s, 300 * s};
+    Rectangle r = {w - 400 * s, 110 * s, 360 * s, 320 * s};
     ui::panel(r, Color{0, 0, 0, 160}, Color{150, 255, 205, 60});
     float ty = r.y + 14 * s;
     ui::text(p.name, r.x + 16 * s, ty, 24 * s, WHITE);
@@ -828,7 +917,8 @@ void Game::drawHangar() {
     std::snprintf(b, sizeof b, "%.0f / %.0f kN", p.thrustMilN / 1000, p.thrustAbN / 1000); row("Thrust dry / AB", b);
     std::snprintf(b, sizeof b, "%.0f g", p.gLimit); row("FBW G limit", b);
     std::snprintf(b, sizeof b, "%.0f kt", p.rotateSpeedMs * 1.943844); row("Rotate speed", b);
-    row("Status", p.playableNow ? "Playable" : "Planned");
+    std::snprintf(b, sizeof b, "%.0f / %.0f deg/s", p.maxRollRate * 1.28 / kDeg, p.maxPitchRate * 2.05 / kDeg); row("Arcade roll / pitch", b);
+    std::snprintf(b, sizeof b, "%d ATA + 4 ATS", p.missiles); row("Missiles", b);
     ui::text("Public, rounded figures; aero data tuned & illustrative.", r.x + 16 * s, r.y + r.height - 28 * s, 12 * s, Color{170, 190, 185, 200}, Align::Left, false);
 }
 
@@ -838,7 +928,7 @@ void Game::drawSettings() {
     float s = h / 720.0f;
     DrawRectangle(0, 0, static_cast<int>(w), static_cast<int>(h), Color{0, 0, 0, 170});
     ui::title("SETTINGS", 60 * s, 34 * s, 38 * s);
-    nav_.begin(17, in.up, in.down, in.confirm, in.left, in.right);
+    nav_.begin(19, in.up, in.down, in.confirm, in.left, in.right);
     float cw = 420 * s, rh = 42 * s, g = 6 * s;
     float x1 = 60 * s, x2 = 60 * s + cw + 40 * s;
     float y = 110 * s;
@@ -868,7 +958,9 @@ void Game::drawSettings() {
     if (ui::cycle(nav_, 14, {x2, y2, cw, rh}, "Handling", settings_.handling, {"ARCADE", "ASSISTED", "SIMULATION"})) changed = true;
     y2 += rh + g;
     changed |= ui::slider(nav_, 15, {x2, y2, cw, rh}, "Control sensitivity", settings_.sensitivity, 0.3, 2.0); y2 += rh + g;
-    if (ui::button(nav_, 16, {x1, h - 80 * s, 200 * s, 46 * s}, "BACK") || in.back) {
+    changed |= ui::toggle(nav_, 16, {x1, y + 22 * s, cw, rh}, "Missile / target camera", settings_.missileCam);
+    changed |= ui::toggle(nav_, 17, {x1, y + 22 * s + rh + g, cw, rh}, "Crash replay + analysis", settings_.crashReplay);
+    if (ui::button(nav_, 18, {x1, h - 64 * s, 200 * s, 46 * s}, "BACK") || in.back) {
         settings_.save(settingsPath_);
         screen_ = settingsReturn_;
         nav_.focus = 0;
@@ -923,6 +1015,7 @@ void Game::scriptedStep(double seconds, const std::function<void(double)>& pilot
         time_ += chunk;
         damagePulse_ = std::max(0.0, damagePulse_ - chunk * 1.8);
         processEvents();
+        if (screen_ == Screen::Playing && mode_ != GameMode::None) updatePip(chunk);
         if (effects) {
             models.clear();
             for (const auto& j : battle_.jets()) models.push_back(&renderer_.jetModel(j->fm->profile().style));
@@ -968,6 +1061,115 @@ int Game::runCapture() {
                 scriptedStep(0.3, [&](double) { setInput(0, 0, 0, 0); });
                 snap(std::string("jet_") + p.fm->profile().shortName);
             }
+        }
+        return 0;
+    }
+    if (set == "cine") {
+        // lock -> missile camera -> hit cam, then a crash with its replay
+        startArena(false);
+        battle_.clearCombatants();
+        battle_.setAiEnabled(false);
+        tod_ = TimeOfDay::Morning; lighting_ = Lighting::preset(tod_);
+        Jet& p = battle_.player();
+        p.fm->resetAirborne({-6000, 1500, 3200}, 0.0, 230, 0.8);
+        Jet& e = battle_.debugAddJet(Team::Red, AircraftId::Su35, {-3300, 1560, 3350}, 0.15, 200);
+        camMode_ = CameraMode::Chase; chaseInit_ = false;
+        auto run = [&](double secs) {
+            scriptedStep(secs, [&](double) { setInput(0, 0, 0, 0); });
+            updatePip(secs);   // the scripted stepper does not run updatePlaying
+        };
+        p.lockTarget = e.id; p.lockProgress = 0.6;
+        run(0.3);
+        snap("cine_01_target_cam", 3);
+        { Image im = LoadImageFromTexture(renderer_.pipTexture()); ImageFlipVertical(&im); ExportImage(im, (opt_.captureDir + "/pip_target.png").c_str()); UnloadImage(im);
+          std::printf("pip cam pos %.0f %.0f %.0f tgt %.0f %.0f %.0f fov %.2f dist %.0f\n", pip_.cam.position.x, pip_.cam.position.y, pip_.cam.position.z, pip_.cam.target.x, pip_.cam.target.y, pip_.cam.target.z, pip_.cam.fovy, pip_.lastDist); }
+        p.lockProgress = 1.0;
+        battle_.fireMissile(p);
+        processEvents();
+        run(0.8);
+        snap("cine_02_missile_cam", 3);
+        for (int i = 0; i < 40 && pip_.mode == PipMode::Missile; ++i) run(0.1);
+        run(0.25);
+        snap("cine_03_hit_cam", 2);
+        run(1.2);
+        snap("cine_04_hit_cam_late", 2);
+        // ground attack with the air-to-surface missile
+        p.fm->resetAirborne({terrain_.townCenter().x - 3200, 700, terrain_.townCenter().z}, 0.0, 220, 0.8);
+        p.fm->mutableState().q = Quat::fromEuler(0.0, -8 * kDeg, 0);
+        p.weaponAG = true;
+        battle_.start(BattleConfig{});
+        battle_.clearCombatants();
+        BattleConfig gc; gc.enemyJets = 0; gc.allyJets = 0;
+        battle_.start(gc);
+        for (auto& jj : battle_.jets()) if (!jj->isPlayer) jj->alive = false;
+        battle_.setAiEnabled(false);
+        battle_.player().weaponAG = true;
+        run(1.0);
+        int best = -1; double bd = 1e9;
+        for (int gi = 0; gi < static_cast<int>(battle_.ground().size()); ++gi) {
+            double d = length(battle_.ground()[gi].pos - battle_.player().fm->state().pos);
+            if (d < bd) { bd = d; best = gi; }
+        }
+        battle_.player().lockTarget = -1000 - best; battle_.player().lockProgress = 1.0;
+        run(0.1);
+        snap("cine_05_target_pod", 2);
+        battle_.fireMissile(battle_.player());
+        processEvents();
+        run(1.0);
+        snap("cine_06_ats_cam", 2);
+        for (int i = 0; i < 60 && pip_.mode == PipMode::Missile; ++i) run(0.1);
+        run(0.3);
+        snap("cine_07_ats_hit", 2);
+        // crash: dive into a ridge and watch the replay
+        startArena(false);
+        battle_.clearCombatants();
+        battle_.setAiEnabled(false);
+        Jet& q = battle_.player();
+        q.fm->resetAirborne({-4200, 950, -2600}, -0.9, 240, 0.9);
+        double t0 = time_;
+        for (int i = 0; i < 400 && q.alive; ++i) {
+            scriptedStep(1.0 / 30.0, [&](double) { setInput(-0.35, 0.25, 0, 0); });
+            gpws_ = false;
+            const FlightState& st = q.fm->state();
+            for (double tt = 1.0; tt <= 5.0; tt += 1.0) { Vec3 w = st.pos + st.vel * tt; if (w.y < terrain_.surfaceHeight(w.x, w.z) + 20.0) gpws_ = true; }
+            recordFrame();
+        }
+        std::printf("crash after %.1f s, alive=%d\n", time_ - t0, q.alive);
+        deathTime_ = time_; crashPos_ = q.fm->state().pos; playerDead_ = true;
+        lossReport_ = analyzeLoss(recorder_, deathTime_, q.fm->state().crashReason, LossCause::Crash, "");
+        screen_ = Screen::Playing;
+        beginReplay();
+        for (double t = 0; t < 2.0; t += 1.0 / 30.0) updateReplay(1.0 / 30.0);
+        snap("cine_08_replay_side", 1);
+        while (replayActive_ && replayT_ < deathTime_ - 0.3) updateReplay(1.0 / 30.0);
+        snap("cine_09_replay_slowmo", 1);
+        while (replayActive_ && replayT_ < deathTime_ + 0.35) updateReplay(1.0 / 30.0);
+        snap("cine_10_replay_impact", 1);
+        return 0;
+    }
+    if (set == "terrain") {
+        hideHud_ = std::getenv("SKYFALL_HUD") == nullptr;
+        startArena(false);
+        battle_.clearCombatants();
+        battle_.setAiEnabled(false);
+        struct Shot { Vec3 pos; double hdg, pitch; const char* name; TimeOfDay tod; };
+        const Shot shots[] = {
+            {{-3500, 900, -2500}, -0.9, -6, "canyon_low_morning", TimeOfDay::Morning},
+            {{-6000, 2600, -7000}, 0.6, -14, "mountains_high", TimeOfDay::Morning},
+            {{-2000, 520, 3200}, 0.05, -8, "valley_town", TimeOfDay::Morning},
+            {{1500, 1400, 9500}, -0.6, -10, "south_range_noon", TimeOfDay::Noon},
+            {{-4000, 1100, -1500}, 0.4, -5, "golden_ridges", TimeOfDay::GoldenHour},
+            {{4500, 700, -4500}, 0.3, -4, "coast_cliffs", TimeOfDay::Morning},
+        };
+        for (const Shot& sh : shots) {
+            tod_ = sh.tod; lighting_ = Lighting::preset(tod_);
+            Jet& p = battle_.player();
+            p.fm->resetAirborne(sh.pos, sh.hdg, 230, 0.8);
+            p.fm->mutableState().q = Quat::fromEuler(sh.hdg, sh.pitch * kDeg, 0);
+            p.fm->mutableState().vel = p.fm->state().q.forward() * 230.0;
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            scriptedStep(0.1, [&](double) { setInput(0, 0, 0, 0); });
+            snap(sh.name, 3);
         }
         return 0;
     }

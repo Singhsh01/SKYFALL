@@ -1,5 +1,11 @@
 // Procedural, deterministic terrain shared by physics (collision) and rendering (meshes).
-// It is fictional: primitive procedural mountains are NOT a real-world map.
+// It is fictional: an arid, eroded mountain range around a desert valley, a coast to the east.
+// NOT a real-world map.
+//
+// The analytic height function (domain-warped noise + ridges) is evaluated on a 1025^2 grid,
+// shaped by a deterministic particle-based hydraulic erosion pass (dendritic gullies, alluvial
+// fans), then upsampled to a 2049 x 2049 grid (15.6 m spacing). Physics and every renderer mesh sample that same grid
+// bilinearly, so what you see is exactly what you collide with.
 #pragma once
 
 #include "Math.hpp"
@@ -32,6 +38,14 @@ public:
     bool isWater(double x, double z) const { return height(x, z) < kSeaLevel; }
     SurfaceKind surface(double x, double z) const;
 
+    // Height grid shared with the renderer (row-major, (N+1) x (N+1) samples).
+    static constexpr int kGridCells = 2048;
+    static constexpr double kCell = 2.0 * kHalfSize / kGridCells;
+    const std::vector<float>& grid() const { return grid_; }
+    float gridAt(int i, int j) const { return grid_[static_cast<size_t>(j) * (kGridCells + 1) + i]; }
+    /// Unmodified procedural height (no grid) — used outside the map and to build the grid.
+    double analyticHeight(double x, double z) const;
+
     const RunwayInfo& runway() const { return runway_; }
     /// Centre of the fictional battlefield town (ground targets live here).
     Vec3 townCenter() const { return town_; }
@@ -39,6 +53,8 @@ public:
 
 private:
     double rawHeight(double x, double z) const;
+    double applyModifiers(double x, double z, double h) const;
+    std::vector<float> grid_;
     RunwayInfo runway_;
     Vec3 town_;
 };
@@ -47,5 +63,9 @@ private:
 double valueNoise2(double x, double z, unsigned seed);
 double fbm2(double x, double z, int octaves, unsigned seed);
 double ridged2(double x, double z, int octaves, unsigned seed);
+/// Value noise with analytic derivatives: returns value, writes d/dx and d/dz.
+double valueNoiseD(double x, double z, unsigned seed, double& dx, double& dz);
+/// Derivative-damped fbm: flattens where slopes accumulate, giving eroded-looking ridges.
+double erodedFbm(double x, double z, int octaves, unsigned seed);
 
 }  // namespace sky

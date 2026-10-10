@@ -27,7 +27,18 @@ struct Prog {
     void setM(const char* n, Matrix m);
 };
 
-struct CloudPuff { Vector3 pos; float size; float shade; float rot; };
+struct CloudPuff { Vector3 pos; float size; float shade; float rot; int tex = 0; };
+
+/// An aircraft drawn from recorded data (replays) instead of the live battle.
+struct ExtraJet {
+    AirframeStyle style = AirframeStyle::StealthTwinTail;
+    Vec3 pos;
+    Quat q;
+    Team team = Team::Blue;
+    AircraftId id = AircraftId::F22;
+    float gear = 0, throttle = 0.6f, ab = 0;
+};
+struct ExtraMissile { Vec3 pos, dir; };
 
 struct FrameParams {
     Camera3D cam{};
@@ -42,6 +53,10 @@ struct FrameParams {
     GraphicsQuality quality = GraphicsQuality::High;
     float exposureBoost = 1.0f;
     bool shadows = true;
+    bool isPip = false;   // secondary small view (missile / target camera)
+    const Battle* groundFrom = nullptr;                  // ground units source if `battle` is a stand-in
+    const std::vector<ExtraJet>* extraJets = nullptr;    // replay aircraft
+    const std::vector<ExtraMissile>* extraMissiles = nullptr;
     Vector3 shadowFocus{0, 0, 0};
 };
 
@@ -59,6 +74,9 @@ public:
     void clearDepth();
     /// Bloom + tonemap into the currently bound framebuffer (call between BeginDrawing/EndDrawing).
     void composite(const FrameParams& f);
+    /// Render a second, small view (missile / target / hit camera) into its own targets.
+    void renderPip(const FrameParams& f, int w, int h);
+    Texture2D pipTexture() const { return pipOut_.texture; }
     /// Lens flare / sun glare sprites (after composite, 2D).
     void drawSunFlare(const FrameParams& f, int w, int h);
 
@@ -108,6 +126,8 @@ private:
 
     RenderTexture2D scene_{}, bloomA_{}, bloomB_{}, bloomC_{}, bloomD_{};
     RenderTexture2D shadowRT_{};
+    RenderTexture2D pipScene_{}, pipOut_{};
+    int pipW_ = 0, pipH_ = 0;
     Texture2D shadowDepth_{};
     Matrix lightVP_{};
     bool shadowsActive_ = false;

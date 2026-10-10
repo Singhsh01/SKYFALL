@@ -42,6 +42,14 @@ The translational motion is fully force-based, so turns, energy bleed, climbs, s
 take-off distance emerge from the forces above (unit-tested: lift-off ≈ 0.8 km, ~20°/s sustained
 turn at 9 g, level flight held with neutral stick).
 
+## Arcade handling (default)
+
+Battlefield-style flight on top of the same state: body rates follow the stick quickly
+(per-aircraft rates), the velocity vector converges on the nose direction (`k = 4.5 /s`, fading
+below ~60 m/s), speed integrates thrust − drag − gravity along the path minus an energy bleed
+proportional to turn rate, and full afterburner always gives T/W >= 1.25. It is labelled as an
+arcade model in the UI; Assisted and Simulation keep the force-based model described above.
+
 ## Integrator
 
 Semi-implicit (symplectic) Euler: `v += a·dt; x += v·dt;` attitude integrated with the exact

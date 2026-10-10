@@ -202,7 +202,7 @@ void Battle::fireMissile(Jet& j) {
     missiles_.push_back(m);
     if (ag) j.agms--; else j.missiles--;
     j.missileCooldown = j.isPlayer ? 0.7 : (j.skill == AiSkill::Ace ? 5.0 : 8.0);
-    events_.push_back({EventType::MissileLaunch, m.pos, 1.0, j.id, m.targetJet, ""});
+    events_.push_back({EventType::MissileLaunch, m.pos, 1.0, j.id, ag ? -1000 - m.targetGround : m.targetJet, ag ? "ATS" : "ATA", m.id});
     if (j.isPlayer) {
         // missiles slowly re-arm in the arena (Battlefield-style reload) — handled in update
     }

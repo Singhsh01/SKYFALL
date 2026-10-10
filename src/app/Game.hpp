@@ -8,10 +8,12 @@
 #include "../render/Lighting.hpp"
 #include "../render/Renderer.hpp"
 #include "../telemetry/FrameStats.hpp"
+#include "../telemetry/Replay.hpp"
 #include "../ui/Cockpit.hpp"
 #include "../ui/Hud.hpp"
 #include "../ui/Menus.hpp"
 #include "CameraMode.hpp"
+#include "PipState.hpp"
 #include "Input.hpp"
 #include "Settings.hpp"
 
@@ -58,6 +60,13 @@ private:
     void updateCamera(double dt);
     void updateAudio();
     void renderFrame();
+    // cinematics (Cinematics.cpp)
+    void updatePip(double dt);
+    void recordFrame();
+    void beginReplay();
+    void updateReplay(double dt);
+    void endReplay();
+    FrameParams makeReplayFrameParams();
     void drawMenus();
     void drawTitle();
     void drawCampaign();
@@ -122,6 +131,20 @@ private:
     double titleTime_ = 0;
     bool capturing_ = false;
     bool hideHud_ = false;
+    // picture-in-picture + replay
+    PipState pip_;
+    FlightRecorder recorder_;
+    Battle replayStage_{terrain_};
+    bool replayActive_ = false, replayExploded_ = false;
+    double replayT_ = 0, replayFrom_ = 0, replayTo_ = 0, deathTime_ = 0, deathWait_ = -1;
+    Vec3 crashPos_, obsPos_, obsPos2_;
+    LossReport lossReport_;
+    LossCause lossCause_ = LossCause::Crash;
+    std::string killerName_;
+    std::vector<ExtraJet> replayJets_;
+    std::vector<ExtraMissile> replayMissiles_;
+    double lastKillTime_ = -10, lastHitTime_ = -10;
+    Vec3 lastKillPos_, lastHitPos_;
     int missionNo_ = 1;
     bool pauseJustOpened_ = false;
     int rollDir_ = 0;          // active aileron roll (double-tap)

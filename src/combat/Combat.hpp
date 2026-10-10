@@ -105,6 +105,7 @@ struct CombatEvent {
     double size = 1.0;
     int a = -1, b = -1;       // actor ids (killer, victim) when meaningful
     std::string text;
+    int c = -1;               // missile id for launch events
 };
 
 struct KillFeedEntry {

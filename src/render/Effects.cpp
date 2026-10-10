@@ -387,6 +387,8 @@ void Effects::draw(const Camera3D& cam, const Battle& b, const Lighting& L, Shad
     Vector3 right = {view.m0, view.m4, view.m8};
     Vector3 up = {view.m1, view.m5, view.m9};
     Vector3 camPos = cam.position;
+    // distance-scaled sprites keep a constant on-screen size: account for zoomed cameras
+    const float fovScale = std::clamp(cam.fovy / 60.0f, 0.02f, 1.5f);
 
     rlDisableDepthMask();
     rlDisableBackfaceCulling();
@@ -476,7 +478,7 @@ void Effects::draw(const Camera3D& cam, const Battle& b, const Lighting& L, Shad
         Vector3 lw = toRl(s.pos + s.q.rotate(Vec3{-2.0, 0, -span}));
         Vector3 rw = toRl(s.pos + s.q.rotate(Vec3{-2.0, 0, span}));
         float dist = Vector3Distance(camPos, toRl(s.pos));
-        float ls = std::clamp(dist * 0.004f, 0.5f, 12.0f);
+        float ls = std::clamp(dist * 0.004f * fovScale, 0.15f, 12.0f);
         billboard(lw, ls, 0, right, up, hdrColor(V(6.0f, 0.4f, 0.3f), kAddScale, 1));
         billboard(rw, ls, 0, right, up, hdrColor(V(0.3f, 6.0f, 0.8f), kAddScale, 1));
         if (fmod(time_ + j.id * 0.37, 1.2) < 0.07) {
@@ -500,7 +502,7 @@ void Effects::draw(const Camera3D& cam, const Battle& b, const Lighting& L, Shad
         for (const Vector3& p : runwayLights) {
             float dist = Vector3Distance(camPos, p);
             if (dist > 9000) continue;
-            float s = std::clamp(dist * 0.0035f, 0.6f, 9.0f);
+            float s = std::clamp(dist * 0.0035f * fovScale, 0.2f, 9.0f);
             billboard(p, s, 0, right, up, hdrColor(V(5.0f, 4.2f, 2.6f), kAddScale, 1));
         }
     }
@@ -519,7 +521,7 @@ void Effects::draw(const Camera3D& cam, const Battle& b, const Lighting& L, Shad
         float len = bu.owner >= 0 ? 22.0f : 16.0f;
         Vector3 tail = Vector3Subtract(p, Vector3Scale(dir, len));
         float dist = Vector3Distance(camPos, p);
-        float w = std::clamp(dist * 0.0018f, 0.25f, 3.0f);
+        float w = std::clamp(dist * 0.0018f * fovScale, 0.1f, 3.0f);
         Vector3 side = Vector3Scale(Vector3Normalize(Vector3CrossProduct(dir, Vector3Subtract(camPos, p))), w);
         Color c = bu.owner >= 0 ? hdrColor(V(14.0f, 11.0f, 5.0f), kAddScale, 1) : hdrColor(V(14.0f, 4.0f, 1.5f), kAddScale, 1);
         rlColor4ub(c.r, c.g, c.b, c.a);

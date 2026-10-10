@@ -7,6 +7,7 @@
 #include "sim/Atmosphere.hpp"
 #include "sim/FlightModel.hpp"
 #include "telemetry/FrameStats.hpp"
+#include "telemetry/Replay.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -262,6 +263,33 @@ TEST(arcade_pull_up_recovers_from_low_altitude_dive) {
     std::printf("    lowest point %.0f m, after 10 s %.0f m at %.0f m/s\n", minAlt, fm.state().pos.y, fm.state().airspeed);
 }
 
+TEST(every_aircraft_is_flyable_in_arcade) {
+    for (const auto& prof : allProfiles()) {
+        CHECK(prof.playableNow);
+        FlightModel fm(prof, terrain());
+        fm.setHandling(HandlingMode::Arcade);
+        fm.resetAirborne({12000, 450, 0}, 0.0, 170.0, 1.0);
+        fm.mutableState().q = Quat::fromEuler(0, -20 * kDeg, 0);
+        fm.mutableState().vel = fm.state().q.forward() * 170.0;
+        double prevH = 0, dh = 0;
+        for (int i = 0; i < 120 * 12; ++i) {
+            ControlInputs in;
+            Euler e = toEuler(fm.state().q);
+            if (i < 120 * 6) in.pitch = e.pitch < 25 * kDeg ? 1.0 : 0.0;             // recover and climb
+            else { in.roll = clampd((75 * kDeg - e.bank) * 3.0, -1, 1); in.pitch = 1.0; }  // then turn hard
+            in.throttleRate = 1.0;
+            fm.step(in);
+            double h = toEuler(fm.state().q).heading;
+            if (i == 120 * 6) prevH = h;
+            if (i > 120 * 6) { dh += wrapPi(h - prevH); prevH = h; }
+        }
+        CHECK(!fm.state().crashed);
+        CHECK(fm.state().pos.y > 700.0);
+        CHECK(dh > 180 * kDeg);
+        std::printf("    %-22s alt %.0f m, turned %.0f deg in 6 s, %.0f m/s\n", prof.name, fm.state().pos.y, dh / kDeg, fm.state().airspeed);
+    }
+}
+
 TEST(diving_into_terrain_crashes) {
     FlightModel fm(profile(AircraftId::F22), terrain());
     fm.resetAirborne({0, 600, 0}, 0.0, 200.0, 0.8);
@@ -486,6 +514,53 @@ TEST(frame_stats_percentiles) {
     CHECK_NEAR(p.mean, 50.5, 1e-9);
 }
 
+TEST(flight_recorder_keeps_a_rolling_window_and_interpolates) {
+    FlightRecorder rec;
+    for (int i = 0; i < 30 * 15; ++i) {
+        RecFrame f;
+        f.t = i / 30.0;
+        f.player.pos = {f.t * 100.0, 500.0, 0.0};
+        f.player.q = Quat::fromEuler(0, 0, f.t * 0.1);
+        CHECK(rec.offer(f));
+        RecFrame dup = f;  // same timestamp is rate-limited away
+        CHECK(!rec.offer(dup));
+    }
+    CHECK(rec.endTime() - rec.startTime() <= FlightRecorder::kWindow + 1e-9);
+    CHECK(rec.endTime() > 14.9);
+    RecJet mid = rec.playerAt(10.0 + 1.0 / 60.0);
+    CHECK_NEAR(mid.pos.x, 1001.666, 0.01);
+}
+
+TEST(crash_analysis_explains_the_mistake) {
+    FlightRecorder rec;
+    for (int i = 0; i < 30 * 6; ++i) {
+        RecFrame f;
+        f.t = i / 30.0;
+        f.speed = 260; f.vs = -110; f.pitchDeg = -25; f.bankDeg = 120; f.agl = 900 - i * 5.0f;
+        f.gpws = f.t > 3.0;
+        rec.offer(f);
+    }
+    LossReport r = analyzeLoss(rec, rec.endTime(), CrashReason::Terrain, LossCause::Crash, "");
+    CHECK(!r.title.empty());
+    bool mentionsRoll = false, mentionsGpws = false;
+    for (auto& a : r.advice) {
+        mentionsRoll |= a.find("rolled") != std::string::npos;
+        mentionsGpws |= a.find("PULL UP") != std::string::npos;
+    }
+    CHECK(mentionsRoll);
+    CHECK(mentionsGpws);
+    // missile kill without flares
+    FlightRecorder rec2;
+    for (int i = 0; i < 90; ++i) { RecFrame f; f.t = i / 30.0; f.speed = 200; f.missileWarning = i > 30; rec2.offer(f); }
+    LossReport m = analyzeLoss(rec2, rec2.endTime(), CrashReason::Destroyed, LossCause::ShotDownMissile, "COBRA 2");
+    CHECK(m.title.find("MISSILE") != std::string::npos);
+    CHECK(!m.advice.empty() && m.advice[0].find("flares") != std::string::npos);
+    // pull-out height grows with speed and dive angle
+    CHECK(pullOutAltitude(250, -40, 7) > pullOutAltitude(150, -40, 7));
+    CHECK(pullOutAltitude(250, -60, 7) > pullOutAltitude(250, -20, 7));
+    CHECK_NEAR(pullOutAltitude(250, 10, 7), 0.0, 1e-12);
+}
+
 TEST(all_eight_aircraft_profiles_are_defined) {
     int playable = 0;
     for (const auto& p : allProfiles()) {
@@ -494,7 +569,7 @@ TEST(all_eight_aircraft_profiles_are_defined) {
         playable += p.playableNow;
     }
     CHECK(allProfiles().size() == 8);
-    CHECK(playable >= 1);
+    CHECK(playable == 8);
 }
 
 int main(int argc, char** argv) {

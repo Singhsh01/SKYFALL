@@ -23,9 +23,12 @@ add_library(skyfall_core STATIC
   src/combat/Combat.cpp
   src/mission/Mission.cpp
   src/telemetry/FrameStats.cpp
+  src/telemetry/Replay.cpp
   src/app/Settings.cpp
 )
 target_include_directories(skyfall_core PUBLIC src)
+find_package(Threads REQUIRED)
+target_link_libraries(skyfall_core PUBLIC Threads::Threads)
 if(MSVC)
   target_compile_options(skyfall_core PRIVATE /W4)
 else()
@@ -60,6 +63,7 @@ if(SKYFALL_BUILD_GAME)
   add_executable(skyfall
     src/main.cpp
     src/app/Game.cpp
+    src/app/Cinematics.cpp
     src/app/Input.cpp
     src/render/Renderer.cpp
     src/render/JetMesh.cpp

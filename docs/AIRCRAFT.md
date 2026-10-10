@@ -7,14 +7,14 @@ and a loadout.
 
 | Slot | In this build | Mesh |
 |---|---|---|
-| F-22 Raptor | **playable**, tuned | original procedural "stealth twin-tail" silhouette |
-| F-35 Lightning II | data + mesh, not tuned | original "stealth single-engine" |
-| Dassault Rafale | data + mesh | original "delta-canard" |
-| Su-57 Felon | data, AI opponent | stealth twin-tail family (camouflaged) |
-| Su-35 | data, AI opponent | original "Flanker-family" with nacelles |
-| MiG-29 | data, AI opponent | original "Fulcrum" |
-| Su-30 | data, AI opponent | Flanker-family |
-| F-16 Fighting Falcon | data + mesh | original "single-tail viper" |
+| F-22 Raptor | playable | original procedural "stealth twin-tail" silhouette |
+| F-35 Lightning II | playable | original "stealth single-engine" |
+| Dassault Rafale | playable | original "delta-canard" |
+| Su-57 Felon | playable, AI opponent | stealth twin-tail family (camouflaged) |
+| Su-35 | playable, AI opponent | original "Flanker-family" with nacelles |
+| MiG-29 | playable, AI opponent | original "Fulcrum" |
+| Su-30 | playable, AI opponent | Flanker-family |
+| F-16 Fighting Falcon | playable | original "single-tail viper" |
 
 **Sources and honesty**
 
@@ -26,5 +26,8 @@ and a loadout.
   derived from — and do not claim to match — non-public performance data.
 * Nothing in SKYFALL is flight-certified or suitable for training real pilots.
 
-A non-F-22 slot becomes *playable* once it has (1) a properly licensed or original detailed
+All eight are playable with the arcade handling model (roll and pitch rates from each profile;
+a full-afterburner thrust/weight floor of 1.25 so every jet can climb away). In Assisted /
+Simulation handling the published thrust figures are used unchanged. A slot counts as *fully
+validated* once it has (1) a properly licensed or original detailed
 model, (2) a tuned profile with documented sources, and (3) passing takeoff/turn/stall tests.

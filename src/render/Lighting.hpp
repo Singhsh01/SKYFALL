@@ -29,36 +29,36 @@ struct Lighting {
         switch (t) {
             case TimeOfDay::Morning:
             default:
-                l.sunDir = Vector3Normalize({0.62f, 0.42f, 0.5f});
-                l.sunColor = {3.1f, 2.85f, 2.5f};
-                l.zenith = {0.10f, 0.27f, 0.62f};
-                l.horizon = {0.66f, 0.77f, 0.90f};
-                l.groundHaze = {0.47f, 0.50f, 0.52f};
-                l.fogDensity = 7.5e-5f;
-                l.cloudCover = 0.42f;
-                l.exposure = 1.0f;
+                l.sunDir = Vector3Normalize({0.62f, 0.50f, 0.42f});
+                l.sunColor = {3.25f, 3.0f, 2.65f};
+                l.zenith = {0.09f, 0.26f, 0.52f};
+                l.horizon = {0.70f, 0.79f, 0.86f};
+                l.groundHaze = {0.62f, 0.58f, 0.52f};
+                l.fogDensity = 9.5e-5f;
+                l.cloudCover = 0.36f;
+                l.exposure = 0.95f;
                 l.name = "MORNING";
                 break;
             case TimeOfDay::GoldenHour:
-                l.sunDir = Vector3Normalize({0.9f, 0.13f, 0.32f});
-                l.sunColor = {3.4f, 1.95f, 0.95f};
+                l.sunDir = Vector3Normalize({0.9f, 0.15f, 0.32f});
+                l.sunColor = {3.4f, 2.0f, 1.0f};
                 l.zenith = {0.13f, 0.22f, 0.45f};
-                l.horizon = {1.0f, 0.66f, 0.42f};
-                l.groundHaze = {0.50f, 0.40f, 0.33f};
-                l.fogDensity = 6.5e-5f;
+                l.horizon = {1.0f, 0.68f, 0.45f};
+                l.groundHaze = {0.58f, 0.46f, 0.37f};
+                l.fogDensity = 8.0e-5f;
                 l.cloudCover = 0.48f;
                 l.exposure = 1.0f;
                 l.name = "GOLDEN HOUR";
                 break;
             case TimeOfDay::Noon:
-                l.sunDir = Vector3Normalize({0.3f, 0.9f, 0.25f});
+                l.sunDir = Vector3Normalize({0.3f, 0.88f, 0.25f});
                 l.sunColor = {3.3f, 3.2f, 3.0f};
-                l.zenith = {0.08f, 0.26f, 0.66f};
-                l.horizon = {0.62f, 0.76f, 0.92f};
-                l.groundHaze = {0.5f, 0.52f, 0.55f};
-                l.fogDensity = 6.0e-5f;
-                l.cloudCover = 0.36f;
-                l.exposure = 0.92f;
+                l.zenith = {0.08f, 0.25f, 0.55f};
+                l.horizon = {0.68f, 0.78f, 0.87f};
+                l.groundHaze = {0.64f, 0.60f, 0.55f};
+                l.fogDensity = 8.0e-5f;
+                l.cloudCover = 0.38f;
+                l.exposure = 0.88f;
                 l.name = "NOON";
                 break;
         }

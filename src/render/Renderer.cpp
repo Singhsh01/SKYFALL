@@ -60,12 +60,23 @@ constexpr int kShadowSize = 2048;
 
 Vector3 paintFor(const Jet& j, Vector3& b, float& camo) {
     camo = 0;
-    if (j.team == Team::Blue) { b = {0.19f, 0.2f, 0.215f}; return {0.26f, 0.27f, 0.285f}; }
-    switch (j.fm->profile().style) {
-        case AirframeStyle::FlankerFamily: camo = 1; b = {0.17f, 0.22f, 0.30f}; return {0.40f, 0.46f, 0.53f};
-        case AirframeStyle::StealthTwinTail: camo = 1; b = {0.18f, 0.20f, 0.25f}; return {0.44f, 0.48f, 0.54f};
-        default: b = {0.26f, 0.28f, 0.31f}; return {0.40f, 0.42f, 0.45f};
+    AirframeStyle st = j.fm->profile().style;
+    if (j.team == Team::Blue) {
+        switch (st) {   // linear-space greys close to the real-world schemes of each family
+            case AirframeStyle::StealthTwinTail:
+                if (j.fm->profile().id == AircraftId::Su57) { camo = 1; b = {0.07f, 0.09f, 0.12f}; return {0.20f, 0.23f, 0.27f}; }
+                b = {0.112f, 0.122f, 0.134f}; return {0.158f, 0.168f, 0.180f};
+            case AirframeStyle::StealthSingle: b = {0.085f, 0.09f, 0.098f}; return {0.118f, 0.124f, 0.132f};
+            case AirframeStyle::DeltaCanard: b = {0.11f, 0.12f, 0.135f}; return {0.15f, 0.16f, 0.175f};
+            case AirframeStyle::ViperSingle: b = {0.15f, 0.16f, 0.17f}; return {0.21f, 0.22f, 0.235f};
+            case AirframeStyle::FlankerFamily: camo = 1; b = {0.10f, 0.14f, 0.20f}; return {0.26f, 0.31f, 0.37f};
+            case AirframeStyle::Fulcrum: b = {0.16f, 0.18f, 0.20f}; return {0.24f, 0.26f, 0.29f};
+        }
     }
+    // hostile "aggressor" desert splinter scheme: reads clearly against sky and sand
+    camo = 1;
+    b = {0.16f, 0.12f, 0.08f};
+    return {0.36f, 0.30f, 0.21f};
 }
 }  // namespace
 
@@ -189,6 +200,9 @@ bool Renderer::init(const Terrain& t, int width, int height) {
     cloudMat_ = mat(cloud_, true, false);
     runwayMat_ = mat(runway_, true, false);
     bindShadow(terrain_p_, terrainMat_);
+    terrain_p_.sh.locs[SHADER_LOC_MAP_EMISSION] = terrain_p_.loc("uTerrainData");
+    terrainMat_.maps[MATERIAL_MAP_EMISSION].texture = world_.terrainData;
+    terrainMat_.shader = terrain_p_.sh;
     bindShadow(lit_, litMat_);
     bindShadow(jet_, jetMat_);
     bindShadow(runway_, runwayMat_);
@@ -217,6 +231,8 @@ void Renderer::shutdown() {
     for (Prog* p : {&sky_, &terrain_p_, &water_, &lit_, &jet_, &flameP_, &cloud_, &runway_, &particle_, &bright_, &blur_, &composite_})
         UnloadShader(p->sh);
     freeTarget(scene_); freeTarget(bloomA_); freeTarget(bloomB_); freeTarget(bloomC_); freeTarget(bloomD_);
+    freeTarget(pipScene_);
+    if (pipOut_.id) UnloadRenderTexture(pipOut_);
 }
 
 void Renderer::buildGroundModels() {
@@ -269,20 +285,22 @@ void Renderer::buildGroundModels() {
 void Renderer::buildClouds(const Terrain& t) {
     Rng rng(31337);
     puffs_.clear();
-    for (int c = 0; c < 110; ++c) {
-        Vector3 center = V3(rng.range(-26000, 26000), rng.range(1500, 2150), rng.range(-26000, 26000));
+    for (int c = 0; c < 170; ++c) {
+        Vector3 center = V3(rng.range(-28000, 28000), rng.range(1900, 2500), rng.range(-28000, 28000));
         // keep the runway approach mostly clear
         if (std::fabs(center.x - t.runway().center.x) < 3000 && std::fabs(center.z - t.runway().center.z) < 2000) continue;
-        int n = 7 + static_cast<int>(rng.uniform() * 9);
-        float scale = static_cast<float>(rng.range(0.7, 1.5));
+        // a cumulus is a cluster of large sprites on a common flat base
+        int n = 4 + static_cast<int>(rng.uniform() * 6);
+        float scale = static_cast<float>(rng.range(0.8, 1.9));
         for (int i = 0; i < n; ++i) {
             CloudPuff p;
-            float ox = static_cast<float>(rng.range(-260, 260)) * scale, oz = static_cast<float>(rng.range(-200, 200)) * scale;
-            float oy = static_cast<float>(rng.range(-40, 140)) * scale * (1.0f - (ox * ox + oz * oz) / (300.0f * 300.0f * scale * scale) * 0.5f);
+            float ox = static_cast<float>(rng.range(-330, 330)) * scale, oz = static_cast<float>(rng.range(-260, 260)) * scale;
+            p.size = static_cast<float>(rng.range(380, 620)) * scale;
+            float oy = p.size * 0.22f + static_cast<float>(rng.range(0, 90)) * scale * (1.0f - std::fabs(ox) / (360.0f * scale));
             p.pos = {center.x + ox, center.y + oy, center.z + oz};
-            p.size = static_cast<float>(rng.range(140, 280)) * scale;
-            p.shade = std::clamp((oy + 40.0f * scale) / (180.0f * scale), 0.0f, 1.0f);
-            p.rot = static_cast<float>(rng.range(0, 6.28));
+            p.shade = 1.0f;
+            p.rot = 0.0f;
+            p.tex = static_cast<int>(rng.next() % 4);
             puffs_.push_back(p);
         }
     }
@@ -327,15 +345,20 @@ void Renderer::drawTerrain(const FrameParams& f) {
     Vector3 cp = f.cam.position;
     Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
     rlDisableBackfaceCulling();
-    float hiDist = f.quality == GraphicsQuality::Low ? 2500.0f : (f.quality == GraphicsQuality::Medium ? 4000.0f : 6000.0f);
+    float hiDist = f.quality == GraphicsQuality::Low ? 2500.0f : (f.quality == GraphicsQuality::Medium ? 4500.0f : 7000.0f);
+    float l0Dist = f.quality == GraphicsQuality::Low ? 0.0f : (f.quality == GraphicsQuality::Medium ? 900.0f : 2200.0f);
+    int buildBudget = f.isPip ? 0 : 2;   // at most two new 15.6 m chunks per frame (no hitches)
     for (auto& c : world_.chunks) {
         Vector3 d = Vector3Subtract(c.center, cp);
         float dist = Vector3Length(d);
         if (dist > c.radius && Vector3DotProduct(d, fwd) < -c.radius) continue;
-        bool hi = dist - c.radius < hiDist;
-        DrawMesh(hi ? c.hi : c.lo, terrainMat_, MatrixIdentity());
+        float edge = dist - c.radius;
+        const Mesh* m = edge < hiDist ? &c.hi : &c.lo;
+        if (edge < l0Dist && world_.ensureL0(c, f.time, buildBudget)) m = &c.l0;
+        DrawMesh(*m, terrainMat_, MatrixIdentity());
         ++drawCalls_;
     }
+    if (!f.isPip) world_.evictL0(cp, f.time);
     DrawMesh(world_.farRing, terrainMat_, MatrixIdentity());
     ++drawCalls_;
     // sea
@@ -385,17 +408,18 @@ void Renderer::drawStatics(const FrameParams& f) {
     for (const Vector3& p : world_.parkedJets) {
         Matrix M = MatrixMultiply(QuaternionToMatrix(toRlQ(Quat::fromEuler(p.y, 0, 0))),
                                   MatrixTranslate(p.x, static_cast<float>(rw.center.y + 2.35), p.z));
-        drawJetModel(AirframeStyle::StealthTwinTail, M, {0.33f, 0.345f, 0.36f}, {0.25f, 0.26f, 0.28f}, 0, 1, 0, 0, 0, 0, 0, f);
+        drawJetModel(AirframeStyle::StealthTwinTail, M, {0.158f, 0.168f, 0.180f}, {0.112f, 0.122f, 0.134f}, 0, 1, 0, 0, 0, 0, 0, f);
     }
 }
 
 void Renderer::drawGroundTargets(const FrameParams& f) {
-    if (!f.battle) return;
+    const Battle* gb = f.groundFrom ? f.groundFrom : f.battle;
+    if (!gb) return;
     setAtmosphere(lit_, f);
     lit_.setF("uEmissive", 0.0f);
     lit_.setF("uSpecular", 0.2f);
     lit_.setF("uFogOn", 1.0f);
-    for (const GroundTarget& g : f.battle->ground()) {
+    for (const GroundTarget& g : gb->ground()) {
         const Mesh* m = &tank_;
         switch (g.kind) {
             case GroundKind::Tank: m = &tank_; break;
@@ -421,7 +445,7 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
     jet_.setV3("uPaintA", paintA);
     jet_.setV3("uPaintB", paintB);
     jet_.setF("uCamo", camo);
-    jet_.setF("uRoughness", 0.52f);
+    jet_.setF("uRoughness", 0.42f);
     jet_.setF("uHitFlash", hitFlash);
     jet_.setF("uDamage", damage);
     rlDisableBackfaceCulling();
@@ -546,7 +570,6 @@ void Renderer::drawCloudPuffs(const FrameParams& f) {
     Vector3 cp = f.cam.position;
     Matrix view = GetCameraMatrix(f.cam);
     Vector3 right = {view.m0, view.m4, view.m8};
-    Vector3 up = {view.m1, view.m5, view.m9};
     Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
     std::vector<std::pair<float, const CloudPuff*>> vis;
     vis.reserve(puffs_.size());
@@ -563,25 +586,31 @@ void Renderer::drawCloudPuffs(const FrameParams& f) {
     particle_.setF("uIntensity", scale);
     rlDisableDepthMask();
     BeginBlendMode(BLEND_ALPHA);
-    rlSetTexture(world_.puff.id);
-    rlBegin(RL_QUADS);
     const Lighting& L = f.L;
-    Vector3 lit = Vector3Add(Vector3Scale(L.sunColor, 0.92f), Vector3Scale(L.ambient(1), 0.9f));
-    Vector3 shade = Vector3Add(Vector3Scale(L.ambient(-0.2f), 1.35f), Vector3Scale(L.sunColor, 0.1f));
+    Vector3 lit = Vector3Add(Vector3Scale(L.sunColor, 0.85f), Vector3Scale(L.ambient(1), 0.8f));
+    // upright billboards: horizontal right vector, world up
+    Vector3 hr = Vector3Normalize({right.x, 0.0f, right.z});
+    if (Vector3Length(hr) < 0.1f) hr = right;
+    Vector3 vu = {0, 1, 0};
+    int curTex = -1;
     for (auto& [d2, p] : vis) {
         float dist = sqrtf(d2);
         Vector3 viewDir = Vector3Scale(Vector3Subtract(p->pos, cp), 1.0f / std::max(dist, 1.0f));
         float towardSun = powf(std::max(Vector3DotProduct(viewDir, L.sunDir), 0.0f), 5.0f);
-        Vector3 col = Vector3Lerp(shade, lit, p->shade);
-        col = Vector3Add(col, Vector3Scale(L.sunColor, towardSun * 0.35f));
+        Vector3 col = Vector3Add(lit, Vector3Scale(L.sunColor, towardSun * 0.3f));
         float fog = L.fogAmount(cp, p->pos);
-        col = Vector3Lerp(col, L.fogColor(cp, p->pos), fog);
+        col = Vector3Lerp(col, L.fogColor(cp, p->pos), fog * 0.85f);
         float near = std::clamp((dist - p->size * 0.35f) / (p->size * 0.8f), 0.0f, 1.0f);
-        float a = 0.92f * near;
+        float a = 0.97f * near;
         if (a <= 0.01f) continue;
-        float c = cosf(p->rot) * p->size * 0.5f, s = sinf(p->rot) * p->size * 0.5f;
-        Vector3 r = Vector3Add(Vector3Scale(right, c), Vector3Scale(up, s));
-        Vector3 u = Vector3Add(Vector3Scale(up, c), Vector3Scale(right, -s));
+        if (p->tex != curTex) {
+            if (curTex >= 0) { rlEnd(); rlDrawRenderBatchActive(); }
+            curTex = p->tex;
+            rlSetTexture(world_.cloud[curTex].id);
+            rlBegin(RL_QUADS);
+        }
+        float h = p->size * 0.5f;
+        Vector3 r = Vector3Scale(hr, h), u = Vector3Scale(vu, h * 0.75f);
         Color cc = hdrColor(col, scale, a);
         Vector3 q0 = Vector3Subtract(Vector3Subtract(p->pos, r), u), q1 = Vector3Subtract(Vector3Add(p->pos, r), u);
         Vector3 q2 = Vector3Add(Vector3Add(p->pos, r), u), q3 = Vector3Add(Vector3Subtract(p->pos, r), u);
@@ -591,7 +620,7 @@ void Renderer::drawCloudPuffs(const FrameParams& f) {
         rlTexCoord2f(1, 0); rlVertex3f(q2.x, q2.y, q2.z);
         rlTexCoord2f(0, 0); rlVertex3f(q3.x, q3.y, q3.z);
     }
-    rlEnd();
+    if (curTex >= 0) rlEnd();
     rlSetTexture(0);
     rlDrawRenderBatchActive();
     EndBlendMode();
@@ -600,6 +629,7 @@ void Renderer::drawCloudPuffs(const FrameParams& f) {
 }
 
 void Renderer::renderShadows(const FrameParams& f) {
+    if (f.isPip) return;   // the secondary view reuses this frame's shadow map
     shadowsActive_ = false;
     if (!shadowRT_.id || !f.battle || !f.shadows || f.quality == GraphicsQuality::Low) return;
     Vector3 focus = f.shadowFocus;
@@ -642,6 +672,12 @@ void Renderer::renderShadows(const FrameParams& f) {
 void Renderer::renderWorld(const FrameParams& f) {
     auto t0 = std::chrono::steady_clock::now();
     drawCalls_ = 0;
+    if (Vector3DotProduct(world_.bakedSun, f.L.sunDir) < 0.99999f) {
+        auto tb = std::chrono::steady_clock::now();
+        world_.bakeSunShadows(f.L.sunDir);
+        TraceLog(LOG_INFO, "SKYFALL: terrain sun shadows baked in %.0f ms",
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tb).count());
+    }
     renderShadows(f);
     BeginTextureMode(scene_);
     ClearBackground(BLACK);
@@ -658,6 +694,18 @@ void Renderer::renderWorld(const FrameParams& f) {
             if (Vector3Distance(toRl(jp->fm->state().pos), f.cam.position) > 30000) continue;
             drawJet(*jp, f);
         }
+        if (f.extraJets) {
+            for (const ExtraJet& e : *f.extraJets) {
+                Jet tmp;
+                tmp.team = e.team;
+                tmp.fm = std::make_unique<FlightModel>(profile(e.id), *terrain_);
+                Vector3 pb;
+                float camo;
+                Vector3 pa = paintFor(tmp, pb, camo);
+                setAtmosphere(jet_, f);
+                drawJetModel(e.style, bodyMatrix(e.pos, e.q), pa, pb, camo, e.gear, 0, e.throttle, e.ab, 0, 0, f);
+            }
+        }
         // missiles
         setAtmosphere(lit_, f);
         lit_.setF("uEmissive", 0.0f);
@@ -669,6 +717,12 @@ void Renderer::renderWorld(const FrameParams& f) {
             DrawMesh(missile_, litMat_, bodyMatrix(m.pos, q));
             ++drawCalls_;
         }
+        if (f.extraMissiles)
+            for (const ExtraMissile& m : *f.extraMissiles) {
+                Vec3 d = normalize(m.dir);
+                Quat q = Quat::fromEuler(std::atan2(d.z, d.x), std::asin(clampd(d.y, -1, 1)), 0);
+                DrawMesh(missile_, litMat_, bodyMatrix(m.pos, q));
+            }
     }
     drawShadows(f);
     // transparent: cloud layer then puffs then particles
@@ -747,6 +801,49 @@ void Renderer::composite(const FrameParams& f) {
     if (l2 >= 0) SetShaderValueTexture(composite_.sh, l2, bloomC_.texture);
     DrawTexturePro(scene_.texture, full, {0, 0, static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())}, {0, 0}, 0, WHITE);
     EndShaderMode();
+}
+
+void Renderer::renderPip(const FrameParams& f, int w, int h) {
+    if (w != pipW_ || h != pipH_ || !pipScene_.id) {
+        freeTarget(pipScene_);
+        if (pipOut_.id) UnloadRenderTexture(pipOut_);
+        pipW_ = w; pipH_ = h;
+        pipScene_ = makeTarget(w, h, hdr_, true);
+        pipOut_ = LoadRenderTexture(w, h);
+        SetTextureFilter(pipOut_.texture, TEXTURE_FILTER_BILINEAR);
+    }
+    if (!pipScene_.id) return;
+    double ms = worldMs_;
+    int dc = drawCalls_;
+    std::swap(scene_, pipScene_);
+    int sw = w_, sh = h_;
+    w_ = w; h_ = h;
+    FrameParams pf = f;
+    pf.isPip = true;
+    renderWorld(pf);
+    std::swap(scene_, pipScene_);
+    w_ = sw; h_ = sh;
+    worldMs_ = ms;
+    drawCalls_ = dc;
+    // tone map into the LDR picture-in-picture texture (no bloom, a little more grain)
+    BeginTextureMode(pipOut_);
+    ClearBackground(BLACK);
+    BeginShaderMode(composite_.sh);
+    composite_.setF("uExposure", f.L.exposure * f.exposureBoost);
+    composite_.setF("uBloomStrength", 0.0f);
+    composite_.setF("uVignette", 0.55f);
+    composite_.setF("uBlackout", 0.0f);
+    composite_.setF("uRedout", 0.0f);
+    composite_.setF("uDamage", 0.0f);
+    composite_.setF("uTime", static_cast<float>(fmod(f.time, 100.0)));
+    composite_.setF("uGrain", 0.045f);
+    composite_.setF("uSpeedFx", 0.0f);
+    int l1 = composite_.loc("uBloom1"), l2 = composite_.loc("uBloom2");
+    if (l1 >= 0) SetShaderValueTexture(composite_.sh, l1, bloomA_.texture);
+    if (l2 >= 0) SetShaderValueTexture(composite_.sh, l2, bloomC_.texture);
+    DrawTexturePro(pipScene_.texture, {0, 0, static_cast<float>(w), static_cast<float>(-h)}, {0, 0, static_cast<float>(w), static_cast<float>(h)}, {0, 0}, 0, WHITE);
+    EndShaderMode();
+    EndTextureMode();
 }
 
 void Renderer::drawSunFlare(const FrameParams& f, int w, int h) {

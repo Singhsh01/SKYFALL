@@ -29,8 +29,8 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 | | Status |
 |---|---|
 | 8 data-driven slots with provenance notes | ✅ |
-| One aircraft fully tuned (F-22-inspired) | ✅ |
-| Remaining seven tuned + licensed/original detailed models | ⬜ |
+| All eight aircraft flyable (arcade handling per profile, tested) | ✅ |
+| Licensed or hand-modelled detailed exterior models | ⬜ |
 
 ## Rendering (F)
 
@@ -42,7 +42,11 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 | Cloud layer (two sheets) + cumulus billboards | ✅ |
 | PBR-lite aircraft, panel lines, camouflage, afterburner plumes | ✅ |
 | Smoke ribbons, explosions, debris, flares, tracers, wingtip vapour | ✅ |
-| Shadow maps, SSAO, true volumetric clouds | ⬜ |
+| Sun shadow map (aircraft), baked terrain shadows + AO, cumulus sprites | ✅ |
+| Hydraulic-erosion terrain, desert material, 3-level terrain LOD | ✅ |
+| Missile / target / hit picture-in-picture camera | ✅ |
+| Crash & shoot-down replay with telemetry analysis | ✅ |
+| SSAO, true volumetric clouds | ⬜ |
 | Draw-call/LOD instrumentation | 🟡 | draw calls + world pass time in `F3` |
 | Real-world terrain (Cesium etc.) | ⬜ separate heavy-engine track |
 | Metal renderer (OpenGL is deprecated on macOS) | ⬜ |

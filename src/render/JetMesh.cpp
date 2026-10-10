@@ -2,6 +2,7 @@
 
 #include "MeshBuilder.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -34,6 +35,8 @@ struct Geo {
     float noseGearX = 5.5f, mainGearX = -1.5f, mainGearZ = 1.6f;
     float intakeX = 3.0f, intakeZ = 1.5f, intakeW = 0.9f, intakeH = 1.0f, intakeY = -0.2f; bool ventral = false;
     bool faceted = false;
+    float pu = 2.4f, pl = 2.6f;   // superellipse exponents of the upper / lower fuselage section
+    bool roundNozzle = true;
 };
 
 Color paint(unsigned char shade = 255) { return {shade, shade, shade, kPaint}; }
@@ -51,14 +54,49 @@ void quadOut(MeshBuilder& mb, Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector
     triOut(mb, a, c, d, inside, col);
 }
 
-std::vector<Vector2> sectionRing(const Section& s) {
-    // (z, y) points, closed ring: top -> right side -> bottom -> left side
-    float w = s.w, ht = s.ht, hb = s.hb, ch = s.chine;
-    std::vector<Vector2> r = {
-        {0, ht}, {0.45f * w, ht * 0.93f}, {0.82f * w, ch + (ht - ch) * 0.38f}, {w, ch},
-        {0.86f * w, ch - (ch + hb) * 0.32f}, {0.5f * w, -hb * 0.9f}, {0, -hb}};
-    for (int i = 5; i >= 1; --i) r.push_back({-r[i].x, r[i].y});
+std::vector<Vector2> sectionRing(const Section& s, float pu, float pl) {
+    // (z, y) points of a closed superellipse section with a chine line at y = s.chine.
+    // Higher exponents give squarer, "stealthy" sections; the chine reads as a crisp edge.
+    const int R = 28;
+    std::vector<Vector2> r;
+    r.reserve(R);
+    for (int k = 0; k < R; ++k) {
+        float th = 2.0f * PI * k / R;
+        float c = cosf(th), sn = sinf(th);
+        bool upper = sn >= 0.0f;
+        float p = upper ? pu : pl;
+        float z = s.w * (c >= 0 ? 1.0f : -1.0f) * powf(fabsf(c), 2.0f / p);
+        float y = upper ? s.chine + (s.ht - s.chine) * powf(fabsf(sn), 2.0f / p)
+                        : s.chine - (s.hb + s.chine) * powf(fabsf(sn), 2.0f / p);
+        r.push_back({z, y});
+    }
     return r;
+}
+
+/// Catmull-Rom resampling of fuselage stations for a smooth longitudinal profile.
+std::vector<Section> smoothStations(const std::vector<Section>& in, int sub) {
+    std::vector<Section> out;
+    auto cr = [](float p0, float p1, float p2, float p3, float t) {
+        return 0.5f * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
+    };
+    for (size_t i = 0; i + 1 < in.size(); ++i) {
+        const Section& a = in[i > 0 ? i - 1 : i];
+        const Section& b = in[i];
+        const Section& c = in[i + 1];
+        const Section& d = in[i + 2 < in.size() ? i + 2 : i + 1];
+        for (int k = 0; k < sub; ++k) {
+            float t = float(k) / sub;
+            Section q;
+            q.x = b.x + (c.x - b.x) * t;
+            q.w = std::max(0.015f, cr(a.w, b.w, c.w, d.w, t));
+            q.ht = std::max(0.015f, cr(a.ht, b.ht, c.ht, d.ht, t));
+            q.hb = std::max(0.015f, cr(a.hb, b.hb, c.hb, d.hb, t));
+            q.chine = cr(a.chine, b.chine, c.chine, d.chine, t);
+            out.push_back(q);
+        }
+    }
+    out.push_back(in.back());
+    return out;
 }
 
 /// Smooth-shaded loft through cross sections (rings of equal size).
@@ -101,29 +139,72 @@ void loft(MeshBuilder& mb, const std::vector<float>& xs, const std::vector<std::
     }
 }
 
+/// Smooth airfoil-section lifting surface between a root chord (Rle-Rte) and a tip chord
+/// (Tle-Tte). `thickDir` is the local "up" of the airfoil. Symmetric NACA 4-digit thickness
+/// with slight camber, cosine chord spacing, smooth normals, closed tip.
+void airfoilSurface(MeshBuilder& mb, Vector3 Rle, Vector3 Rte, Vector3 Tle, Vector3 Tte, Vector3 thickDir,
+                    float tcRoot, float tcTip, Color col, Color under) {
+    const int C = 14, S = 6;
+    auto naca = [](float u, float tc) {
+        return 5.0f * tc * (0.2969f * sqrtf(u) - 0.1260f * u - 0.3516f * u * u + 0.2843f * u * u * u - 0.1036f * u * u * u * u);
+    };
+    Vector3 td = Vector3Normalize(thickDir);
+    std::vector<Vector3> top(C * S), bot(C * S);
+    for (int si = 0; si < S; ++si) {
+        float sv = float(si) / (S - 1);
+        Vector3 le = Vector3Lerp(Rle, Tle, sv), te = Vector3Lerp(Rte, Tte, sv);
+        float chord = Vector3Distance(le, te);
+        float tc = tcRoot + (tcTip - tcRoot) * sv;
+        for (int ci = 0; ci < C; ++ci) {
+            float u = 0.5f - 0.5f * cosf(PI * ci / (C - 1));
+            Vector3 mid = Vector3Lerp(le, te, u);
+            float yt = naca(u, tc) * chord;
+            float camber = 0.012f * chord * 4.0f * u * (1.0f - u);
+            top[si * C + ci] = Vector3Add(mid, Vector3Scale(td, camber + yt));
+            bot[si * C + ci] = Vector3Add(mid, Vector3Scale(td, camber - yt * 0.9f));
+        }
+    }
+    auto normalAt = [&](const std::vector<Vector3>& P, int si, int ci, float side) {
+        int s0 = std::max(si - 1, 0), s1 = std::min(si + 1, S - 1), c0 = std::max(ci - 1, 0), c1 = std::min(ci + 1, C - 1);
+        Vector3 ds = Vector3Subtract(P[s1 * C + ci], P[s0 * C + ci]);
+        Vector3 dc = Vector3Subtract(P[si * C + c1], P[si * C + c0]);
+        Vector3 n = Vector3Normalize(Vector3CrossProduct(ds, dc));
+        if (Vector3DotProduct(n, td) * side < 0) n = Vector3Negate(n);
+        if (ci == 0) {  // leading edge: blend towards the forward direction
+            Vector3 fwd = Vector3Normalize(Vector3Subtract(P[si * C], P[si * C + 1]));
+            n = Vector3Normalize(Vector3Add(Vector3Scale(fwd, 0.8f), Vector3Scale(td, 0.2f * side)));
+        }
+        return n;
+    };
+    auto emitSurface = [&](const std::vector<Vector3>& P, float side, Color c) {
+        for (int si = 0; si + 1 < S; ++si)
+            for (int ci = 0; ci + 1 < C; ++ci) {
+                Vector3 a = P[si * C + ci], b = P[si * C + ci + 1], cc = P[(si + 1) * C + ci + 1], d = P[(si + 1) * C + ci];
+                Vector3 na = normalAt(P, si, ci, side), nb = normalAt(P, si, ci + 1, side);
+                Vector3 nc = normalAt(P, si + 1, ci + 1, side), nd = normalAt(P, si + 1, ci, side);
+                Vector3 fn = Vector3CrossProduct(Vector3Subtract(b, a), Vector3Subtract(cc, a));
+                Vector3 avg = Vector3Add(Vector3Add(na, nb), Vector3Add(nc, nd));
+                if (Vector3DotProduct(fn, avg) >= 0) { mb.triN(a, b, cc, na, nb, nc, c); mb.triN(a, cc, d, na, nc, nd, c); }
+                else { mb.triN(a, cc, b, na, nc, nb, c); mb.triN(a, d, cc, na, nd, nc, c); }
+            }
+    };
+    emitSurface(top, 1.0f, col);
+    emitSurface(bot, -1.0f, under);
+    // tip cap
+    Vector3 spanDir = Vector3Normalize(Vector3Subtract(Vector3Lerp(Tle, Tte, 0.5f), Vector3Lerp(Rle, Rte, 0.5f)));
+    Vector3 tipInside = Vector3Subtract(Vector3Lerp(Tle, Tte, 0.5f), spanDir);
+    int last = (S - 1) * C;
+    for (int ci = 0; ci + 1 < C; ++ci)
+        quadOut(mb, top[last + ci], top[last + ci + 1], bot[last + ci + 1], bot[last + ci], tipInside, col);
+}
+
 void wingSurface(MeshBuilder& mb, const Planform& p, bool right, Color col) {
     float sgn = right ? 1.0f : -1.0f;
-    float tr = p.thick, tt = p.thick * 0.3f;
-    auto pt = [&](float x, float z, float y) { return Vector3{x, y, z * sgn}; };
-    float yr = p.y, yt = p.y + p.tipDy;
-    float rr = p.rootLE + (p.rootTE - p.rootLE) * 0.42f, rt = p.tipLE + (p.tipTE - p.tipLE) * 0.42f;
-    Vector3 LEr = pt(p.rootLE, p.rootZ, yr), TEr = pt(p.rootTE, p.rootZ, yr);
-    Vector3 LEt = pt(p.tipLE, p.tipZ, yt), TEt = pt(p.tipTE, p.tipZ, yt);
-    Vector3 Rtr = pt(rr, p.rootZ, yr + tr * 0.5f), Rtt = pt(rt, p.tipZ, yt + tt * 0.5f);
-    Vector3 Rbr = pt(rr, p.rootZ, yr - tr * 0.5f), Rbt = pt(rt, p.tipZ, yt - tt * 0.5f);
-    Vector3 midUp = pt((p.rootLE + p.rootTE) * 0.5f, (p.rootZ + p.tipZ) * 0.5f, yr - 50.0f);
-    Vector3 midDn = pt((p.rootLE + p.rootTE) * 0.5f, (p.rootZ + p.tipZ) * 0.5f, yr + 50.0f);
-    // top (oriented upwards = away from a point far below)
-    quadOut(mb, LEr, LEt, Rtt, Rtr, midUp, col);
-    quadOut(mb, Rtr, Rtt, TEt, TEr, midUp, col);
-    // bottom
-    Color under = {static_cast<unsigned char>(col.r * 0.92f), static_cast<unsigned char>(col.g * 0.92f), static_cast<unsigned char>(col.b * 0.92f), col.a};
-    quadOut(mb, LEr, LEt, Rbt, Rbr, midDn, under);
-    quadOut(mb, Rbr, Rbt, TEt, TEr, midDn, under);
-    // tip cap
-    Vector3 inTip = pt((p.tipLE + p.tipTE) * 0.5f, p.tipZ - 1.0f, yt);
-    triOut(mb, LEt, Rtt, TEt, inTip, col);
-    triOut(mb, LEt, Rbt, TEt, inTip, col);
+    float rootChord = std::max(0.1f, p.rootLE - p.rootTE);
+    float tc = std::clamp(p.thick / rootChord, 0.025f, 0.09f);
+    Color under = {static_cast<unsigned char>(col.r * 0.94f), static_cast<unsigned char>(col.g * 0.94f), static_cast<unsigned char>(col.b * 0.94f), col.a};
+    airfoilSurface(mb, {p.rootLE, p.y, sgn * p.rootZ}, {p.rootTE, p.y, sgn * p.rootZ},
+                   {p.tipLE, p.y + p.tipDy, sgn * p.tipZ}, {p.tipTE, p.y + p.tipDy, sgn * p.tipZ}, {0, 1, 0}, tc, tc * 0.7f, col, under);
 }
 
 /// Thin plate (tail fin / stabiliser / canard) with real thickness.
@@ -141,29 +222,90 @@ void plate(MeshBuilder& mb, Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 
 }
 
 void tail(MeshBuilder& mb, const TailDef& t, float side, Color col) {
-    // fin plane: x along body, "up" tilted outward by cant
+    // fin plane: x along body, "up" tilted outward by cant; airfoil thickness across the plane
     float c = cosf(t.cant), s = sinf(t.cant);
     Vector3 up = {0, c, side * s};
     Vector3 base = {0, t.y, side * t.z};
     auto P = [&](float x, float h) { return Vector3{x, base.y + up.y * h, base.z + up.z * h}; };
-    Vector3 n = {0, -s * side, c};  // plate normal (perpendicular to up, horizontal-ish)
-    n = {0, -up.z, up.y};
-    plate(mb, P(t.rootLE, 0), P(t.rootTE, 0), P(t.tipTE, t.height), P(t.tipLE, t.height), n, 0.14f, col);
+    Vector3 n = {0, -up.z, up.y};
+    if (n.z * side < 0 || (side == 0 && n.z < 0)) n = Vector3Negate(n);
+    float chord = std::max(0.1f, t.rootLE - t.rootTE);
+    airfoilSurface(mb, P(t.rootLE, -0.15f), P(t.rootTE, -0.15f), P(t.tipLE, t.height), P(t.tipTE, t.height), n,
+                   std::clamp(0.16f / chord, 0.03f, 0.06f), 0.035f, col, col);
 }
 
-void tube(MeshBuilder& mb, float x0, float x1, float r0, float r1, float y, float z, int sides, Color col, bool square = false) {
-    std::vector<float> xs = {x0, x1};
-    std::vector<std::vector<Vector2>> rings(2);
-    for (int k = 0; k < 2; ++k) {
-        float r = k == 0 ? r0 : r1;
+void tube(MeshBuilder& mb, float x0, float x1, float r0, float r1, float y, float z, int sides, Color col, bool square = false,
+          float petals = 0.0f) {
+    std::vector<float> xs = {x0, x0 + (x1 - x0) * 0.5f, x1};
+    std::vector<std::vector<Vector2>> rings(3);
+    for (int k = 0; k < 3; ++k) {
+        float r = r0 + (r1 - r0) * (k * 0.5f);
         for (int i = 0; i < sides; ++i) {
             float a = 2 * PI * i / sides + (square ? PI / 4 : 0);
-            float cz = cosf(a) * r, cy = sinf(a) * r;
+            float rr = r * (1.0f + (k > 0 ? petals * ((i % 2) ? 1.0f : -1.0f) * (k * 0.5f) : 0.0f));
+            float cz = cosf(a) * rr, cy = sinf(a) * rr;
             if (square) { cz = (cz > 0 ? 1 : -1) * r; cy = (cy > 0 ? 1 : -1) * r * 0.75f; }
             rings[k].push_back({cz, cy});
         }
     }
     loft(mb, xs, rings, col, y, z, false);
+}
+
+/// Per-vertex ambient occlusion: voxelise the occluders, cast a fixed hemisphere of rays from
+/// every vertex and darken the vertex colour (material id in alpha is preserved).
+void bakeAmbientOcclusion(MeshBuilder& target, const std::vector<const MeshBuilder*>& occluders) {
+    Vector3 lo = {1e9f, 1e9f, 1e9f}, hi = {-1e9f, -1e9f, -1e9f};
+    for (const MeshBuilder* m : occluders)
+        for (size_t i = 0; i < m->pos.size(); i += 3) {
+            lo = Vector3Min(lo, {m->pos[i], m->pos[i + 1], m->pos[i + 2]});
+            hi = Vector3Max(hi, {m->pos[i], m->pos[i + 1], m->pos[i + 2]});
+        }
+    const float vs = 0.12f;   // voxel size (m)
+    lo = Vector3Subtract(lo, {0.5f, 0.5f, 0.5f});
+    int nx = static_cast<int>((hi.x - lo.x) / vs) + 2, ny = static_cast<int>((hi.y - lo.y) / vs) + 2, nz = static_cast<int>((hi.z - lo.z) / vs) + 2;
+    std::vector<unsigned char> vox(static_cast<size_t>(nx) * ny * nz, 0);
+    auto mark = [&](Vector3 p) {
+        int i = static_cast<int>((p.x - lo.x) / vs), j = static_cast<int>((p.y - lo.y) / vs), k = static_cast<int>((p.z - lo.z) / vs);
+        if (i >= 0 && j >= 0 && k >= 0 && i < nx && j < ny && k < nz) vox[(static_cast<size_t>(k) * ny + j) * nx + i] = 1;
+    };
+    for (const MeshBuilder* m : occluders)
+        for (size_t t = 0; t + 8 < m->pos.size(); t += 9) {
+            Vector3 a = {m->pos[t], m->pos[t + 1], m->pos[t + 2]}, b = {m->pos[t + 3], m->pos[t + 4], m->pos[t + 5]}, c = {m->pos[t + 6], m->pos[t + 7], m->pos[t + 8]};
+            float e = std::max({Vector3Distance(a, b), Vector3Distance(b, c), Vector3Distance(c, a)});
+            int n = std::max(1, static_cast<int>(e / (vs * 0.5f)));
+            for (int u = 0; u <= n; ++u)
+                for (int v = 0; v <= n - u; ++v) {
+                    float fu = float(u) / n, fv = float(v) / n;
+                    mark(Vector3Add(a, Vector3Add(Vector3Scale(Vector3Subtract(b, a), fu), Vector3Scale(Vector3Subtract(c, a), fv))));
+                }
+        }
+    auto solid = [&](Vector3 p) {
+        int i = static_cast<int>((p.x - lo.x) / vs), j = static_cast<int>((p.y - lo.y) / vs), k = static_cast<int>((p.z - lo.z) / vs);
+        if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return false;
+        return vox[(static_cast<size_t>(k) * ny + j) * nx + i] != 0;
+    };
+    // fixed set of 24 directions (Fibonacci sphere)
+    std::vector<Vector3> dirs;
+    for (int i = 0; i < 48; ++i) {
+        float yy = 1.0f - (i + 0.5f) / 48.0f * 2.0f, r = sqrtf(std::max(0.0f, 1.0f - yy * yy)), ph = i * 2.39996f;
+        dirs.push_back({cosf(ph) * r, yy, sinf(ph) * r});
+    }
+    for (size_t v = 0; v * 3 < target.pos.size(); ++v) {
+        Vector3 p = {target.pos[v * 3], target.pos[v * 3 + 1], target.pos[v * 3 + 2]};
+        Vector3 n = {target.nrm[v * 3], target.nrm[v * 3 + 1], target.nrm[v * 3 + 2]};
+        Vector3 o = Vector3Add(p, Vector3Scale(n, vs * 1.8f));
+        float occ = 0, cnt = 0;
+        for (const Vector3& d : dirs) {
+            float cosT = Vector3DotProduct(d, n);
+            if (cosT <= 0.05f) continue;
+            cnt += cosT;
+            for (float t = vs; t < 2.6f; t += vs * 0.9f) {
+                if (solid(Vector3Add(o, Vector3Scale(d, t)))) { occ += cosT * (1.0f - t / 3.2f); break; }
+            }
+        }
+        float ao = cnt > 0 ? 1.0f - 0.8f * occ / cnt : 1.0f;
+        for (int k = 0; k < 3; ++k) target.col[v * 4 + k] = static_cast<unsigned char>(target.col[v * 4 + k] * std::clamp(ao, 0.25f, 1.0f));
+    }
 }
 
 void canopy(MeshBuilder& mb, const Geo& g) {
@@ -240,7 +382,7 @@ Geo geoFor(AirframeStyle s) {
                      {4.9f, 1.00f, 0.56f, 0.52f, -0.12f}, {3.3f, 1.65f, 0.62f, 0.60f, -0.14f}, {1.0f, 2.05f, 0.64f, 0.62f, -0.12f},
                      {-2.0f, 2.15f, 0.62f, 0.60f, -0.08f}, {-5.0f, 2.05f, 0.56f, 0.54f, -0.04f}, {-7.6f, 1.80f, 0.48f, 0.44f, 0.0f},
                      {-8.9f, 1.60f, 0.40f, 0.36f, 0.0f}};
-            g.faceted = true;
+            g.faceted = true; g.pu = 3.4f; g.pl = 4.0f; g.roundNozzle = false;
             g.canX0 = 6.9f; g.canX1 = 2.4f; g.canW = 0.56f; g.canH = 0.6f; g.canY = 0.5f;
             g.wing = {2.2f, -6.4f, -3.7f, -5.0f, 1.9f, 6.8f, -0.05f, -0.12f, 0.32f};
             g.stab = {-6.3f, -9.0f, -8.5f, -9.7f, 1.55f, 4.5f, -0.1f, 0.0f, 0.12f};
@@ -254,7 +396,7 @@ Geo geoFor(AirframeStyle s) {
                      {3.6f, 1.15f, 0.90f, 0.76f, -0.10f}, {2.0f, 1.80f, 0.96f, 0.90f, -0.12f}, {-0.5f, 2.00f, 0.98f, 0.98f, -0.10f},
                      {-3.5f, 1.90f, 0.90f, 0.90f, -0.05f}, {-6.0f, 1.30f, 0.70f, 0.70f, 0.0f}, {-7.3f, 0.85f, 0.55f, 0.55f, 0.0f}};
             g.canX0 = 5.6f; g.canX1 = 1.4f; g.canW = 0.55f; g.canH = 0.6f; g.canY = 0.66f;
-            g.faceted = true;
+            g.faceted = true; g.pu = 3.0f; g.pl = 3.4f;
             g.wing = {1.2f, -4.6f, -2.8f, -4.0f, 1.8f, 5.35f, -0.05f, -0.08f, 0.32f};
             g.stab = {-5.0f, -7.4f, -7.1f, -8.0f, 1.0f, 3.4f, -0.05f, 0.0f, 0.12f};
             g.tails = {{-3.6f, -6.6f, -5.8f, -7.0f, 2.4f, 1.15f, 0.55f, 0.44f}};
@@ -332,8 +474,8 @@ JetModel buildJetModel(AirframeStyle style) {
     // fuselage
     std::vector<float> xs;
     std::vector<std::vector<Vector2>> rings;
-    for (const Section& s : g.fus) { xs.push_back(s.x); rings.push_back(sectionRing(s)); }
-    loft(mb, xs, rings, paint(), 0.0f, 0.0f, true, g.faceted);
+    for (const Section& s : smoothStations(g.fus, 4)) { xs.push_back(s.x); rings.push_back(sectionRing(s, g.pu, g.pl)); }
+    loft(mb, xs, rings, paint(), 0.0f, 0.0f, true, false);
     // canopy (separate mesh)
     MeshBuilder cb;
     canopy(cb, g);
@@ -385,7 +527,11 @@ JetModel buildJetModel(AirframeStyle style) {
     for (int e = 0; e < g.engines; ++e) {
         float z = g.engines == 1 ? 0.0f : (e == 0 ? -g.engineZ : g.engineZ);
         float y = g.nacelles ? g.nacY : -0.05f;
-        tube(mb, g.nozzleX + 0.4f, g.nozzleX - g.nozzleLen, g.nozzleR * 1.08f, g.nozzleR * 0.9f, y, z, 14, metal(70, 66, 62), g.squareNozzle);
+        tube(mb, g.nozzleX + 0.4f, g.nozzleX - g.nozzleLen, g.nozzleR * 1.08f, g.nozzleR * 0.9f, y, z, g.squareNozzle ? 16 : 24,
+             metal(128, 124, 118), g.squareNozzle, g.squareNozzle ? 0.0f : 0.035f);
+        // inner liner (darker, slightly recessed)
+        tube(mb, g.nozzleX - g.nozzleLen + 0.02f, g.nozzleX - g.nozzleLen + 0.5f, g.nozzleR * 0.86f, g.nozzleR * 0.8f, y, z, g.squareNozzle ? 16 : 24,
+             metal(58, 52, 48), g.squareNozzle);
         // inner dark disk at the exit
         Color inner = metal(25, 18, 14);
         for (int i = 0; i < 14; ++i) {
@@ -406,6 +552,7 @@ JetModel buildJetModel(AirframeStyle style) {
         missileShape(mb, c, 3.6f, 0.09f, metal(210, 210, 205));
         mb.box({c.x, g.wing.y - 0.22f, c.z}, {1.6f, 0.3f, 0.06f}, paint(200));
     }
+    bakeAmbientOcclusion(mb, {&mb});
     jm.body = mb.build();
     jm.canopy = cb.build();
     jm.eye = {g.canX1 + (g.canX0 - g.canX1) * 0.40f, g.canY + g.canH * 0.62f, 0.0f};

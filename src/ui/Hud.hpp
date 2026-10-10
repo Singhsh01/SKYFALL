@@ -3,6 +3,8 @@
 #pragma once
 
 #include "../app/CameraMode.hpp"
+#include "../app/PipState.hpp"
+#include "../telemetry/Replay.hpp"
 #include "../app/Settings.hpp"
 #include "../combat/Combat.hpp"
 #include "../mission/Mission.hpp"
@@ -45,6 +47,15 @@ struct HudContext {
     double fixedHz = 120;
     int droppedSteps = 0;
     bool gamepad = false;
+    // picture-in-picture camera
+    bool pipActive = false;
+    const PipState* pip = nullptr;
+    Texture2D pipTex{};
+    int pipW = 480, pipH = 300;
+    // replay
+    bool replay = false;
+    double replayT = 0, replayFrom = 0, replayTo = 0, deathTime = 0;
+    const LossReport* loss = nullptr;
 };
 
 class Hud {
@@ -68,6 +79,8 @@ private:
     void glidePath(const HudContext& c);
     void minimalSymbology(const HudContext& c);
     void hintsBar(const HudContext& c);
+    void pipPanel(const HudContext& c);
+    void replayOverlay(const HudContext& c);
     void radioPanel(const HudContext& c);
     void popups(const HudContext& c);
     void debug(const HudContext& c);
