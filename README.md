@@ -1,5 +1,13 @@
 # SKYFALL — Real-Time Combat Flight Simulator & Computer Vision Laboratory
 
+[![build](https://github.com/Singhsh01/SKYFALL/actions/workflows/build.yml/badge.svg)](https://github.com/Singhsh01/SKYFALL/actions/workflows/build.yml)
+
+### ▶ [Download & play for macOS](https://github.com/Singhsh01/SKYFALL/releases/latest/download/SKYFALL-macOS.zip)
+
+Apple Silicon and Intel, macOS 12+. Unzip, then right-click **Play-SKYFALL.command → Open** (the
+build is not notarised, so macOS asks once). All releases: [Releases](https://github.com/Singhsh01/SKYFALL/releases).
+Each release is built and unit-tested by GitHub Actions from the tagged source.
+
 A native **C++20 / raylib** combat flight game and simulation sandbox built for macOS first
 (Apple Clang, CMake, 8 GB MacBook Air class hardware), portable to Linux and Windows.
 

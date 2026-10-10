@@ -1,0 +1,50 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to publish the release on a v* tag
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (universal binary; raylib 5.5 is downloaded and linked statically)
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+
+      - name: Build
+        run: cmake --build build --parallel 3
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package
+        run: |
+          mkdir -p dist/SKYFALL
+          cp build/skyfall dist/SKYFALL/
+          cp packaging/Play-SKYFALL.command dist/SKYFALL/
+          cp packaging/README-macOS.txt LICENSE dist/SKYFALL/
+          chmod +x dist/SKYFALL/skyfall dist/SKYFALL/Play-SKYFALL.command
+          (cd dist && ditto -c -k --keepParent SKYFALL SKYFALL-macOS.zip)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SKYFALL-macOS
+          path: dist/SKYFALL-macOS.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/SKYFALL-macOS.zip
+          generate_release_notes: true
