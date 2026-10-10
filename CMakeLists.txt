@@ -40,8 +40,14 @@ endif()
 # ---------------------------------------------------------------------------
 if(SKYFALL_BUILD_GAME)
   # Prefer an installed raylib (e.g. Homebrew), otherwise download and build raylib 5.5.
-  find_path(SKYFALL_RAYLIB_INCLUDE raylib.h HINTS /opt/homebrew/include /usr/local/include)
-  find_library(SKYFALL_RAYLIB_LIB raylib HINTS /opt/homebrew/lib /usr/local/lib)
+  if(EMSCRIPTEN)
+    # Browser build: raylib for WebGL 2 (OpenGL ES 3.0), always built from source.
+    set(PLATFORM Web CACHE STRING "" FORCE)
+    set(OPENGL_VERSION "ES 3.0" CACHE STRING "" FORCE)
+  else()
+    find_path(SKYFALL_RAYLIB_INCLUDE raylib.h HINTS /opt/homebrew/include /usr/local/include)
+    find_library(SKYFALL_RAYLIB_LIB raylib HINTS /opt/homebrew/lib /usr/local/lib)
+  endif()
   if(SKYFALL_RAYLIB_INCLUDE AND SKYFALL_RAYLIB_LIB)
     message(STATUS "SKYFALL: using installed raylib ${SKYFALL_RAYLIB_LIB}")
     add_library(skyfall_raylib INTERFACE)
@@ -54,6 +60,9 @@ if(SKYFALL_BUILD_GAME)
     set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(raylib GIT_REPOSITORY https://github.com/raysan5/raylib.git GIT_TAG 5.5 GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(raylib)
+    if(EMSCRIPTEN)
+      target_compile_options(raylib PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/web/glfw_compat.h)
+    endif()
     add_library(skyfall_raylib INTERFACE)
     target_link_libraries(skyfall_raylib INTERFACE raylib)
   else()
@@ -76,7 +85,20 @@ if(SKYFALL_BUILD_GAME)
     src/audio/Audio.cpp
   )
   target_link_libraries(skyfall PRIVATE skyfall_core skyfall_raylib)
-  if(APPLE)
+  if(EMSCRIPTEN)
+    # Emit skyfall.js/.wasm/.data and write index.html from web/shell.html ourselves
+    # (older Emscripten HTML minifiers are fragile).
+    set_target_properties(skyfall PROPERTIES SUFFIX ".js")
+    file(READ ${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html SKYFALL_SHELL)
+    string(REPLACE "{{{ SCRIPT }}}" "<script async src=\"skyfall.js\"></script>" SKYFALL_SHELL "${SKYFALL_SHELL}")
+    file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/index.html "${SKYFALL_SHELL}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html)
+    target_link_options(skyfall PRIVATE
+      -sUSE_GLFW=3 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3=1
+      -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456 -sTOTAL_STACK=8388608
+      -sINVOKE_RUN=0 -sEXPORTED_RUNTIME_METHODS=callMain -sEXIT_RUNTIME=0
+      --preload-file ${CMAKE_CURRENT_SOURCE_DIR}/web/fonts@/usr/share/fonts/truetype/dejavu)
+  elseif(APPLE)
     target_link_libraries(skyfall PRIVATE "-framework IOKit" "-framework Cocoa" "-framework OpenGL" "-framework CoreAudio" "-framework CoreVideo")
   elseif(UNIX)
     find_package(Threads REQUIRED)

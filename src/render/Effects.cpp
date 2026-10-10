@@ -337,7 +337,8 @@ void Effects::billboard(Vector3 p, float size, float rot, Vector3 right, Vector3
 void Effects::drawTrails(const Camera3D& cam, const Lighting& L) {
     rlSetTexture(glow_.id);
     rlBegin(RL_QUADS);
-    for (auto& [k, t] : trails_) {
+    for (auto& kv : trails_) {
+        auto& t = kv.second;
         if (t.pts.size() < 2) continue;
         for (size_t i = 0; i + 1 < t.pts.size(); ++i) {
             const TrailPoint& a = t.pts[i];

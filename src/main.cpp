@@ -9,6 +9,10 @@
 #include "app/Game.hpp"
 #include "raylib.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 #include <cstdarg>
 #include <filesystem>
 
@@ -32,7 +36,7 @@ void logCallback(int level, const char* fmt, va_list args) {
 }
 }  // namespace
 
-int main(int argc, char** argv) {
+static int skyfallMain(int argc, char** argv) {
     std::error_code ec;
     std::filesystem::create_directories("logs", ec);
     g_log = std::fopen("logs/skyfall.log", "w");
@@ -54,8 +58,30 @@ int main(int argc, char** argv) {
             return 0;
         }
     }
+#ifdef __EMSCRIPTEN__
+    // Browser build: index.html?mode=arena (or m01) jumps straight into a mode.
+    if (const char* m = emscripten_run_script_string(
+            "(function(){var m=new URLSearchParams(location.search).get('mode')||'';return /^(arena|m01)$/.test(m)?m:'';})()"))
+        if (*m) opt.startMode = m;
+    // Browser build: the game lives for the whole page; Game::run hands control to the
+    // browser's animation loop and never returns, so it must not live on the stack.
+    opt.windowed = true;
+    static sky::Game* game = new sky::Game();
+    return game->run(opt);
+#else
     sky::Game game;
     int rc = game.run(opt);
     if (g_log) std::fclose(g_log);
     return rc;
+#endif
 }
+
+#ifdef __EMSCRIPTEN__
+int main() {
+    static char name[] = "skyfall";
+    static char* argv[] = {name, nullptr};
+    return skyfallMain(1, argv);
+}
+#else
+int main(int argc, char** argv) { return skyfallMain(argc, argv); }
+#endif

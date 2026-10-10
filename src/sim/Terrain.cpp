@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <thread>
+#include "sim/Parallel.hpp"
 
 namespace sky {
 
@@ -166,13 +166,6 @@ Terrain::Terrain() {
     runway_.length = 3000.0;
     runway_.width = 45.0;
     town_ = {2500.0, 0.0, 2200.0};
-    unsigned threads = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
-    auto parallelRows = [&](int rows, auto&& fn) {
-        std::vector<std::thread> pool;
-        for (unsigned t = 0; t < threads; ++t)
-            pool.emplace_back([&, t] { for (int j = static_cast<int>(t); j < rows; j += static_cast<int>(threads)) fn(j); });
-        for (auto& th : pool) th.join();
-    };
     // 1. coarse procedural grid (31.25 m)
     const int nc = kGridCells / 2 + 1;
     const double cc = kCell * 2.0;

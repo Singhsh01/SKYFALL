@@ -66,6 +66,10 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 3. Terrain image registration (features, RANSAC homography, reprojection error).
 4. PnP pose estimation with confidence; COLMAP experiment offline.
 
-## Platforms (I) — ⬜
+## Platforms (I)
 
-iPhone native (Metal) port, remote-play streaming, VR — after desktop performance is measured.
+| | Status |
+|---|---|
+| macOS universal binary, built and tested by CI, released on `v*` tags | ✅ |
+| Browser (WebAssembly + WebGL 2) on GitHub Pages | ✅ single-threaded world build; settings not persisted |
+| iPhone native (Metal) port, remote-play streaming, VR | ⬜ after desktop performance is measured |

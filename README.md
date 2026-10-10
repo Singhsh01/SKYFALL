@@ -1,12 +1,16 @@
 # SKYFALL — Real-Time Combat Flight Simulator & Computer Vision Laboratory
 
 [![build](https://github.com/Singhsh01/SKYFALL/actions/workflows/build.yml/badge.svg)](https://github.com/Singhsh01/SKYFALL/actions/workflows/build.yml)
+[![web](https://github.com/Singhsh01/SKYFALL/actions/workflows/pages.yml/badge.svg)](https://github.com/Singhsh01/SKYFALL/actions/workflows/pages.yml)
 
-### ▶ [Download & play for macOS](https://github.com/Singhsh01/SKYFALL/releases/latest/download/SKYFALL-macOS.zip)
+### ▶ [Play in your browser](https://singhsh01.github.io/SKYFALL/) &nbsp;·&nbsp; [straight into the Dogfight Arena](https://singhsh01.github.io/SKYFALL/?mode=arena)
 
-Apple Silicon and Intel, macOS 12+. Unzip, then right-click **Play-SKYFALL.command → Open** (the
-build is not notarised, so macOS asks once). All releases: [Releases](https://github.com/Singhsh01/SKYFALL/releases).
-Each release is built and unit-tested by GitHub Actions from the tagged source.
+Runs instantly in Chrome, Edge, Firefox or Safari (WebGL 2): no install, the game runs inside the
+browser's sandbox. Click **Play**; the world is generated in a few seconds. Keyboard required.
+
+Prefer the native app (higher frame rate, full window)? [Download for macOS](https://github.com/Singhsh01/SKYFALL/releases/latest/download/SKYFALL-macOS.zip)
+— Apple Silicon and Intel, macOS 12+. Unzip, then right-click **Play-SKYFALL.command → Open**
+(the build is not notarised, so macOS asks once).
 
 A native **C++20 / raylib** combat flight game and simulation sandbox built for macOS first
 (Apple Clang, CMake, 8 GB MacBook Air class hardware), portable to Linux and Windows.
@@ -54,6 +58,18 @@ copyrighted models, textures, sounds or code from commercial games.
   hydraulic-erosion simulation), dry river bed with palms, desert town, coast to the east.
 * **Campaign** missions 01–03 (cold start & takeoff, first solo flight, runway landing) and the
   **Dogfight Arena** (waves of AI bandits, wingmen, SAM sites, AAA with flak, ground targets).
+
+## Browser version (WebAssembly)
+
+The same C++ code compiles to WebAssembly with Emscripten; raylib targets WebGL 2 (OpenGL ES 3.0)
+and the GLSL 3.30 shaders are converted to GLSL ES 3.00 at load time (`src/render/ShaderLoad.hpp`).
+The terrain build and light bakes run single-threaded in the browser (multi-threaded natively), so
+world generation takes a few seconds longer. Settings are not saved between browser sessions.
+`.github/workflows/pages.yml` builds and publishes it to GitHub Pages on every push.
+
+```bash
+./scripts/build_web.sh          # needs Emscripten (brew install emscripten); serves http://localhost:8000
+```
 
 ## Build & run (macOS)
 

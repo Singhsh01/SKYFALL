@@ -1,3 +1,6 @@
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 #include "Game.hpp"
 
 #include "../render/Convert.hpp"
@@ -39,15 +42,27 @@ float panFor(const Camera3D& cam, Vector3 p) {
 // Lifecycle
 // ------------------------------------------------------------------------------------------
 void Game::initWindow() {
+#ifdef __EMSCRIPTEN__
+    unsigned flags = FLAG_WINDOW_RESIZABLE;  // canvas follows the browser window; 1:1 pixels (no HiDPI cost)
+#else
     unsigned flags = FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI;
+#endif
     if (settings_.vsync && !capturing_) flags |= FLAG_VSYNC_HINT;
     SetConfigFlags(flags);
     int w = opt_.width > 0 ? opt_.width : settings_.width;
     int h = opt_.height > 0 ? opt_.height : settings_.height;
+#ifdef __EMSCRIPTEN__
+    w = EM_ASM_INT({ return window.innerWidth; });
+    h = EM_ASM_INT({ return window.innerHeight; });
+#endif
     InitWindow(w, h, "SKYFALL - Combat Flight Simulator");
     SetExitKey(KEY_NULL);  // Esc opens the pause menu instead of quitting
     if (settings_.fullscreen && !opt_.windowed && !capturing_) ToggleFullscreen();
+#ifdef __EMSCRIPTEN__
+    SetTargetFPS(0);  // the browser paces frames (requestAnimationFrame)
+#else
     SetTargetFPS(capturing_ ? 0 : 120);
+#endif
     ui::loadFonts();
 }
 
@@ -80,6 +95,11 @@ int Game::run(const Options& opt) {
     else if (opt.startMode == "m01") startMission01();
     else startTitle();
 
+#ifdef __EMSCRIPTEN__
+    webLast_ = std::chrono::steady_clock::now();
+    emscripten_set_main_loop_arg([](void* g) { static_cast<Game*>(g)->webTick(); }, this, 0, 1);
+    return 0;
+#endif
     auto last = std::chrono::steady_clock::now();
     while (!quit_ && !WindowShouldClose()) {
         auto now = std::chrono::steady_clock::now();
@@ -103,6 +123,17 @@ int Game::run(const Options& opt) {
     shutdown();
     return 0;
 }
+
+#ifdef __EMSCRIPTEN__
+void Game::webTick() {
+    auto now = std::chrono::steady_clock::now();
+    double dt = std::chrono::duration<double>(now - webLast_).count();
+    webLast_ = now;
+    if (quit_) { quit_ = false; startTitle(); }  // a browser tab has no desktop to quit to
+    frame(std::min(dt, 0.25));
+    stats_.push(dt * 1000.0);
+}
+#endif
 
 void Game::shutdown() {
     audio_.shutdown();
@@ -842,7 +873,7 @@ void Game::drawTitle() {
     if (ui::button(nav_, 3, {x, y, bw, bh}, "SETTINGS", "Audio, graphics, controls")) { audio_.play(Sfx::Click); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 0; return; }
     y += bh + gap;
     if (ui::button(nav_, 4, {x, y, bw, bh}, "QUIT")) { quit_ = true; return; }
-    ui::text("v0.3  -  C++20 / raylib  -  fictional simulation, illustrative aircraft data", 70 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Left, false);
+    ui::text("v0.4  -  C++20 / raylib  -  fictional simulation, illustrative aircraft data", 70 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Left, false);
     ui::text("ENTER select   ARROWS navigate", w - 30 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Right, false);
 }
 

@@ -19,6 +19,10 @@ press `F3` for live p50/p95/p99, world-pass CPU time, draw calls and particle co
 | MacBook Air 8 GB (v0.3, real play session, 138k frames) | Apple GPU, OpenGL 4.1 | 1680x1050 | High | 15.1 ms (66 fps) | 14.6 ms | 20.2 ms | 30.2 ms |
 | MacBook Air 8 GB (v0.4: erosion terrain, PiP camera) | Apple GPU | | | *to be measured — quit the game normally and read logs/skyfall.log* | | | |
 
+Browser build: in the container (Chromium, software WebGL, 2 vCPU) world generation takes ~14 s
+and the frame rate is not meaningful; on a real GPU it is expected to sit below the native build.
+Measure it in the browser with `F3`.
+
 The container number only proves the pipeline runs end to end; a software rasteriser is 50–100×
 slower than any GPU and says nothing about macOS performance. No FPS figure for the Mac is
 claimed until it has been measured there.

@@ -4,7 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <thread>
+#include "sim/Parallel.hpp"
 
 namespace sky {
 
@@ -318,13 +318,7 @@ void WorldMeshes::build(const Terrain& t) {
         const int N = 2048;
         const double cell = 2.0 * Terrain::kHalfSize / N;
         std::vector<float> H(static_cast<size_t>(N) * N);
-        unsigned threads = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
-        auto par = [&](auto&& fn) {
-            std::vector<std::thread> pool;
-            for (unsigned k = 0; k < threads; ++k)
-                pool.emplace_back([&, k] { for (int j = static_cast<int>(k); j < N; j += static_cast<int>(threads)) fn(j); });
-            for (auto& th : pool) th.join();
-        };
+        auto par = [&](auto&& fn) { parallelRows(N, fn); };
         par([&](int j) {
             for (int i = 0; i < N; ++i)
                 H[static_cast<size_t>(j) * N + i] = static_cast<float>(t.height(-Terrain::kHalfSize + (i + 0.5) * cell, -Terrain::kHalfSize + (j + 0.5) * cell));
@@ -603,13 +597,7 @@ void WorldMeshes::bakeSunShadows(Vector3 sunDir) {
     Vec3 hd = horiz > 1e-6 ? Vec3{sd.x / horiz, 0, sd.z / horiz} : Vec3{1, 0, 0};
     double rise = sd.y / std::max(horiz, 1e-6);
     std::vector<float> sh(static_cast<size_t>(M) * M, 1.0f);
-    unsigned threads = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
-    auto par = [&](int rows, auto&& fn) {
-        std::vector<std::thread> pool;
-        for (unsigned k = 0; k < threads; ++k)
-            pool.emplace_back([&, k] { for (int j = static_cast<int>(k); j < rows; j += static_cast<int>(threads)) fn(j); });
-        for (auto& th : pool) th.join();
-    };
+    auto par = [&](int rows, auto&& fn) { parallelRows(rows, fn); };
     par(M, [&](int j) {
         for (int i = 0; i < M; ++i) {
             double x = -Terrain::kHalfSize + (i + 0.5) * cellM, z = -Terrain::kHalfSize + (j + 0.5) * cellM;

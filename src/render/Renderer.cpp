@@ -1,3 +1,4 @@
+#include "render/ShaderLoad.hpp"
 #include "Renderer.hpp"
 
 #include "Convert.hpp"
@@ -10,7 +11,11 @@
 #include <cmath>
 #include <string>
 
+#ifdef __EMSCRIPTEN__
+#include <GLES3/gl3.h>
+#else
 extern "C" void glClear(unsigned int mask);  // GL 1.0 entry point, present in every GL library
+#endif
 
 namespace sky {
 
@@ -21,7 +26,7 @@ Shader makeShader(const char* vs, const char* fsBody, bool atmosphere) {
     std::string fs = "#version 330\n";
     if (atmosphere) fs += shaders::kAtmosphere;
     fs += fsBody;
-    Shader s = LoadShaderFromMemory(vs, fs.c_str());
+    Shader s = loadShaderGlsl(vs, fs.c_str());
     if (s.id == 0 || s.id == rlGetShaderIdDefault()) TraceLog(LOG_WARNING, "SKYFALL: shader failed to compile, using default");
     return s;
 }
@@ -146,10 +151,10 @@ bool Renderer::init(const Terrain& t, int width, int height) {
     flameP_.sh = makeShader(kJetVS, kFlameFS, true);
     cloud_.sh = makeShader(kWaterVS, kCloudFS, true);
     runway_.sh = makeShader(kRunwayVS, kRunwayFS, true);
-    particle_.sh = LoadShaderFromMemory(kParticleVS, kParticleFS);
-    bright_.sh = LoadShaderFromMemory(kPostVS, kBrightFS);
-    blur_.sh = LoadShaderFromMemory(kPostVS, kBlurFS);
-    composite_.sh = LoadShaderFromMemory(kPostVS, kCompositeFS);
+    particle_.sh = loadShaderGlsl(kParticleVS, kParticleFS);
+    bright_.sh = loadShaderGlsl(kPostVS, kBrightFS);
+    blur_.sh = loadShaderGlsl(kPostVS, kBlurFS);
+    composite_.sh = loadShaderGlsl(kPostVS, kCompositeFS);
 
     auto mat = [&](Prog& p, bool noise, bool depthMap) {
         Material m = LoadMaterialDefault();
@@ -166,16 +171,37 @@ bool Renderer::init(const Terrain& t, int width, int height) {
         return m;
     };
     // sun shadow map (depth texture) around the player aircraft
-    shadowP_.sh = LoadShaderFromMemory(kShadowVS, kShadowFS);
+    shadowP_.sh = loadShaderGlsl(kShadowVS, kShadowFS);
     shadowMat_ = LoadMaterialDefault();
     shadowMat_.shader = shadowP_.sh;
     shadowRT_.id = rlLoadFramebuffer();
     if (shadowRT_.id) {
         rlEnableFramebuffer(shadowRT_.id);
-        shadowRT_.texture.id = rlLoadTexture(nullptr, kShadowSize, kShadowSize, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE, 1);
+#ifdef __EMSCRIPTEN__
+        const int colorFmt = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;  // WebGL 2 cannot render to LUMINANCE
+#else
+        const int colorFmt = PIXELFORMAT_UNCOMPRESSED_GRAYSCALE;
+#endif
+        shadowRT_.texture.id = rlLoadTexture(nullptr, kShadowSize, kShadowSize, colorFmt, 1);
         shadowRT_.texture.width = shadowRT_.texture.height = kShadowSize;
-        shadowRT_.texture.format = PIXELFORMAT_UNCOMPRESSED_GRAYSCALE; shadowRT_.texture.mipmaps = 1;
+        shadowRT_.texture.format = colorFmt; shadowRT_.texture.mipmaps = 1;
+#ifdef __EMSCRIPTEN__
+        // WebGL 2 needs a sized depth format (raylib passes the unsized WebGL 1 one)
+        {
+            GLuint id = 0;
+            glGenTextures(1, &id);
+            glBindTexture(GL_TEXTURE_2D, id);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, kShadowSize, kShadowSize, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            shadowRT_.depth.id = id;
+        }
+#else
         shadowRT_.depth.id = rlLoadTextureDepth(kShadowSize, kShadowSize, false);
+#endif
         shadowRT_.depth.width = shadowRT_.depth.height = kShadowSize;
         rlFramebufferAttach(shadowRT_.id, shadowRT_.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
         rlFramebufferAttach(shadowRT_.id, shadowRT_.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);

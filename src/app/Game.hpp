@@ -1,6 +1,7 @@
 // Application: screens, game modes, fixed-step simulation loop, cameras, audio/HUD glue,
 // screenshot capture and benchmark modes.
 #pragma once
+#include <chrono>
 
 #include "../audio/Audio.hpp"
 #include "../combat/Combat.hpp"
@@ -38,8 +39,14 @@ enum class GameMode { None, Mission01, Arena };
 class Game {
 public:
     int run(const Options& opt);
+#ifdef __EMSCRIPTEN__
+    void webTick();
+#endif
 
 private:
+#ifdef __EMSCRIPTEN__
+    std::chrono::steady_clock::time_point webLast_{};
+#endif
     // lifecycle
     void initWindow();
     void shutdown();
