@@ -1,4 +1,5 @@
 name: ci
+# Linux unit tests. The macOS build, tests and release live in build.yml.
 on: [push, pull_request]
 jobs:
   tests-linux:
@@ -6,13 +7,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cmake -S . -B build -DSKYFALL_BUILD_GAME=OFF -DCMAKE_BUILD_TYPE=Release
-      - run: cmake --build build --parallel 2
-      - run: ctest --test-dir build --output-on-failure
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: brew install raylib
-      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --parallel 2
       - run: ctest --test-dir build --output-on-failure
