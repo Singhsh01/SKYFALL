@@ -159,7 +159,7 @@ bool Renderer::init(const Terrain& t, const WorldLayout& layout, int width, int 
     dressing_.build(t, layout, BuildingStyle::Desert, true);
     for (int s = 0; s < 6; ++s) {
         jets_[s] = buildJetModel(static_cast<AirframeStyle>(s));
-        TraceLog(LOG_INFO, "SKYFALL: jet model %d: %d triangles (body)", s, jets_[s].body.vertexCount / 3);
+        TraceLog(LOG_INFO, "SKYFALL: jet model %d: LOD triangles %d / %d / %d", s, jets_[s].triangles(0), jets_[s].triangles(1), jets_[s].triangles(2));
     }
     flame_ = buildFlameMesh();
     missile_ = buildMissileMesh();
@@ -1107,7 +1107,18 @@ void Renderer::drawTanker(const FrameParams& f) {
 void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA, Vector3 paintB, float camo,
                             float gearPos, float stabDeg, float throttle, float ab, float hitFlash, float damage,
                             const FrameParams& f, bool canopy) {
+    JetPose p;
+    p.gear = gearPos; p.pitch = -stabDeg / 15.0f; p.throttle = throttle; p.ab = ab; p.hitFlash = hitFlash; p.damage = damage;
+    p.flaps = gearPos > 0.5f ? 20.0f : 0.0f;
+    drawJetModel(style, M, paintA, paintB, camo, p, f, canopy);
+}
+
+void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA, Vector3 paintB, float camo, const JetPose& pose,
+                            const FrameParams& f, bool canopy) {
     const JetModel& jm = jets_[static_cast<int>(style)];
+    Vector3 origin = {M.m12, M.m13, M.m14};
+    int lod = jetLod(Vector3Distance(origin, f.cam.position) * (f.cam.fovy / 70.0f));
+    const JetLod& L = jm.lod[lod];
     jet_.setV3("uPaintA", paintA);
     jet_.setV3("uPaintB", paintB);
     jet_.setV3("uPaintC", g_paintC);
@@ -1115,39 +1126,91 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
     jet_.setF("uRoughness", g_paintRough);
     g_paintC = {0, 0, 0};
     g_paintRough = 0.42f;
-    jet_.setF("uHitFlash", hitFlash);
-    jet_.setF("uDamage", damage);
+    jet_.setF("uHitFlash", pose.hitFlash);
+    jet_.setF("uDamage", pose.damage);
     rlDisableBackfaceCulling();
-    drawMeshC(jm.body, jetMat_, M);
-    if (canopy) drawMeshC(jm.canopy, jetMat_, M);
+    drawMeshC(L.body, jetMat_, M);
+    if (canopy) drawMeshC(L.canopy, jetMat_, M);
     drawCalls_ += 2;
-    if (jm.stabL.vertexCount) {
-        float a = stabDeg * DEG2RAD;
-        Matrix sl = MatrixMultiply(MatrixMultiply(MatrixRotateZ(a), MatrixTranslate(jm.stabPivotL.x, jm.stabPivotL.y, jm.stabPivotL.z)), M);
-        Matrix sr = MatrixMultiply(MatrixMultiply(MatrixRotateZ(a), MatrixTranslate(jm.stabPivotR.x, jm.stabPivotR.y, jm.stabPivotR.z)), M);
-        drawMeshC(jm.stabL, jetMat_, sl);
-        drawMeshC(jm.stabR, jetMat_, sr);
-        drawCalls_ += 2;
+    // moving parts (LOD 0): control surfaces follow the stick, nozzles vector, wheels roll
+    const float D = DEG2RAD;
+    Matrix gearM = MatrixMultiply(MatrixTranslate(0, (1.0f - pose.gear) * 1.6f + pose.compress, 0), M);
+    auto nozzleAngle = [&]() { return jm.vectoring ? -pose.pitch * 15.0f * D : 0.0f; };
+    for (const JetPart& part : L.parts) {
+        float a = 0;
+        Matrix base = M;
+        switch (part.kind) {
+            case JetPartKind::Aileron: {
+                // a damaged left wing loses its aileron
+                if (pose.damage > 0.72f && part.side < 0) continue;
+                float down = -pose.roll * 20.0f * part.side;
+                if (jm.tailless) down += -pose.pitch * 14.0f;
+                a = down * part.side * D;
+                break;
+            }
+            case JetPartKind::Flap: {
+                float down = pose.flaps;
+                if (jm.tailless) down += -pose.pitch * 14.0f - pose.roll * 10.0f * part.side;
+                a = down * part.side * D;
+                break;
+            }
+            case JetPartKind::Rudder: a = pose.yaw * 22.0f * D; break;
+            case JetPartKind::Canard: a = pose.pitch * 12.0f * D; break;
+            case JetPartKind::Stab:
+                if (pose.damage > 0.86f && part.side > 0) continue;   // shot off
+                a = (-pose.pitch * 15.0f + pose.roll * 4.0f * part.side) * D;
+                break;
+            case JetPartKind::Nozzle: a = nozzleAngle(); break;
+            case JetPartKind::Wheel:
+                if (pose.gear <= 0.02f) continue;
+                a = -pose.wheelSpin;
+                base = gearM;
+                break;
+        }
+        Matrix T = MatrixMultiply(MatrixMultiply(MatrixRotate(part.axis, a), MatrixTranslate(part.pivot.x, part.pivot.y, part.pivot.z)), base);
+        drawMeshC(part.mesh, jetMat_, T);
+        ++drawCalls_;
     }
-    if (gearPos > 0.02f) {
-        Matrix g = MatrixMultiply(MatrixTranslate(0, (1.0f - gearPos) * 1.6f, 0), M);
-        drawMeshC(jm.gear, jetMat_, g);
+    if (pose.gear > 0.02f) {
+        drawMeshC(lod == 0 ? jm.gear : jm.gearLo, jetMat_, gearM);
         ++drawCalls_;
     }
     rlEnableBackfaceCulling();
-    if (throttle > 0.02f || ab > 0.01f) {
+    // lights: red / green wingtips, white tail, flashing strobe, landing light with the gear down
+    if (pose.lights && lod < 2) {
+        auto world = [&](Vector3 b) { return Vector3Transform(b, M); };
+        float d = Vector3Distance(origin, f.cam.position);
+        float s0 = std::clamp(0.35f + d * 0.004f, 0.35f, 4.0f);
+        lights_.push_back({world(jm.wingtips[0]), s0, Color{255, 40, 30, 255}});
+        lights_.push_back({world(jm.wingtips[1]), s0, Color{40, 255, 90, 255}});
+        lights_.push_back({world(jm.tailLight), s0 * 0.8f, Color{255, 255, 255, 220}});
+        double ph = std::fmod(f.time * 1.1 + pose.id * 0.37, 1.0);
+        if (ph < 0.06) lights_.push_back({world(jm.strobe), s0 * 2.2f, Color{255, 255, 255, 255}});
+        if (pose.gear > 0.9f)
+            lights_.push_back({Vector3Transform(Vector3Add(jm.landingLight, {0.1f, 0, 0}), gearM), s0 * 2.5f, Color{255, 246, 220, 255}});
+    }
+    if (pose.throttle > 0.02f || pose.ab > 0.01f) {
         setAtmosphere(flameP_, f);
-        flameP_.setF("uThrottle", throttle);
-        flameP_.setF("uAb", ab);
-        flameP_.setV3("uAxis", Vector3Normalize({-M.m0, -M.m1, -M.m2}));
+        flameP_.setF("uThrottle", pose.throttle);
+        flameP_.setF("uAb", pose.ab);
+        // speed and altitude shape the plume: thinner air -> longer, wider plume; high dynamic
+        // pressure -> shorter, tighter plume with closer shock diamonds
+        float rho = std::exp(-pose.altitude / 8500.0f);
+        float speedK = std::clamp(1.0f - 0.22f * pose.mach * rho, 0.6f, 1.0f);
+        flameP_.setF("uDiamond", 23.0f * (1.0f + 0.5f * pose.mach * rho));
+        float na = lod == 0 ? nozzleAngle() : 0.0f;
+        Vector3 axis = Vector3Transform({-cosf(na), -sinf(na), 0}, MatrixMultiply(M, MatrixTranslate(-origin.x, -origin.y, -origin.z)));
+        flameP_.setV3("uAxis", Vector3Normalize(axis));
         rlDisableDepthMask();
         rlDisableBackfaceCulling();
         BeginBlendMode(BLEND_ADDITIVE);
         for (int e = 0; e < jm.nozzleCount; ++e) {
-            float pulse = 1.0f + 0.06f * std::sin(static_cast<float>(f.time) * 31.0f + e * 1.7f) * ab;
-            float len = (1.2f + 1.5f * throttle + 7.0f * ab) * pulse;
-            float r = jm.nozzleRadius * (0.85f + 0.2f * ab);
-            Matrix F = MatrixMultiply(MatrixMultiply(MatrixScale(len, r, r), MatrixTranslate(jm.nozzles[e].x, jm.nozzles[e].y, jm.nozzles[e].z)), M);
+            float pulse = 1.0f + 0.06f * std::sin(static_cast<float>(f.time) * 31.0f + e * 1.7f) * pose.ab;
+            float len = (1.2f + 1.5f * pose.throttle + 7.0f * pose.ab * (0.75f + 0.5f * (1.0f - rho))) * pulse * speedK;
+            float r = jm.nozzleRadius * (0.85f + 0.2f * pose.ab) * (1.0f + 0.25f * (1.0f - rho));
+            Vector3 pv = jm.nozzlePivot[e], ex = jm.nozzles[e];
+            Matrix vec = MatrixMultiply(MatrixMultiply(MatrixTranslate(-pv.x, -pv.y, -pv.z), MatrixRotateZ(na)), MatrixTranslate(pv.x, pv.y, pv.z));
+            Matrix F = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixScale(len, r, r), MatrixTranslate(ex.x, ex.y, ex.z)), vec), M);
             drawMeshC(flame_, flameMat_, F);
             ++drawCalls_;
         }
@@ -1157,17 +1220,67 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
     }
 }
 
+void Renderer::drawLightSprites(const FrameParams& f) {
+    if (lights_.empty()) return;
+    BeginShaderMode(particle_.sh);
+    particle_.setF("uIntensity", 3.0f);
+    rlDisableDepthMask();
+    BeginBlendMode(BLEND_ADDITIVE);
+    rlSetTexture(world_.glow.id);
+    Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
+    Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, f.cam.up));
+    Vector3 up = Vector3CrossProduct(right, fwd);
+    rlBegin(RL_QUADS);
+    for (const LightSprite& l : lights_) {
+        Vector3 r = Vector3Scale(right, l.size), u = Vector3Scale(up, l.size);
+        rlColor4ub(l.col.r, l.col.g, l.col.b, l.col.a);
+        Vector3 c0 = Vector3Subtract(Vector3Subtract(l.pos, r), u), c1 = Vector3Add(Vector3Subtract(l.pos, u), r);
+        Vector3 c2 = Vector3Add(Vector3Add(l.pos, r), u), c3 = Vector3Add(Vector3Subtract(l.pos, r), u);
+        rlTexCoord2f(0, 1); rlVertex3f(c0.x, c0.y, c0.z);
+        rlTexCoord2f(1, 1); rlVertex3f(c1.x, c1.y, c1.z);
+        rlTexCoord2f(1, 0); rlVertex3f(c2.x, c2.y, c2.z);
+        rlTexCoord2f(0, 0); rlVertex3f(c3.x, c3.y, c3.z);
+    }
+    rlEnd();
+    rlSetTexture(0);
+    rlDrawRenderBatchActive();
+    EndBlendMode();
+    rlEnableDepthMask();
+    EndShaderMode();
+    lights_.clear();
+}
+
 void Renderer::drawJet(const Jet& j, const FrameParams& f, bool canopy, Vec3 origin) {
     const FlightState& s = j.fm->state();
     Matrix M = bodyMatrix(s.pos - origin, s.q);
     Vector3 pb;
     float camo;
     Vector3 pa = paintFor(j, pb, camo);
-    float throttleVis = static_cast<float>(std::clamp((s.rpm - 0.6) / 0.4, 0.0, 1.0));
-    float stab = static_cast<float>(-j.lastInput.pitch * 15.0 + j.lastInput.roll * 0.0);
+    JetPose p;
+    p.gear = static_cast<float>(s.gearPos);
+    p.throttle = static_cast<float>(std::clamp((s.rpm - 0.6) / 0.4, 0.0, 1.0));
+    p.ab = static_cast<float>(s.abLevel);
+    p.hitFlash = static_cast<float>(j.hitFlash * 3.0);
+    p.damage = static_cast<float>(1.0 - j.health / 100.0);
+    p.pitch = static_cast<float>(std::clamp(j.lastInput.pitch, -1.0, 1.0));
+    p.roll = static_cast<float>(std::clamp(j.lastInput.roll, -1.0, 1.0));
+    p.yaw = static_cast<float>(std::clamp(j.lastInput.yaw, -1.0, 1.0));
+    p.flaps = s.gearDown ? 22.0f : static_cast<float>(std::clamp((150.0 - s.airspeed) / 60.0, 0.0, 1.0) * 10.0);
+    p.mach = static_cast<float>(s.mach);
+    p.altitude = static_cast<float>(s.pos.y);
+    p.lights = true;
+    p.id = j.id;
+    // wheels roll with the ground speed; the oleos compress with weight on wheels
+    Spin& spin = wheelSpin_[j.id];
+    if (!f.isPip) {
+        double dt = spin.t < 0 ? 0.0 : std::clamp(f.time - spin.t, 0.0, 0.1);
+        spin.t = f.time;
+        if (s.onGround) spin.angle = static_cast<float>(std::fmod(spin.angle + s.airspeed / 0.42 * dt, 2.0 * kPi * 1000.0));
+    }
+    p.wheelSpin = spin.angle;
+    p.compress = s.onGround ? 0.12f : 0.0f;
     setAtmosphere(jet_, f);
-    drawJetModel(j.fm->profile().style, M, pa, pb, camo, static_cast<float>(s.gearPos), stab, throttleVis,
-                 static_cast<float>(s.abLevel), static_cast<float>(j.hitFlash * 3.0), static_cast<float>(1.0 - j.health / 100.0), f, canopy);
+    drawJetModel(j.fm->profile().style, M, pa, pb, camo, p, f, canopy);
 }
 
 void Renderer::drawShadows(const FrameParams& f) {
@@ -1326,14 +1439,10 @@ void Renderer::renderShadows(const FrameParams& f) {
         if (Vector3Distance(toRl(s.pos), focus) > 60.0f) continue;
         const JetModel& jm = jets_[static_cast<int>(j.fm->profile().style)];
         Matrix M = bodyMatrix(s.pos, s.q);
-        drawMeshC(jm.body, shadowMat_, M);
-        drawMeshC(jm.canopy, shadowMat_, M);
-        if (jm.stabL.vertexCount) {
-            float a = static_cast<float>(-j.lastInput.pitch * 15.0) * DEG2RAD;
-            drawMeshC(jm.stabL, shadowMat_, MatrixMultiply(MatrixMultiply(MatrixRotateZ(a), MatrixTranslate(jm.stabPivotL.x, jm.stabPivotL.y, jm.stabPivotL.z)), M));
-            drawMeshC(jm.stabR, shadowMat_, MatrixMultiply(MatrixMultiply(MatrixRotateZ(a), MatrixTranslate(jm.stabPivotR.x, jm.stabPivotR.y, jm.stabPivotR.z)), M));
-        }
-        if (s.gearPos > 0.02) drawMeshC(jm.gear, shadowMat_, MatrixMultiply(MatrixTranslate(0, (1.0f - static_cast<float>(s.gearPos)) * 1.6f, 0), M));
+        // the shadow uses the merged LOD 1 mesh (stabilisers included, a fraction of the triangles)
+        drawMeshC(jm.lod[1].body, shadowMat_, M);
+        drawMeshC(jm.lod[1].canopy, shadowMat_, M);
+        if (s.gearPos > 0.02) drawMeshC(jm.gearLo, shadowMat_, MatrixMultiply(MatrixTranslate(0, (1.0f - static_cast<float>(s.gearPos)) * 1.6f, 0), M));
     }
     rlEnableBackfaceCulling();
     EndMode3D();
@@ -1452,6 +1561,7 @@ void Renderer::renderWorld(const FrameParams& f) {
     if (f.battle)
         effects_.draw(f.cam, *f.battle, f.L, particle_.sh, particle_.loc("uIntensity"), world_.edgeLights, f.showRunwayLights);
     if (pm) profMark("particles");
+    drawLightSprites(f);
     drawRain(f);
     EndMode3D();
     EndTextureMode();
@@ -1505,6 +1615,41 @@ void Renderer::composite(const FrameParams& f) {
         blur(bloomC_, bloomD_, {3, 0}, w_ / 4, h_ / 4);
         blur(bloomD_, bloomC_, {0, 3}, w_ / 4, h_ / 4);
     }
+    {
+        // heat-haze footprints behind the nozzles of nearby jets running hot
+        float hz[16] = {0};
+        int nh = 0;
+        if (f.battle && !f.isPip) {
+            float th = tanf(f.cam.fovy * DEG2RAD * 0.5f);
+            for (const auto& jp : f.battle->jets()) {
+                if (nh >= 4) break;
+                const Jet& j = *jp;
+                if (!j.alive) continue;
+                const FlightState& s = j.fm->state();
+                double heat = std::clamp((s.rpm - 0.75) / 0.25, 0.0, 1.0) * 0.6 + s.abLevel * 0.6;
+                if (heat < 0.05) continue;
+                const JetModel& jm = jets_[static_cast<int>(j.fm->profile().style)];
+                for (int e = 0; e < jm.nozzleCount && nh < 4; ++e) {
+                    Vec3 ex = s.pos + s.q.rotate(Vec3{jm.nozzles[e].x - 2.5, jm.nozzles[e].y, jm.nozzles[e].z});
+                    Vector3 p = toRl(ex);
+                    Vector3 dv = Vector3Subtract(p, f.cam.position);
+                    float dist = Vector3Length(dv);
+                    if (dist > 400.0f || dist < 1.0f) continue;
+                    if (Vector3DotProduct(dv, Vector3Subtract(f.cam.target, f.cam.position)) <= 0) continue;
+                    Vector2 sp = GetWorldToScreenEx(p, f.cam, w_, h_);
+                    float u = sp.x / w_, v = 1.0f - sp.y / h_;
+                    if (u < -0.2f || u > 1.2f || v < -0.2f || v > 1.2f) continue;
+                    float rad = (jm.nozzleRadius * 3.2f / dist) / th * 0.5f;
+                    hz[nh * 4 + 0] = u; hz[nh * 4 + 1] = v; hz[nh * 4 + 2] = std::clamp(rad, 0.004f, 0.25f);
+                    hz[nh * 4 + 3] = static_cast<float>(heat);
+                    ++nh;
+                }
+            }
+        }
+        int loc = composite_.loc("uHaze");
+        if (loc >= 0) SetShaderValueV(composite_.sh, loc, hz, SHADER_UNIFORM_VEC4, 4);
+        composite_.setF("uHazeCount", static_cast<float>(nh));
+    }
     BeginShaderMode(composite_.sh);
     composite_.setF("uExposure", f.L.exposure * f.exposureBoost);
     composite_.setF("uBloomStrength", f.bloom ? 0.16f : 0.0f);
@@ -1555,6 +1700,7 @@ void Renderer::renderPip(const FrameParams& f, int w, int h) {
     // tone map into the LDR picture-in-picture texture (no bloom, a little more grain)
     BeginTextureMode(pipOut_);
     ClearBackground(BLACK);
+    composite_.setF("uHazeCount", 0.0f);
     BeginShaderMode(composite_.sh);
     composite_.setF("uExposure", f.L.exposure * f.exposureBoost);
     composite_.setF("uBloomStrength", 0.0f);

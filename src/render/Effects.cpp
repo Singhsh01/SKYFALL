@@ -263,15 +263,30 @@ void Effects::update(double dt, const Battle& b, const Lighting& L, Vector3 camP
                 long long key = 2000000000LL + j.id * 10LL + side + gen * 100000LL;
                 emitTrailPoint(key, toRl(wt), 0.25f, 1.6f, 1.3f, V(0.95f, 0.96f, 1.0f), 0.55f, 3.0f);
             }
-            // condensation cloud over the wing at very high G
-            if (s.gLoad > 6.5 && rng_.uniform() < 0.6) {
-                Vec3 c = s.pos + s.q.rotate(Vec3{-1.0, 0.8, rng_.range(-4, 4)});
-                spawnSmokePuff(toRl(c), toRl(s.vel * 0.9), 2.0f, 5.0f, 0.25f, V(1, 1, 1), 0.35f);
+            // condensation sheets over the wings: denser and wider with G (moist low-level air helps)
+            float humid = static_cast<float>(std::clamp(1.0 - s.pos.y / 7000.0, 0.25, 1.0));
+            int sheets = s.gLoad > 6.5 ? 12 : (s.gLoad > 5.0 ? 7 : 3);
+            for (int k = 0; k < sheets; ++k) {
+                if (rng_.uniform() > 0.75 * humid) continue;
+                double span = rng_.range(1.2, std::max(1.5, std::fabs(jm->wingtips[1].z) - 0.5)) * (rng_.uniform() < 0.5 ? -1.0 : 1.0);
+                Vec3 c = s.pos + s.q.rotate(Vec3{rng_.range(-3.0, 0.5), 0.55, span});
+                spawnSmokePuff(toRl(c), toRl(s.vel * 0.985), 0.7f, 1.7f, 0.17f, V(1, 1, 1), static_cast<float>(0.10 + 0.025 * (s.gLoad - 4.0)));
             }
             vaporOn_[j.id] = true;
         } else if (vaporOn_[j.id]) {
             vaporOn_[j.id] = false;
             vaporGen_[j.id] = gen + 1;
+        }
+        // transonic shock collar ("vapour cone") just behind the canopy near Mach 1 in moist air
+        if (s.mach > 0.94 && s.mach < 1.05 && s.pos.y < 6500 && jm) {
+            float k = static_cast<float>(1.0 - std::fabs(s.mach - 0.995) / 0.055);
+            float humid = static_cast<float>(std::clamp(1.0 - s.pos.y / 6500.0, 0.2, 1.0));
+            for (int i = 0; i < 16; ++i) {
+                if (rng_.uniform() > k * humid) continue;
+                double a = rng_.range(0, 2 * kPi), r = rng_.range(1.4, 2.6) * (jm->length / 19.0);
+                Vec3 c = s.pos + s.q.rotate(Vec3{rng_.range(-3.5, -1.0), std::sin(a) * r * 0.8, std::cos(a) * r});
+                spawnSmokePuff(toRl(c), toRl(s.vel * 0.99), 0.9f, 2.0f, 0.18f, V(1, 1, 1), 0.28f * k);
+            }
         }
         // damage smoke
         if (j.health < 60 && rng_.uniform() < 0.5) {

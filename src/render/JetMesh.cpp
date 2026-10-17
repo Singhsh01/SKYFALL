@@ -11,6 +11,8 @@ namespace sky {
 namespace {
 
 constexpr unsigned char kPaint = 255, kMetal = 128, kGlass = 0;
+// mesh resolution of the level of detail being built
+int g_ringR = 40, g_sub = 6, g_chordN = 14, g_spanN = 6;
 
 struct Section { float x, w, ht, hb, chine; };
 struct Planform {
@@ -57,7 +59,7 @@ void quadOut(MeshBuilder& mb, Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector
 std::vector<Vector2> sectionRing(const Section& s, float pu, float pl) {
     // (z, y) points of a closed superellipse section with a chine line at y = s.chine.
     // Higher exponents give squarer, "stealthy" sections; the chine reads as a crisp edge.
-    const int R = 40;
+    const int R = g_ringR;
     std::vector<Vector2> r;
     r.reserve(R);
     for (int k = 0; k < R; ++k) {
@@ -144,7 +146,7 @@ void loft(MeshBuilder& mb, const std::vector<float>& xs, const std::vector<std::
 /// with slight camber, cosine chord spacing, smooth normals, closed tip.
 void airfoilSurface(MeshBuilder& mb, Vector3 Rle, Vector3 Rte, Vector3 Tle, Vector3 Tte, Vector3 thickDir,
                     float tcRoot, float tcTip, Color col, Color under) {
-    const int C = 14, S = 6;
+    const int C = g_chordN, S = g_spanN;
     auto naca = [](float u, float tc) {
         return 5.0f * tc * (0.2969f * sqrtf(u) - 0.1260f * u - 0.3516f * u * u + 0.2843f * u * u * u - 0.1036f * u * u * u * u);
     };
@@ -468,35 +470,136 @@ Geo geoFor(AirframeStyle s) {
 
 }  // namespace
 
-JetModel buildJetModel(AirframeStyle style) {
-    Geo g = geoFor(style);
+namespace {
+
+Vector3 V3s(float x, float y, float z) { return {x, y, z}; }
+
+/// Planform evaluated at a spanwise position z (right side): leading / trailing edge x and height.
+void planformAt(const Planform& p, float z, float& le, float& te, float& y) {
+    float t = std::clamp((z - p.rootZ) / std::max(0.01f, p.tipZ - p.rootZ), 0.0f, 1.0f);
+    le = p.rootLE + (p.tipLE - p.rootLE) * t;
+    te = p.rootTE + (p.tipTE - p.rootTE) * t;
+    y = p.y + p.tipDy * t;
+}
+
+/// Trailing-edge control surface between spanwise positions z0..z1 occupying the aft `frac`
+/// of the chord. Built relative to the middle of its hinge line.
+JetPart controlSurface(const Planform& p, float z0, float z1, float frac, bool right, JetPartKind kind, Color col) {
+    float sgn = right ? 1.0f : -1.0f;
+    float le0, te0, y0, le1, te1, y1;
+    planformAt(p, z0, le0, te0, y0);
+    planformAt(p, z1, le1, te1, y1);
+    Vector3 h0 = {te0 + frac * (le0 - te0), y0, sgn * z0}, h1 = {te1 + frac * (le1 - te1), y1, sgn * z1};
+    Vector3 t0 = {te0, y0, sgn * z0}, t1 = {te1, y1, sgn * z1};
+    Vector3 pivot = Vector3Scale(Vector3Add(h0, h1), 0.5f);
+    float rootChord = std::max(0.1f, p.rootLE - p.rootTE);
+    float tc = std::clamp(p.thick / rootChord, 0.025f, 0.09f) * 1.6f;
+    MeshBuilder mb;
+    Color under = {static_cast<unsigned char>(col.r * 0.94f), static_cast<unsigned char>(col.g * 0.94f), static_cast<unsigned char>(col.b * 0.94f), col.a};
+    airfoilSurface(mb, Vector3Subtract(h0, pivot), Vector3Subtract(t0, pivot), Vector3Subtract(h1, pivot), Vector3Subtract(t1, pivot),
+                   {0, 1, 0}, tc, tc * 0.8f, col, under);
+    JetPart part;
+    part.mesh = mb.build();
+    part.pivot = pivot;
+    part.axis = Vector3Normalize(Vector3Subtract(right ? h1 : h0, right ? h0 : h1));   // points outboard
+    if (!right) part.axis = Vector3Normalize(Vector3Subtract(h1, h0));                  // outboard (-z) for the left wing
+    part.kind = kind;
+    part.side = sgn;
+    return part;
+}
+
+/// The wing with its control surfaces cut away (LOD 0) or whole (LOD 1/2).
+Planform coreOf(const Planform& p, float frac) {
+    Planform q = p;
+    q.rootTE = p.rootTE + frac * (p.rootLE - p.rootTE);
+    q.tipTE = p.tipTE + frac * (p.tipLE - p.tipTE);
+    return q;
+}
+
+void buildLod(JetModel& jm, const Geo& g, AirframeStyle style, int lod) {
+    const bool animated = lod == 0;
     MeshBuilder mb;
     // fuselage
     std::vector<float> xs;
     std::vector<std::vector<Vector2>> rings;
-    for (const Section& s : smoothStations(g.fus, 6)) { xs.push_back(s.x); rings.push_back(sectionRing(s, g.pu, g.pl)); }
+    for (const Section& s : smoothStations(g.fus, g_sub)) { xs.push_back(s.x); rings.push_back(sectionRing(s, g.pu, g.pl)); }
     loft(mb, xs, rings, paint(), 0.0f, 0.0f, true, false);
     // canopy (separate mesh)
     MeshBuilder cb;
     canopy(cb, g);
-    // wings
-    wingSurface(mb, g.wing, true, paint());
-    wingSurface(mb, g.wing, false, paint());
+    JetLod& L = jm.lod[lod];
+    // wings: on LOD 0 the aft 22 % of the chord becomes flaps (inboard) and ailerons (outboard)
+    const float cf = 0.22f;
+    Planform wing = animated ? coreOf(g.wing, cf) : g.wing;
+    wingSurface(mb, wing, true, paint());
+    wingSurface(mb, wing, false, paint());
+    if (animated) {
+        float zMid = g.wing.rootZ + (g.wing.tipZ - g.wing.rootZ) * 0.52f;
+        for (bool right : {true, false}) {
+            L.parts.push_back(controlSurface(g.wing, g.wing.rootZ + 0.05f, zMid, cf, right, JetPartKind::Flap, paint(236)));
+            L.parts.push_back(controlSurface(g.wing, zMid, g.wing.tipZ, cf, right, JetPartKind::Aileron, paint(236)));
+        }
+    }
     if (g.lerx) { wingSurface(mb, g.lerxP, true, paint(245)); wingSurface(mb, g.lerxP, false, paint(245)); }
     if (g.canards) {
-        wingSurface(mb, g.canard, true, paint(235));
-        wingSurface(mb, g.canard, false, paint(235));
+        if (animated) {
+            for (int side = 0; side < 2; ++side) {
+                MeshBuilder sb;
+                Planform p = g.canard;
+                float pivotX = p.rootLE + (p.rootTE - p.rootLE) * 0.4f;
+                Planform q = p;
+                q.rootLE -= pivotX; q.rootTE -= pivotX; q.tipLE -= pivotX; q.tipTE -= pivotX; q.y = 0;
+                wingSurface(sb, q, side == 1, paint(235));
+                JetPart part;
+                part.mesh = sb.build();
+                part.pivot = {pivotX, p.y, 0};
+                part.axis = {0, 0, 1};
+                part.kind = JetPartKind::Canard;
+                part.side = side == 1 ? 1.0f : -1.0f;
+                L.parts.push_back(part);
+            }
+        } else {
+            wingSurface(mb, g.canard, true, paint(235));
+            wingSurface(mb, g.canard, false, paint(235));
+        }
     }
-    // tails
-    for (const TailDef& t : g.tails) {
-        if (t.z == 0.0f) tail(mb, t, 1.0f, paint(245));
-        else { tail(mb, t, 1.0f, paint(245)); tail(mb, t, -1.0f, paint(245)); }
+    // tails: on LOD 0 the aft 28 % of each fin is a rudder
+    for (const TailDef& t0 : g.tails) {
+        const float rf = 0.28f;
+        TailDef t = t0;
+        if (animated) { t.rootTE = t0.rootTE + rf * (t0.rootLE - t0.rootTE); t.tipTE = t0.tipTE + rf * (t0.tipLE - t0.tipTE); }
+        std::vector<float> sides = t.z == 0.0f ? std::vector<float>{1.0f} : std::vector<float>{1.0f, -1.0f};
+        for (float side : sides) {
+            tail(mb, t, side, paint(245));
+            if (!animated) continue;
+            // rudder: hinge along the new trailing edge, from the root to 92 % of the fin height
+            float c = cosf(t0.cant), sn = sinf(t0.cant);
+            float sd = t0.z == 0.0f ? 0.0f : side;
+            Vector3 up = {0, c, sd * sn};
+            Vector3 base = {0, t0.y, sd * t0.z};
+            auto P = [&](float x, float h) { return Vector3{x, base.y + up.y * h, base.z + up.z * h}; };
+            float hTop = t0.height * 0.92f, u = hTop / t0.height;
+            float teTop = t0.rootTE + (t0.tipTE - t0.rootTE) * u, leTop = t0.rootLE + (t0.tipLE - t0.rootLE) * u;
+            Vector3 hb = P(t.rootTE, -0.1f), ht = P(teTop + rf * (leTop - teTop), hTop);
+            Vector3 tb = P(t0.rootTE, -0.1f), tt = P(teTop, hTop);
+            Vector3 pivot = Vector3Scale(Vector3Add(hb, ht), 0.5f);
+            Vector3 n = {0, -up.z, up.y};
+            if (n.z * (sd == 0 ? 1.0f : sd) < 0) n = Vector3Negate(n);
+            MeshBuilder rb;
+            airfoilSurface(rb, Vector3Subtract(hb, pivot), Vector3Subtract(tb, pivot), Vector3Subtract(ht, pivot), Vector3Subtract(tt, pivot), n,
+                           0.08f, 0.06f, paint(236), paint(236));
+            JetPart part;
+            part.mesh = rb.build();
+            part.pivot = pivot;
+            part.axis = Vector3Normalize(Vector3Subtract(ht, hb));
+            part.kind = JetPartKind::Rudder;
+            part.side = sd;
+            L.parts.push_back(part);
+        }
     }
     // nacelles (Flanker family)
-    if (g.nacelles) {
-        for (float sgn : {-1.0f, 1.0f}) tube(mb, g.nacX0, g.nacX1, g.nacR * 0.95f, g.nacR, g.nacY, sgn * g.nacZ, 12, paint(235));
-        // tail boom "stinger"
-    }
+    if (g.nacelles)
+        for (float sgn : {-1.0f, 1.0f}) tube(mb, g.nacX0, g.nacX1, g.nacR * 0.95f, g.nacR, g.nacY, sgn * g.nacZ, lod == 2 ? 8 : 12, paint(235));
     // intakes
     {
         Color dark = metal(18, 18, 20);
@@ -505,94 +608,188 @@ JetModel buildJetModel(AirframeStyle style) {
             float z = g.ventral ? 0.0f : sgn * g.intakeZ;
             float x0 = g.intakeX, x1 = g.intakeX - 3.0f;
             float hw = g.intakeW * 0.5f, hh = g.intakeH * 0.5f, y = g.intakeY;
-            // intake duct box (paint) with dark face
             Vector3 c = {x0 - 1.5f, y, z};
-            MeshBuilder& m = mb;
             Vector3 f0 = {x0, y - hh, z - hw}, f1 = {x0, y + hh, z - hw}, f2 = {x0 + 0.25f, y + hh, z + hw}, f3 = {x0, y - hh, z + hw};
             if (sgn < 0 && !g.ventral) { f0.z = z + hw; f1.z = z + hw; f2.z = z - hw; f3.z = z - hw; }
             Vector3 b0 = {x1, y - hh * 0.8f, f0.z}, b1 = {x1, y + hh * 0.8f, f1.z}, b2 = {x1, y + hh * 0.8f, f2.z}, b3 = {x1, y - hh * 0.8f, f3.z};
-            quadOut(m, f0, f1, b1, b0, c, paint(235));
-            quadOut(m, f1, f2, b2, b1, c, paint(235));
-            quadOut(m, f2, f3, b3, b2, c, paint(235));
-            quadOut(m, f3, f0, b0, b3, c, paint(220));
-            // recessed dark face
+            quadOut(mb, f0, f1, b1, b0, c, paint(235));
+            quadOut(mb, f1, f2, b2, b1, c, paint(235));
+            quadOut(mb, f2, f3, b3, b2, c, paint(235));
+            quadOut(mb, f3, f0, b0, b3, c, paint(220));
+            // intake lip (thin metal edge) and a recessed dark duct face with a compressor-face disc
             Vector3 inset = {-0.15f, 0, 0};
-            quadOut(m, Vector3Add(f0, inset), Vector3Add(f1, inset), Vector3Add(f2, inset), Vector3Add(f3, inset), {x0 - 3.0f, y, z}, dark);
+            quadOut(mb, Vector3Add(f0, inset), Vector3Add(f1, inset), Vector3Add(f2, inset), Vector3Add(f3, inset), {x0 - 3.0f, y, z}, dark);
+            if (lod == 0) {
+                Vector3 lip = {0.03f, 0, 0};
+                quadOut(mb, Vector3Add(f1, lip), Vector3Add(f2, lip), Vector3Add(f2, Vector3{-0.05f, -0.05f, 0}), Vector3Add(f1, Vector3{-0.05f, -0.05f, 0}),
+                        {x0 - 1.0f, y - 1.0f, z}, metal(150, 150, 150));
+            }
         }
     }
-    // nozzles
-    JetModel jm;
+    // nozzles: part meshes on LOD 0 (thrust vectoring / visible petals), merged otherwise
     jm.nozzleCount = g.engines;
     jm.nozzleRadius = g.nozzleR;
     for (int e = 0; e < g.engines; ++e) {
         float z = g.engines == 1 ? 0.0f : (e == 0 ? -g.engineZ : g.engineZ);
         float y = g.nacelles ? g.nacY : -0.05f;
-        tube(mb, g.nozzleX + 0.4f, g.nozzleX - g.nozzleLen, g.nozzleR * 1.08f, g.nozzleR * 0.9f, y, z, g.squareNozzle ? 16 : 24,
+        Vector3 pivot = {g.nozzleX + 0.4f, y, z};
+        MeshBuilder nb;
+        MeshBuilder& m = animated ? nb : mb;
+        float ox = animated ? pivot.x : 0.0f, oy = animated ? pivot.y : 0.0f, oz = animated ? pivot.z : 0.0f;
+        int sides = g.squareNozzle ? 16 : (lod == 2 ? 10 : 24);
+        tube(m, g.nozzleX + 0.4f - ox, g.nozzleX - g.nozzleLen - ox, g.nozzleR * 1.08f, g.nozzleR * 0.9f, y - oy, z - oz, sides,
              metal(128, 124, 118), g.squareNozzle, g.squareNozzle ? 0.0f : 0.035f);
-        // inner liner (darker, slightly recessed)
-        tube(mb, g.nozzleX - g.nozzleLen + 0.02f, g.nozzleX - g.nozzleLen + 0.5f, g.nozzleR * 0.86f, g.nozzleR * 0.8f, y, z, g.squareNozzle ? 16 : 24,
+        tube(m, g.nozzleX - g.nozzleLen + 0.02f - ox, g.nozzleX - g.nozzleLen + 0.5f - ox, g.nozzleR * 0.86f, g.nozzleR * 0.8f, y - oy, z - oz, sides,
              metal(58, 52, 48), g.squareNozzle);
-        // inner dark disk at the exit
         Color inner = metal(25, 18, 14);
         for (int i = 0; i < 14; ++i) {
             float a0 = 2 * PI * i / 14, a1 = 2 * PI * (i + 1) / 14;
             float r = g.nozzleR * 0.85f;
-            Vector3 c = {g.nozzleX - g.nozzleLen + 0.15f, y, z};
-            triOut(mb, c, {c.x, y + sinf(a0) * r * (g.squareNozzle ? 0.7f : 1.0f), z + cosf(a0) * r}, {c.x, y + sinf(a1) * r * (g.squareNozzle ? 0.7f : 1.0f), z + cosf(a1) * r}, {c.x + 1, y, z}, inner);
+            Vector3 c = {g.nozzleX - g.nozzleLen + 0.15f - ox, y - oy, z - oz};
+            float sq = g.squareNozzle ? 0.7f : 1.0f;
+            triOut(m, c, {c.x, c.y + sinf(a0) * r * sq, c.z + cosf(a0) * r}, {c.x, c.y + sinf(a1) * r * sq, c.z + cosf(a1) * r}, {c.x + 1, c.y, c.z}, inner);
+        }
+        if (animated) {
+            JetPart part;
+            part.mesh = nb.build();
+            part.pivot = pivot;
+            part.axis = {0, 0, 1};
+            part.kind = JetPartKind::Nozzle;
+            part.engine = e;
+            L.parts.push_back(part);
         }
         jm.nozzles[e] = {g.nozzleX - g.nozzleLen + 0.1f, y, z};
+        jm.nozzlePivot[e] = pivot;
     }
-    // pylon missiles
-    for (int k = 0; k < g.pylonMissiles; ++k) {
-        float side = (k % 2) ? 1.0f : -1.0f;
-        float span = g.wing.rootZ + (g.wing.tipZ - g.wing.rootZ) * (k < 2 ? 0.55f : 0.85f);
-        float t = (span - g.wing.rootZ) / (g.wing.tipZ - g.wing.rootZ);
-        float xle = g.wing.rootLE + (g.wing.tipLE - g.wing.rootLE) * t, xte = g.wing.rootTE + (g.wing.tipTE - g.wing.rootTE) * t;
-        Vector3 c = {(xle + xte) * 0.5f, g.wing.y - 0.45f, side * span};
-        missileShape(mb, c, 3.6f, 0.09f, metal(210, 210, 205));
-        mb.box({c.x, g.wing.y - 0.22f, c.z}, {1.6f, 0.3f, 0.06f}, paint(200));
+    // pylons, missiles and (LOD 0) wingtip rails, pitot probe and antennas
+    if (lod < 2)
+        for (int k = 0; k < g.pylonMissiles; ++k) {
+            float side = (k % 2) ? 1.0f : -1.0f;
+            float span = g.wing.rootZ + (g.wing.tipZ - g.wing.rootZ) * (k < 2 ? 0.55f : 0.85f);
+            float le, te, wy;
+            planformAt(g.wing, span, le, te, wy);
+            Vector3 c = {(le + te) * 0.5f, wy - 0.45f, side * span};
+            missileShape(mb, c, 3.6f, 0.09f, metal(210, 210, 205));
+            mb.box({c.x, wy - 0.22f, c.z}, {1.6f, 0.3f, 0.06f}, paint(200));
+        }
+    if (lod == 0) {
+        float noseX = g.fus.front().x;
+        mb.cylinder({0, 0, 0}, 0.025f, 1.1f, 6, metal(190, 190, 190), MatrixMultiply(MatrixRotateZ(-PI / 2), MatrixTranslate(noseX - 0.2f, 0.0f, 0.0f)), 0.012f);
+        // blade antennas on the spine and belly
+        mb.box({-1.0f, g.fus[g.fus.size() / 2].ht + 0.12f, 0}, {0.5f, 0.24f, 0.03f}, paint(210));
+        mb.box({1.5f, -g.fus[g.fus.size() / 2].hb - 0.1f, 0}, {0.4f, 0.2f, 0.03f}, paint(210));
+        // formation-light strips (rendered with an emissive tint by the shader: material 0.5 + bright)
+        for (float sd : {-1.0f, 1.0f}) mb.box({-1.5f, 0.15f, sd * (g.fus[g.fus.size() / 2].w + 0.01f)}, {1.2f, 0.06f, 0.01f}, metal(120, 255, 140));
     }
-    bakeAmbientOcclusion(mb, {&mb});
-    jm.body = mb.build();
-    jm.canopy = cb.build();
-    jm.eye = {g.canX1 + (g.canX0 - g.canX1) * 0.40f, g.canY + g.canH * 0.62f, 0.0f};
+    if (lod < 2) bakeAmbientOcclusion(mb, {&mb});
+    L.body = mb.build();
+    L.canopy = cb.build();
 
-    // horizontal stabilisers as separate meshes around their pivot
+    // horizontal stabilisers (animated parts on LOD 0, static otherwise)
     if (g.stabs) {
         for (int side = 0; side < 2; ++side) {
-            MeshBuilder sb;
             Planform p = g.stab;
+            if (!animated) { wingSurface(mb, p, side == 1, paint(240)); continue; }
+            MeshBuilder sb;
             float pivotX = p.rootLE + (p.rootTE - p.rootLE) * 0.35f;
             Planform q = p;
-            q.rootLE -= pivotX; q.rootTE -= pivotX; q.tipLE -= pivotX; q.tipTE -= pivotX;
-            q.y = 0;
+            q.rootLE -= pivotX; q.rootTE -= pivotX; q.tipLE -= pivotX; q.tipTE -= pivotX; q.y = 0;
             wingSurface(sb, q, side == 1, paint(240));
-            Vector3 pivot = {pivotX, p.y, 0};
-            if (side == 0) { jm.stabL = sb.build(); jm.stabPivotL = pivot; }
-            else { jm.stabR = sb.build(); jm.stabPivotR = pivot; }
+            JetPart part;
+            part.mesh = sb.build();
+            part.pivot = {pivotX, p.y, 0};
+            part.axis = {0, 0, 1};
+            part.kind = JetPartKind::Stab;
+            part.side = side == 1 ? 1.0f : -1.0f;
+            L.parts.push_back(part);
+        }
+        if (!animated) {
+            UnloadMesh(L.body);
+            L.body = mb.build();   // rebuilt with the stabilisers merged in
         }
     }
+    (void)style;
+}
 
-    // landing gear (extended position)
-    MeshBuilder gb;
-    Color strut = metal(170, 170, 168), tyre = metal(22, 22, 24);
+void buildGear(JetModel& jm, const Geo& g) {
+    MeshBuilder gb, lo;
+    Color strut = metal(170, 170, 168), tyre = metal(22, 22, 24), hub = metal(150, 150, 152), door = paint(210);
     const float ground = -2.35f;
-    auto wheel = [&](Vector3 c, float r, float w) {
-        Matrix xf = MatrixMultiply(MatrixRotateX(PI / 2), MatrixTranslate(c.x, c.y, c.z));
-        gb.cylinder({0, -w / 2, 0}, r, w, 12, tyre, xf);
-    };
-    gb.cylinder({g.noseGearX, ground + 0.35f, 0}, 0.07f, -ground - 0.6f, 6, strut);
-    wheel({g.noseGearX, ground + 0.33f, 0}, 0.33f, 0.22f);
-    for (float sgn : {-1.0f, 1.0f}) {
-        gb.cylinder({g.mainGearX, ground + 0.45f, sgn * g.mainGearZ}, 0.1f, -ground - 0.5f, 6, strut);
-        wheel({g.mainGearX, ground + 0.45f, sgn * g.mainGearZ}, 0.45f, 0.3f);
-        gb.box({g.mainGearX, -0.9f, sgn * (g.mainGearZ - 0.1f)}, {1.6f, 1.0f, 0.05f}, paint(210));  // gear door
+    struct W { Vector3 c; float r, w; };
+    std::vector<W> wheels = {{{g.noseGearX, ground + 0.33f, 0}, 0.33f, 0.22f}};
+    for (float sgn : {-1.0f, 1.0f}) wheels.push_back({{g.mainGearX, ground + 0.45f, sgn * g.mainGearZ}, 0.45f, 0.3f});
+    for (MeshBuilder* m : {&gb, &lo}) {
+        // struts with an oleo (shiny lower section), torque links and doors
+        m->cylinder({g.noseGearX, ground + 0.35f, 0}, 0.07f, -ground - 0.6f, 6, strut);
+        m->cylinder({g.noseGearX, ground + 0.35f, 0}, 0.05f, 0.5f, 6, metal(220, 220, 225));
+        m->box({g.noseGearX + 0.12f, ground + 0.75f, 0}, {0.2f, 0.06f, 0.06f}, strut, MatrixRotateZ(0.6f));
+        for (float sgn : {-1.0f, 1.0f}) {
+            m->cylinder({g.mainGearX, ground + 0.45f, sgn * g.mainGearZ}, 0.1f, -ground - 0.5f, 6, strut);
+            m->cylinder({g.mainGearX, ground + 0.45f, sgn * g.mainGearZ}, 0.07f, 0.6f, 6, metal(220, 220, 225));
+            m->cylinder({0, 0, 0}, 0.04f, 1.3f, 5, strut,
+                        MatrixMultiply(MatrixRotateX(sgn * 0.9f), MatrixTranslate(g.mainGearX, ground + 0.9f, sgn * (g.mainGearZ - 0.05f))));
+            m->box({g.mainGearX, -0.9f, sgn * (g.mainGearZ - 0.1f)}, {1.6f, 1.0f, 0.05f}, door);
+        }
+        m->box({g.noseGearX, -0.7f, 0.3f}, {1.2f, 0.6f, 0.04f}, door);
+        m->box({g.noseGearX, -0.7f, -0.3f}, {1.2f, 0.6f, 0.04f}, door);
+        // landing / taxi light housing on the nose strut
+        m->cylinder({0, 0, 0}, 0.09f, 0.12f, 8, metal(240, 240, 230), MatrixMultiply(MatrixRotateZ(-PI / 2), MatrixTranslate(g.noseGearX + 0.15f, ground + 1.2f, 0)));
     }
-    gb.box({g.noseGearX, -0.7f, 0.3f}, {1.2f, 0.6f, 0.04f}, paint(210));
+    auto tyreMesh = [&](MeshBuilder& m, Vector3 c, float r, float w, bool spokes) {
+        Matrix xf = MatrixMultiply(MatrixRotateX(PI / 2), MatrixTranslate(c.x, c.y, c.z));
+        m.cylinder({0, -w / 2, 0}, r, w, 16, tyre, xf);
+        m.cylinder({0, -w / 2 - 0.01f, 0}, r * 0.55f, w + 0.02f, 12, hub, xf);
+        if (spokes)
+            for (int k = 0; k < 5; ++k) {   // hub spokes make the rotation visible
+                Matrix sx = MatrixMultiply(MatrixMultiply(MatrixRotateZ(k * 2 * PI / 5), MatrixTranslate(c.x, c.y, c.z)), MatrixIdentity());
+                m.box({r * 0.28f, 0, w / 2 + 0.02f}, {r * 0.5f, 0.05f, 0.02f}, metal(60, 60, 64), sx);
+                m.box({r * 0.28f, 0, -w / 2 - 0.02f}, {r * 0.5f, 0.05f, 0.02f}, metal(60, 60, 64), sx);
+            }
+    };
+    for (const W& w : wheels) {
+        tyreMesh(lo, w.c, w.r, w.w, false);
+        MeshBuilder wb;
+        tyreMesh(wb, {0, 0, 0}, w.r, w.w, true);
+        JetPart part;
+        part.mesh = wb.build();
+        part.pivot = w.c;
+        part.axis = {0, 0, 1};
+        part.kind = JetPartKind::Wheel;
+        part.radius = w.r;
+        jm.lod[0].parts.push_back(part);
+    }
     jm.gear = gb.build();
+    jm.gearLo = lo.build();
+    jm.landingLight = {g.noseGearX + 0.25f, ground + 1.2f, 0};
+}
 
+}  // namespace
+
+int JetModel::triangles(int l) const {
+    int t = lod[l].body.vertexCount / 3 + lod[l].canopy.vertexCount / 3;
+    for (const JetPart& p : lod[l].parts) t += p.mesh.vertexCount / 3;
+    return t;
+}
+
+JetModel buildJetModel(AirframeStyle style) {
+    Geo g = geoFor(style);
+    JetModel jm;
+    const int ringR[3] = {40, 18, 9}, sub[3] = {6, 3, 1}, chordN[3] = {14, 9, 5}, spanN[3] = {6, 4, 2};
+    for (int l = 0; l < 3; ++l) {
+        g_ringR = ringR[l]; g_sub = sub[l]; g_chordN = chordN[l]; g_spanN = spanN[l];
+        buildLod(jm, g, style, l);
+    }
+    g_ringR = 40; g_sub = 6; g_chordN = 14; g_spanN = 6;
+    buildGear(jm, g);
+    jm.eye = {g.canX1 + (g.canX0 - g.canX1) * 0.40f, g.canY + g.canH * 0.62f, 0.0f};
+    jm.vectoring = style == AirframeStyle::StealthTwinTail || style == AirframeStyle::FlankerFamily;
+    jm.tailless = !g.stabs;
     jm.wingtips[0] = {g.wing.tipTE + 0.4f, g.wing.y + g.wing.tipDy, -g.wing.tipZ};
     jm.wingtips[1] = {g.wing.tipTE + 0.4f, g.wing.y + g.wing.tipDy, g.wing.tipZ};
+    const TailDef& t = g.tails.front();
+    float tc = cosf(t.cant), ts = sinf(t.cant);
+    jm.tailLight = {t.tipTE, t.y + tc * t.height, (t.z == 0.0f ? 0.0f : t.z + ts * t.height)};
+    jm.strobe = {-1.8f, g.fus[g.fus.size() / 2].ht + 0.08f, 0};
     jm.length = g.fus.front().x - g.fus.back().x;
     jm.loaded = true;
     return jm;
@@ -600,11 +797,14 @@ JetModel buildJetModel(AirframeStyle style) {
 
 void unloadJetModel(JetModel& m) {
     if (!m.loaded) return;
-    UnloadMesh(m.body);
-    UnloadMesh(m.canopy);
+    for (JetLod& l : m.lod) {
+        UnloadMesh(l.body);
+        UnloadMesh(l.canopy);
+        for (JetPart& p : l.parts) UnloadMesh(p.mesh);
+        l.parts.clear();
+    }
     UnloadMesh(m.gear);
-    if (m.stabL.vertexCount) UnloadMesh(m.stabL);
-    if (m.stabR.vertexCount) UnloadMesh(m.stabR);
+    UnloadMesh(m.gearLo);
     m.loaded = false;
 }
 

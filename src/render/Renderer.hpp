@@ -44,6 +44,18 @@ struct ExtraJet {
 };
 struct ExtraMissile { Vec3 pos, dir; };
 
+/// Everything that animates on an aircraft model for one frame.
+struct JetPose {
+    float gear = 0, throttle = 0, ab = 0, hitFlash = 0, damage = 0;
+    float pitch = 0, roll = 0, yaw = 0;     // control inputs -1..1 (surfaces follow them)
+    float flaps = 0;                        // degrees down
+    float wheelSpin = 0;                    // radians
+    float compress = 0;                     // gear compression (m)
+    float mach = 0, altitude = 0;           // plume shape
+    bool lights = false;                    // navigation / strobe / landing lights
+    int id = 0;
+};
+
 struct FrameParams {
     Camera3D cam{};
     float nearPlane = 0.5f, farPlane = 70000.0f;
@@ -103,6 +115,10 @@ public:
     void drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA, Vector3 paintB, float camo,
                       float gearPos, float stabDeg, float throttle, float ab, float hitFlash, float damage,
                       const FrameParams& f, bool canopy = true);
+    void drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA, Vector3 paintB, float camo, const JetPose& pose,
+                      const FrameParams& f, bool canopy = true);
+    /// Level of detail used for an aircraft at `dist` metres (0 = full detail).
+    static int jetLod(float dist) { return dist < 230.0f ? 0 : (dist < 1100.0f ? 1 : 2); }
     int width() const { return w_; }
     int height() const { return h_; }
     bool hdr() const { return hdr_; }
@@ -144,6 +160,11 @@ private:
     Mesh powerPlant_{}, refinery_{}, bridgeDeck_{}, bridgePier_{}, commTower_{}, factory_{}, locomotive_{}, wagon_{},
          launcher_{}, ammo_{}, substation_{}, tanker_{}, drogue_{}, carrier_{};
     void buildCarrier();
+    struct LightSprite { Vector3 pos; float size; Color col; };
+    std::vector<LightSprite> lights_;
+    struct Spin { float angle = 0; double t = -1; };
+    std::unordered_map<int, Spin> wheelSpin_;
+    void drawLightSprites(const FrameParams& f);
     bool sphereVisible(const FrameParams& f, Vector3 c, float r) const;
     void drawCarrier(const FrameParams& f);
     void drawRain(const FrameParams& f);

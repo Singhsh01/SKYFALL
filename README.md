@@ -34,6 +34,7 @@ copyrighted models, textures, sounds or code from commercial games.
 | ![Carrier deck in the rain](docs/screenshots/carrier_deck.jpg) | ![On the catapult in full afterburner](docs/screenshots/catapult_afterburner.jpg) |
 | ![Afterburner climb-out in a storm](docs/screenshots/afterburner_rain.jpg) | ![Campaign: 61 missions](docs/screenshots/campaign_menu.jpg) |
 | ![Everest, real elevation data](docs/screenshots/real_everest.jpg) | ![Geirangerfjord, real elevation data](docs/screenshots/real_geiranger.jpg) |
+| ![High-G wing condensation](docs/screenshots/wing_vapour.jpg) | ![Gear, wheels and landing light](docs/screenshots/gear_lights.jpg) |
 
 > Screenshots are captured from the running executable (`skyfall --capture`) on a Linux
 > container with Mesa's software rasteriser: they show the real renderer output, not macOS
@@ -61,6 +62,18 @@ copyrighted models, textures, sounds or code from commercial games.
 * **More realistic image** — filmic ACES tone mapping with proper sRGB output and a photographic
   grade, storm lighting with a slate-grey sea and whitecaps, rain, lightning, and real sea level
   on the real maps (fjords and coasts are water).
+* **Detailed, animated aircraft** — every jet has three levels of detail (about 9k / 2.5k / 0.7k
+  triangles, picked by distance). Close up: ailerons, flaps / elevons, rudders, canards and
+  all-moving stabilisers follow the stick, F-22 and Flanker-family nozzles vector with pitch,
+  wheels (with visible hubs) roll and the oleos compress on the ground, and navigation lights,
+  a flashing strobe and a landing light on the nose gear are lit. The skin shader adds panel
+  grooves and rivets (bump-mapped), per-panel roughness and grime streaks; damage scorches and
+  blisters the paint, glows when critical, and can shear off an aileron or a stabiliser.
+* **Air effects** — wing condensation sheets under G, a transonic vapour cone near Mach 1 in moist
+  low-level air, heat shimmer behind hot engines, and afterburner plumes whose length and shock
+  diamonds change with speed and altitude.
+* **Cockpit** — sharper multifunction displays (rendered at twice the resolution), windscreen
+  frame, backlit switches and annunciators, master caution / warning lights.
 * **Camouflage everywhere** — the scheme you paint in the Hangar is what you fly, and you can
   change it on the briefing screen with ← / →.
 

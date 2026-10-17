@@ -30,6 +30,19 @@ Vector3 panelPoint(float t, float z) {  // t: 0 top .. 1 bottom
     return {kPanelTop.x + (kPanelBot.x - kPanelTop.x) * t, kPanelTop.y + (kPanelBot.y - kPanelTop.y) * t, z};
 }
 
+// Displays are drawn in 320-px logical units into textures with twice the pixels (sharper text
+// and symbols on high-resolution screens).
+constexpr float kMfdScale = 2.0f;
+void beginMfd(RenderTexture2D& rt) {
+    BeginTextureMode(rt);
+    rlPushMatrix();
+    rlScalef(kMfdScale, kMfdScale, 1.0f);
+}
+void endMfd() {
+    rlPopMatrix();
+    EndTextureMode();
+}
+
 void bezel(int x, int y, int w, int h) {
     // physical push buttons around the display edge
     Color b = {70, 72, 70, 255};
@@ -97,11 +110,40 @@ void Cockpit::init() {
         mb.box({0, 0, 0}, {0.55f, 0.16f, 0.17f}, suit, leg);
         mb.box({0, -0.05f, 0}, {0.2f, 0.06f, 0.18f}, Color{60, 66, 46, 255}, MatrixMultiply(MatrixTranslate(0.12f, 0.08f, 0), leg));
     }
+    // windscreen frame: A-pillars from the glare-shield corners and the top bow
+    for (float sg : {-1.0f, 1.0f}) {
+        Vector3 a = {0.64f, -0.14f, sg * 0.50f}, b = {-0.15f, 0.55f, sg * 0.44f};
+        Vector3 d = Vector3Subtract(b, a);
+        float len = Vector3Length(d);
+        Matrix rot = MatrixMultiply(MatrixRotateZ(atan2f(d.y, d.x) - PI / 2), MatrixRotateX(-atan2f(d.z, sqrtf(d.x * d.x + d.y * d.y)) * 0.0f));
+        mb.box({0, len * 0.5f, 0}, {0.022f, len, 0.03f}, frame, MatrixMultiply(rot, MatrixTranslate(a.x, a.y, a.z)));
+
+    }
+    mb.box({-0.15f, 0.56f, 0.0f}, {0.03f, 0.025f, 0.9f}, frame);
     // HUD combiner frame posts
     mb.box({0.70f, -0.03f, -0.205f}, {0.02f, 0.2f, 0.015f}, frame);
     mb.box({0.70f, -0.03f, 0.205f}, {0.02f, 0.2f, 0.015f}, frame);
     mb.box({0.70f, -0.125f, 0.0f}, {0.08f, 0.025f, 0.44f}, frame);
     panel_ = mb.build();
+
+    // backlit switch caps, annunciators and the master caution (drawn emissive)
+    MeshBuilder lb;
+    const Color amber = {255, 170, 40, 255}, green = {90, 255, 120, 255}, red = {255, 50, 40, 255}, cyan = {120, 220, 255, 255};
+    for (float sg : {-1.0f, 1.0f})
+        for (int i = 0; i < 7; ++i)
+            for (int k = 0; k < 3; ++k) {
+                Color c = (i + k) % 4 == 0 ? amber : green;
+                lb.box({-0.38f + i * 0.12f + 0.02f, -0.432f, sg * 0.43f + (k - 1) * 0.045f}, {0.012f, 0.004f, 0.02f}, c);
+            }
+    for (int i = 0; i < 6; ++i) {   // annunciator strip under the glare shield
+        Vector3 p = panelPoint(0.02f, -0.36f + i * 0.04f);
+        lb.box({p.x - 0.004f, p.y - 0.01f, p.z}, {0.004f, 0.014f, 0.03f}, i == 2 ? amber : (i == 4 ? cyan : green));
+    }
+    for (float sg : {-1.0f, 1.0f}) {
+        Vector3 p = panelPoint(0.03f, sg * 0.46f);
+        lb.box({p.x - 0.006f, p.y - 0.012f, p.z}, {0.006f, 0.03f, 0.045f}, sg < 0 ? red : amber);   // MASTER CAUTION / WARNING
+    }
+    lamps_ = lb.build();
 
     MeshBuilder sb;  // side stick (right console) — local origin at pivot
     sb.cylinder({0, 0, 0}, 0.018f, 0.13f, 8, Color{30, 30, 30, 255});
@@ -113,7 +155,8 @@ void Cockpit::init() {
     tb.box({0, 0.13f, 0}, {0.08f, 0.05f, 0.05f}, Color{24, 24, 24, 255});
     throttle_ = tb.build();
     for (int i = 0; i < 5; ++i) {
-        mfd_[i] = i < 3 ? LoadRenderTexture(kMfd, kMfd) : LoadRenderTexture(384, 160);
+        int sc = static_cast<int>(kMfdScale);
+        mfd_[i] = i < 3 ? LoadRenderTexture(kMfd * sc, kMfd * sc) : LoadRenderTexture(384 * sc, 160 * sc);
         SetTextureFilter(mfd_[i].texture, TEXTURE_FILTER_BILINEAR);
     }
     ready_ = true;
@@ -121,13 +164,13 @@ void Cockpit::init() {
 
 void Cockpit::unload() {
     if (!ready_) return;
-    UnloadMesh(panel_); UnloadMesh(stick_); UnloadMesh(throttle_);
+    UnloadMesh(panel_); UnloadMesh(stick_); UnloadMesh(throttle_); UnloadMesh(lamps_);
     for (auto& m : mfd_) UnloadRenderTexture(m);
     ready_ = false;
 }
 
 void Cockpit::drawRadar(const Battle& b, const Jet& p) {
-    BeginTextureMode(mfd_[0]);
+    beginMfd(mfd_[0]);
     ClearBackground(Color{4, 10, 8, 255});
     const FlightState& s = p.fm->state();
     float cx = kMfd / 2.0f, cy = kMfd * 0.82f;
@@ -154,11 +197,11 @@ void Cockpit::drawRadar(const Battle& b, const Jet& p) {
     ui::text("20", kMfd - 18.0f, 18, 18, kGreen, Align::Right);
     ui::text(fmt("HDG %03.0f", compassHeadingDeg(s.q)), cx, kMfd - 34.0f, 18, kGreen, Align::Center);
     bezel(0, 0, kMfd, kMfd);
-    EndTextureMode();
+    endMfd();
 }
 
 void Cockpit::drawPfd(const Jet& p) {
-    BeginTextureMode(mfd_[1]);
+    beginMfd(mfd_[1]);
     const FlightState& s = p.fm->state();
     Euler e = toEuler(s.q);
     float cx = kMfd / 2.0f, cy = kMfd / 2.0f;
@@ -196,11 +239,11 @@ void Cockpit::drawPfd(const Jet& p) {
     ui::text(fmt("G %.1f", s.gLoad), 12, kMfd - 34.0f, 20, kGreen);
     ui::text(fmt("M %.2f", s.mach), kMfd - 12.0f, kMfd - 34.0f, 20, kGreen, Align::Right);
     bezel(0, 0, kMfd, kMfd);
-    EndTextureMode();
+    endMfd();
 }
 
 void Cockpit::drawEngine(const Jet& p, double time) {
-    BeginTextureMode(mfd_[2]);
+    beginMfd(mfd_[2]);
     ClearBackground(Color{4, 8, 10, 255});
     const FlightState& s = p.fm->state();
     auto gauge = [&](float x, float y, float r, double v, const char* lbl, Color c) {
@@ -226,11 +269,11 @@ void Cockpit::drawEngine(const Jet& p, double time) {
     ui::text(s.parkingBrake ? "PARK BRK" : (s.wheelBrake ? "BRAKE" : ""), 20, 232, 20, Color{255, 170, 40, 255});
     ui::text(fmt("HULL %.0f%%", p.health), 20, 262, 20, p.health > 60 ? kGreen : Color{255, 80, 60, 255});
     bezel(0, 0, kMfd, kMfd);
-    EndTextureMode();
+    endMfd();
 }
 
 void Cockpit::drawUfc(const Jet& p, double time) {
-    BeginTextureMode(mfd_[3]);
+    beginMfd(mfd_[3]);
     ClearBackground(Color{8, 12, 10, 255});
     const char* keys = "123456789*0#";
     for (int i = 0; i < 12; ++i) {
@@ -247,11 +290,11 @@ void Cockpit::drawUfc(const Jet& p, double time) {
     ui::text(fmt("BARO %.2f", 29.92), 12, 92, 20, kGreen);
     ui::text(s.onGround ? "WOW  ON" : "WOW  OFF", 12, 118, 20, s.onGround ? Color{255, 190, 60, 255} : kGreen);
     (void)time;
-    EndTextureMode();
+    endMfd();
 }
 
 void Cockpit::drawCni(const Jet& p, double time) {
-    BeginTextureMode(mfd_[4]);
+    beginMfd(mfd_[4]);
     ClearBackground(Color{6, 9, 8, 255});
     const FlightState& s = p.fm->state();
     ui::text(fmt("FUEL %5.0f", s.fuelKg), 14, 12, 22, kGreen);
@@ -262,7 +305,7 @@ void Cockpit::drawCni(const Jet& p, double time) {
     ui::text(fmt("MSL  %.0f", static_cast<double>(p.missiles)), 200, 68, 22, kGreen);
     if (p.lockProgress >= 1.0 && std::fmod(time, 0.6) < 0.4) ui::text("LOCK", 200, 100, 26, Color{255, 90, 70, 255});
     else ui::text(s.engine == EngineState::Running ? "ENG RUN" : "ENG OFF", 14, 104, 22, s.engine == EngineState::Running ? kGreen : Color{255, 190, 60, 255});
-    EndTextureMode();
+    endMfd();
 }
 
 void Cockpit::updateDisplays(const Battle& b, const Jet& player, double time, bool) {
@@ -296,6 +339,9 @@ void Cockpit::draw3D(Renderer& r, const Jet& player, const FrameParams& f, Vec3 
     // throttle on the left console: slides forward with the lever
     Matrix th = MatrixTranslate(-0.05f + static_cast<float>(s.throttle) * 0.16f, -0.44f, -0.40f);
     DrawMesh(throttle_, mat, MatrixMultiply(th, E));
+    lit.setF("uEmissive", 0.85f);
+    DrawMesh(lamps_, mat, E);
+    lit.setF("uEmissive", 0.06f);
     rlEnableBackfaceCulling();
 
     // MFD screens as emissive textured quads
@@ -324,6 +370,26 @@ void Cockpit::draw3D(Renderer& r, const Jet& player, const FrameParams& f, Vec3 
     screen(4, 0.05f, 0.21f, -0.39f, -0.17f);
     screen(4, 0.05f, 0.21f, 0.17f, 0.39f);
     rlDrawRenderBatchActive();
+    // canopy reflections: the glowing displays mirrored faintly on the windscreen sides
+    BeginBlendMode(BLEND_ADDITIVE);
+    ps.setF("uIntensity", 0.045f);
+    auto reflect = [&](int idx, float sg) {
+        Vector3 a = {0.58f, -0.10f, sg * 0.44f}, b = {0.58f, -0.10f, sg * 0.25f}, c = {0.50f, 0.03f, sg * 0.25f}, d = {0.50f, 0.03f, sg * 0.43f};
+        a = Vector3Transform(a, E); b = Vector3Transform(b, E); c = Vector3Transform(c, E); d = Vector3Transform(d, E);
+        rlSetTexture(mfd_[idx].texture.id);
+        rlBegin(RL_QUADS);
+        rlColor4ub(255, 255, 255, 255);
+        rlTexCoord2f(0, 0); rlVertex3f(a.x, a.y, a.z);
+        rlTexCoord2f(1, 0); rlVertex3f(b.x, b.y, b.z);
+        rlTexCoord2f(1, 1); rlVertex3f(c.x, c.y, c.z);
+        rlTexCoord2f(0, 1); rlVertex3f(d.x, d.y, d.z);
+        rlEnd();
+        rlSetTexture(0);
+    };
+    reflect(0, -1.0f);
+    reflect(2, 1.0f);
+    rlDrawRenderBatchActive();
+    EndBlendMode();
     // HUD combiner glass (faint green tint)
     BeginBlendMode(BLEND_ALPHA);
     rlBegin(RL_QUADS);

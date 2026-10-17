@@ -1893,6 +1893,59 @@ int Game::runCapture() {
         snap("menu_briefing_carrier", 2);
         return 0;
     }
+    if (set == "detail") {
+        // close-ups: control surfaces deflected, gear, lights, LOD comparison
+        hideHud_ = true;
+        const int acs[] = {0, 3, 2, 5};
+        for (int ac : acs) {
+            hangarSel_ = ac;
+            startHangar();
+            screen_ = Screen::Playing;
+            Jet& p = battle_.player();
+            orbitYaw_ = 3.3; orbitPitch_ = 0.42; zoom_ = 1.25;
+            scriptedStep(0.05, [&](double) {});
+            p.lastInput.roll = 1.0; p.lastInput.pitch = 1.0; p.lastInput.yaw = 1.0;
+            char nm[64];
+            std::snprintf(nm, sizeof nm, "detail_%d_controls", ac);
+            snap(nm, 2);
+            orbitYaw_ = 0.9; orbitPitch_ = 0.12; zoom_ = 1.1;
+            std::snprintf(nm, sizeof nm, "detail_%d_rear", ac);
+            snap(nm, 2);
+        }
+        // transonic shock collar and high-G wing condensation
+        {
+            startArena(false);
+            battle_.clearCombatants();
+            battle_.setAiEnabled(false);
+            Jet& p = battle_.player();
+            p.fm->resetAirborne({-2000, 1200, 2000}, 0.0, 333.0, 1.0);
+            camMode_ = CameraMode::External; orbitYaw_ = 1.9; orbitPitch_ = 0.12; zoom_ = 1.2;
+            scriptedStep(0.6, [&](double) { setInput(0, 0, 0, 1.0); });
+            snap("detail_vapour_cone", 1);
+            p.fm->resetAirborne({-2000, 1200, 2000}, 0.0, 250.0, 1.0);
+            scriptedStep(0.9, [&](double) { setInput(1.0, 0.3, 0, 1.0); });
+            orbitYaw_ = 2.6; orbitPitch_ = 0.35;
+            snap("detail_wing_vapour", 1);
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            p.fm->resetAirborne({-2000, 1200, 2000}, 0.0, 250.0, 1.0);
+            scriptedStep(1.5, [&](double) { setInput(0, 0, 0, 1.0); });
+            snap("detail_heat_haze", 2);
+        }
+        // dusk flight with navigation lights; LOD distances
+        startArena(false);
+        battle_.clearCombatants();
+        battle_.setAiEnabled(false);
+        tod_ = TimeOfDay::GoldenHour; lighting_ = Lighting::preset(tod_);
+        camMode_ = CameraMode::External; orbitYaw_ = 2.0; orbitPitch_ = 0.1;
+        for (float z : {0.7f, 6.0f, 30.0f}) {
+            zoom_ = z;
+            scriptedStep(0.1, [&](double) { setInput(0, 0, 0, 0); });
+            char nm[64];
+            std::snprintf(nm, sizeof nm, "detail_lod_zoom_%.0f", z * 10);
+            snap(nm, 2);
+        }
+        return 0;
+    }
     if (set == "skinplay") {
         // the hangar camouflage must follow the jet into every mode
         settings_.aircraft = 0;

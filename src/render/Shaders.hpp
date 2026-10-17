@@ -492,17 +492,34 @@ void main() {
             paint = mix(uPaintA, uPaintB, smoothstep(0.42, 0.62, m) * 0.85);
         }
         base = paint * vColor.rgb;
-        // panel lines and fastener rows (thin, irregular)
+        // panel lines and fastener rows (thin, irregular) -> also a groove in the normal map below
         vec3 pl = abs(fract(vObj * vec3(0.32, 0.9, 0.41) + vec3(0.13, 0.0, 0.27)) - 0.5);
         float line = smoothstep(0.490, 0.4985, max(pl.x, pl.z));
         line *= step(0.45, texture(uNoise, floor(vObj.xz * vec2(0.32, 0.41)) / 37.0).b);
         base *= 1.0 - line * 0.22;
-        // subtle RAM-coating mottling and wear
+        // fastener rows along the panel edges
+        float rivet = step(0.47, max(pl.x, pl.z)) * step(0.82, fract(dot(vObj.xz, vec2(4.1, 3.7)))) * 0.35;
+        base *= 1.0 - rivet * 0.25;
+        // subtle RAM-coating mottling, per-panel tone and roughness, flow-direction grime streaks
         float mott = texture(uNoise, vObj.xz / 1.7 + vObj.y).b;
-        base *= 0.93 + 0.12 * mott;
+        float panelId = texture(uNoise, floor(vObj.xz * vec2(0.32, 0.41)) / 29.0 + 0.13).r;
+        float streak = texture(uNoise, vec2(vObj.x * 0.06, vObj.z * 1.4 + vObj.y * 0.7)).g;
+        base *= (0.93 + 0.12 * mott) * (0.95 + 0.1 * panelId) * (1.0 - 0.12 * smoothstep(0.55, 0.85, streak));
         // exhaust soot towards the tail
         base *= mix(1.0, 0.72, smoothstep(-6.0, -9.5, vObj.x));
-        metal = 0.12; rough = uRoughness * (0.85 + 0.3 * mott); coat = 0.35;
+        metal = 0.12;
+        rough = uRoughness * (0.85 + 0.3 * mott) * (0.85 + 0.3 * panelId) + 0.12 * smoothstep(0.55, 0.85, streak);
+        coat = 0.35 * (1.0 - 0.6 * smoothstep(0.55, 0.85, streak));
+        // normal map: panel grooves and rivet bumps, by screen-space derivatives (bump mapping)
+        float hgt = -line * 0.004 + rivet * 0.0015 + mott * 0.0004;
+        vec3 dpx = dFdx(vPos), dpy = dFdy(vPos);
+        float dhx = dFdx(hgt), dhy = dFdy(hgt);
+        vec3 r1 = cross(dpy, n), r2 = cross(n, dpx);
+        float det = dot(dpx, r1);
+        if (abs(det) > 1e-8) {
+            vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
+            n = normalize(abs(det) * n - grad * 6.0);
+        }
     } else if (mat > 0.25) {
         base = vColor.rgb; metal = 0.9; rough = 0.38; coat = 0.0;
         // heat tint on nozzles
@@ -510,7 +527,13 @@ void main() {
     } else {
         base = vec3(0.03, 0.028, 0.02); metal = 0.0; rough = 0.04; coat = 1.0;
     }
-    base *= (1.0 - uDamage * 0.6 * texture(uNoise, vObj.xz / 2.0).r);
+    // battle damage: scorched, blistered paint spreading with damage; glowing burns when critical
+    float burnN = texture(uNoise, vObj.xz / 2.3 + vObj.y * 0.31).r * 0.7 + texture(uNoise, vObj.zx / 0.9).g * 0.3;
+    float scorch = smoothstep(1.0 - uDamage * 0.9, 1.05 - uDamage * 0.9, burnN) * step(0.05, uDamage);
+    base = mix(base, base * 0.08 + vec3(0.012, 0.010, 0.009), scorch);
+    rough = mix(rough, 0.95, scorch);
+    coat *= 1.0 - scorch;
+    float ember = smoothstep(0.75, 1.0, uDamage) * smoothstep(0.92, 0.98, burnN) * (0.6 + 0.4 * sin(uTime * 9.0 + burnN * 30.0));
 
     vec3 l = uSunDir;
     vec3 h = normalize(l + v);
@@ -541,6 +564,9 @@ void main() {
     float fd = length(uFlashPos - vPos);
     col += base * uFlashColor * (1.0 / (1.0 + fd * fd * 0.0004));
     col += vec3(1.0, 0.25, 0.1) * uHitFlash;
+    col += vec3(2.4, 0.7, 0.15) * ember;
+    // formation-light strips (pale green, metal id with a bright green tint) glow softly
+    if (mat > 0.25 && mat < 0.75 && vColor.g > 0.9 && vColor.r < 0.6) col += vec3(0.35, 1.4, 0.55);
     col = applyFog(col, vPos);
     finalColor = vec4(col, 1.0);
 }
@@ -557,6 +583,7 @@ in vec4 vColor;
 uniform float uThrottle;   // 0..1 mil power
 uniform float uAb;         // 0..1 afterburner
 uniform vec3 uAxis;        // world direction of the plume (out of the nozzle)
+uniform float uDiamond;    // shock-diamond frequency (rises with speed / dynamic pressure)
 uniform sampler2D uNoise;
 out vec4 finalColor;
 void main() {
@@ -569,7 +596,7 @@ void main() {
     float n2 = texture(uNoise, vec2(t * 1.7 - uTime * 7.9, vObj.z * 0.6 - uTime * 2.1)).g;
     float flick = 0.7 + 0.45 * n1 + 0.25 * n2;
     // shock diamonds: bright white-blue bands, strongest in afterburner and near the nozzle
-    float diamonds = 0.55 + uAb * 1.1 * pow(abs(sin(t * 23.0)), 8.0) * (1.0 - t) + 0.25 * (1.0 - uAb);
+    float diamonds = 0.55 + uAb * 1.1 * pow(abs(sin(t * max(uDiamond, 8.0))), 8.0) * (1.0 - t) + 0.25 * (1.0 - uAb);
     vec3 core = vec3(0.86, 0.93, 1.0);      // white-hot, slightly blue
     vec3 blue = vec3(0.32, 0.52, 1.0);      // clean afterburner blue
     vec3 tail = vec3(1.0, 0.52, 0.22);      // cooler orange where the plume mixes with air
@@ -761,6 +788,8 @@ uniform float uSpeedFx;
 uniform float uSharpen;   // contrast-adaptive sharpening when the 3D scene is upscaled
 uniform float uGrade;     // 1 = filmic pipeline with sRGB output
 uniform float uGradeK;
+uniform vec4 uHaze[4];    // heat haze behind engines: screen uv, radius (uv), strength
+uniform float uHazeCount;
 out vec4 finalColor;
 
 vec3 aces(vec3 x) {
@@ -789,6 +818,20 @@ float lumaH(vec3 hdr) { float y = luma(hdr) * uExposure * 0.6; return y / (1.0 +
 
 void main() {
     vec2 uv = fragTexCoord;
+    // heat distortion: shimmer the image inside each exhaust plume's screen footprint
+    if (uHazeCount > 0.5) {
+        vec2 aspect = vec2(float(textureSize(texture0, 0).x) / float(textureSize(texture0, 0).y), 1.0);
+        vec2 ofs = vec2(0.0);
+        for (int i = 0; i < 4; ++i) {
+            if (float(i) >= uHazeCount) break;
+            vec4 hz = uHaze[i];
+            float d = length((uv - hz.xy) * aspect);
+            float k = 1.0 - smoothstep(hz.z * 0.3, hz.z, d);
+            ofs += k * hz.w * vec2(sin(uv.y * 260.0 + uTime * 37.0) + 0.5 * sin(uv.x * 410.0 - uTime * 23.0),
+                                   cos(uv.x * 230.0 - uTime * 31.0) + 0.5 * cos(uv.y * 380.0 + uTime * 19.0));
+        }
+        uv += ofs * 0.0016;
+    }
     vec2 cc = uv - 0.5;
     float r2 = dot(cc, cc);
     // FXAA-style edge smoothing + sharpening on the HDR image, then ONE tone-mapping evaluation

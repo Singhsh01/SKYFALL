@@ -32,6 +32,7 @@ private:
     void drawCni(const Jet& p, double time);
     Mesh panel_{};
     Mesh stick_{}, throttle_{};
+    Mesh lamps_{};
     RenderTexture2D mfd_[5]{};   // 0 TSD radar, 1 PFD, 2 engine, 3 up-front keypad, 4 CNI text
     Vector3 eye_{4.28f, 0.96f, 0.0f};
     bool ready_ = false;
