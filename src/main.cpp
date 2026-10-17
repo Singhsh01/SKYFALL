@@ -31,7 +31,7 @@ void logCallback(int level, const char* fmt, va_list args) {
     const char* tag = level >= LOG_ERROR ? "ERROR" : level == LOG_WARNING ? "WARNING" : "INFO";
     std::fprintf(stdout, "%s: %s\n", tag, buf);
     bool keep = level >= LOG_WARNING || std::strstr(buf, "GL:") || std::strstr(buf, "SKYFALL") ||
-                std::strstr(buf, "Display size") || std::strstr(buf, "Render size") || std::strstr(buf, "Screen size");
+                std::strstr(buf, "Display size") || std::strstr(buf, "> Vendor") || std::strstr(buf, "> Renderer") || std::strstr(buf, "> Version") || std::strstr(buf, "Render size") || std::strstr(buf, "Screen size");
     if (g_log && keep) { std::fprintf(g_log, "%s: %s\n", tag, buf); std::fflush(g_log); }
 }
 }  // namespace

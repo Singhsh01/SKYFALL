@@ -299,6 +299,12 @@ void WorldMeshes::build(const Terrain& t) {
             double cy = t.height(x0 + kChunkSize / 2, z0 + kChunkSize / 2);
             c.center = V3(x0 + kChunkSize / 2, cy, z0 + kChunkSize / 2);
             c.radius = static_cast<float>(kChunkSize * 0.75 + 600.0);
+            // highest ground in the chunk (incl. a margin around it): chunks entirely under the
+            // opaque sea are never visible and are skipped when drawing
+            float mh = -1e9f;
+            for (double sz = z0 - 60; sz <= z0 + kChunkSize + 60; sz += 31.25)
+                for (double sx = x0 - 60; sx <= x0 + kChunkSize + 60; sx += 31.25) mh = std::max(mh, static_cast<float>(t.height(sx, sz)));
+            c.maxH = mh;
 
             // trees
             MeshBuilder tb;

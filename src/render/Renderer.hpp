@@ -12,6 +12,7 @@
 #include "WorldMeshes.hpp"
 #include "raylib.h"
 
+#include <chrono>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -107,8 +108,19 @@ public:
     bool hdr() const { return hdr_; }
     double lastWorldMs() const { return worldMs_; }
     int drawCalls() const { return drawCalls_; }
+    long triangles() const;
+    // GPU pass profiler (serialises the pipeline; for --bench / F3 diagnostics only)
+    void setProfiling(bool on) { profiling_ = on; prof_.clear(); profFrames_ = 0; }
+    bool profiling() const { return profiling_; }
+    void profMark(const char* pass);
+    std::string profReport() const;
 
 private:
+    void profBegin();
+    bool profiling_ = false;
+    std::vector<std::pair<std::string, double>> prof_;
+    int profFrames_ = 0;
+    std::chrono::steady_clock::time_point profLast_;
     void buildGroundModels();
     void renderShadows(const FrameParams& f);
     void buildClouds(const Terrain& t);
@@ -132,6 +144,7 @@ private:
     Mesh powerPlant_{}, refinery_{}, bridgeDeck_{}, bridgePier_{}, commTower_{}, factory_{}, locomotive_{}, wagon_{},
          launcher_{}, ammo_{}, substation_{}, tanker_{}, drogue_{}, carrier_{};
     void buildCarrier();
+    bool sphereVisible(const FrameParams& f, Vector3 c, float r) const;
     void drawCarrier(const FrameParams& f);
     void drawRain(const FrameParams& f);
     void drawTanker(const FrameParams& f);

@@ -15,7 +15,7 @@ struct Settings {
     int fpsCap = 75;            // frame-rate limit (0 = unlimited)
     int width = 1280, height = 720;
     bool fullscreen = false;
-    bool vsync = true;
+    bool vsync = false;        // off: the frame-rate limit (default 75) decides, even on 60 Hz screens
     double fovDeg = 70.0;
     bool bloom = true;
     double cameraShake = 0.6;   // 0..1 motion comfort

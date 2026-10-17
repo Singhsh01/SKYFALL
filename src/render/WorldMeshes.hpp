@@ -19,6 +19,7 @@ struct TerrainChunk {
     bool hasTrees = false;
     Vector3 center{};
     float radius = 0;
+    float maxH = 1e9f;    // highest ground height in the chunk (m)
 };
 
 struct WorldMeshes {

@@ -1288,6 +1288,7 @@ void Game::renderFrame() {
     BeginDrawing();
     ClearBackground(BLACK);
     renderer_.composite(f);
+    renderer_.profMark("post (bloom/tone)");
     rlSetClipPlanes(nearPlane_, farPlane_);
     renderer_.drawSunFlare(f, GetScreenWidth(), GetScreenHeight());
     if ((screen_ == Screen::Playing || screen_ == Screen::Paused) && !hideHud_) {
@@ -1346,6 +1347,7 @@ void Game::renderFrame() {
         hc.gamepad = input_.gamepadConnected();
         auto th = std::chrono::steady_clock::now();
         hud_.draw(hc);
+        renderer_.profMark("hud");
         hudMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - th).count();
         if (settings_.showFps && !showDebug_) {
             Percentiles pc = stats_.compute();
@@ -1546,7 +1548,7 @@ void Game::drawSettings() {
     float s = h / 720.0f;
     DrawRectangle(0, 0, static_cast<int>(w), static_cast<int>(h), Color{0, 0, 0, 170});
     ui::title("SETTINGS", 60 * s, 34 * s, 38 * s);
-    nav_.begin(23, in.up, in.down, in.confirm, in.left, in.right);
+    nav_.begin(24, in.up, in.down, in.confirm, in.left, in.right);
     float cw = 420 * s, rh = 42 * s, g = 6 * s;
     float x1 = 60 * s, x2 = 60 * s + cw + 40 * s;
     float y = 110 * s;
@@ -1587,6 +1589,11 @@ void Game::drawSettings() {
         if (ui::cycle(nav_, 22, {x1, y + 22 * s + 2 * (rh + g), cw, rh}, "Frame rate limit", fi, {"60 FPS", "75 FPS", "120 FPS", "UNLIMITED"})) {
             settings_.fpsCap = caps[fi];
             SetTargetFPS(settings_.fpsCap);
+            changed = true;
+        }
+        // VSync locks the frame rate to the monitor (60 Hz screens cannot show 75 fps with it on)
+        if (ui::toggle(nav_, 23, {x2, y2 + 10 * s + rh + 4 * s + g, cw, rh}, "VSync (off allows > 60 fps on 60 Hz screens)", settings_.vsync)) {
+            if (settings_.vsync) SetWindowState(FLAG_VSYNC_HINT); else ClearWindowState(FLAG_VSYNC_HINT);
             changed = true;
         }
     }
@@ -2268,6 +2275,7 @@ int Game::runBench() {
     }
     benchSim_.clear(); benchHud_.clear();
     camMode_ = CameraMode::Chase;
+    renderer_.setProfiling(std::getenv("SKYFALL_PROFILE") != nullptr);
     stats_.keepAll(true);
     auto last = std::chrono::steady_clock::now();
     double elapsed = 0;
@@ -2290,6 +2298,8 @@ int Game::runBench() {
     meanMax(benchSim_, sm, sx);
     meanMax(benchHud_, hm, hx);
     std::printf("cpu: simulation mean %.3f ms max %.3f ms | hud mean %.3f ms max %.3f ms\n", sm, sx, hm, hx);
+    if (renderer_.profiling()) std::printf("gpu passes (per frame, serialised):\n%s", renderer_.profReport().c_str());
+    std::printf("scene %dx%d, draw calls %d, triangles %.0fk\n", renderer_.width(), renderer_.height(), renderer_.drawCalls(), renderer_.triangles() / 1000.0);
     std::filesystem::create_directories("benchmarks");
     std::string renderer = std::string(reinterpret_cast<const char*>(rlGetVersion() == RL_OPENGL_33 ? "OpenGL 3.3" : "OpenGL"));
     stats_.writeCsv("benchmarks/frame_times.csv");

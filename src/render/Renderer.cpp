@@ -17,6 +17,7 @@
 #include <GLES3/gl3.h>
 #else
 extern "C" void glClear(unsigned int mask);  // GL 1.0 entry point, present in every GL library
+extern "C" void glFinish(void);
 #endif
 
 namespace sky {
@@ -67,6 +68,11 @@ constexpr int kShadowSize = 2048;
 
 Vector3 g_paintC{0, 0, 0};   // third camouflage colour for the jet drawn next
 float g_paintRough = 0.42f;
+long g_tris = 0;   // triangles submitted this frame (benchmark statistics)
+inline void drawMeshC(const Mesh& m, const Material& mat, const Matrix& t) {
+    g_tris += m.triangleCount > 0 ? m.triangleCount : m.vertexCount / 3;
+    DrawMesh(m, mat, t);
+}
 
 Vector3 paintFor(const Jet& j, Vector3& b, float& camo) {
     camo = 0;
@@ -99,6 +105,8 @@ Vector3 paintFor(const Jet& j, Vector3& b, float& camo) {
     return {0.36f, 0.30f, 0.21f};
 }
 }  // namespace
+
+long Renderer::triangles() const { return g_tris; }
 
 int Prog::loc(const char* name) {
     auto it = locs.find(name);
@@ -149,7 +157,10 @@ bool Renderer::init(const Terrain& t, const WorldLayout& layout, int width, int 
     auto t0 = std::chrono::steady_clock::now();
     world_.build(t);
     dressing_.build(t, layout, BuildingStyle::Desert, true);
-    for (int s = 0; s < 6; ++s) jets_[s] = buildJetModel(static_cast<AirframeStyle>(s));
+    for (int s = 0; s < 6; ++s) {
+        jets_[s] = buildJetModel(static_cast<AirframeStyle>(s));
+        TraceLog(LOG_INFO, "SKYFALL: jet model %d: %d triangles (body)", s, jets_[s].body.vertexCount / 3);
+    }
     flame_ = buildFlameMesh();
     missile_ = buildMissileMesh();
     buildGroundModels();
@@ -718,7 +729,7 @@ void Renderer::drawCarrier(const FrameParams& f) {
     lit_.setF("uSpecular", f.L.cloudCover > 0.8f ? 0.32f : 0.18f);   // wet deck in the rain
     lit_.setF("uFogOn", 1.0f);
     litMat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
-    DrawMesh(carrier_, litMat_, M);
+    drawMeshC(carrier_, litMat_, M);
     lit_.setF("uSpecular", 0.2f);
     ++drawCalls_;
     // parked aircraft along the starboard side and on the angled-deck corner
@@ -826,6 +837,25 @@ void Renderer::drawSky(const FrameParams& f) {
     EndShaderMode();
 }
 
+// Sphere vs. the camera's view frustum (side planes only): skips terrain and tree chunks that
+// are off to the side or behind, which is most of them at a normal field of view.
+bool Renderer::sphereVisible(const FrameParams& f, Vector3 c, float r) const {
+    static const bool off = std::getenv("SKYFALL_NOCULL") != nullptr;
+    if (off) return Vector3DotProduct(Vector3Subtract(c, f.cam.position), Vector3Subtract(f.cam.target, f.cam.position)) > -r * Vector3Distance(f.cam.target, f.cam.position);
+    Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
+    Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, f.cam.up));
+    Vector3 up = Vector3CrossProduct(right, fwd);
+    Vector3 d = Vector3Subtract(c, f.cam.position);
+    float z = Vector3DotProduct(d, fwd);
+    if (z < -r) return false;
+    float tv = tanf(f.cam.fovy * DEG2RAD * 0.5f);
+    float th = tv * static_cast<float>(std::max(1, w_)) / static_cast<float>(std::max(1, h_));
+    float x = std::fabs(Vector3DotProduct(d, right)), y = std::fabs(Vector3DotProduct(d, up));
+    if (x > z * th + r * sqrtf(1.0f + th * th)) return false;
+    if (y > z * tv + r * sqrtf(1.0f + tv * tv)) return false;
+    return true;
+}
+
 void Renderer::drawTerrain(const FrameParams& f) {
     setAtmosphere(terrain_p_, f);
     Vector3 cp = f.cam.position;
@@ -838,22 +868,28 @@ void Renderer::drawTerrain(const FrameParams& f) {
         Vector3 d = Vector3Subtract(c.center, cp);
         float dist = Vector3Length(d);
         if (dist > c.radius && Vector3DotProduct(d, fwd) < -c.radius) continue;
+        if (c.maxH < -1.5f) continue;   // entirely under the sea
+        if (!sphereVisible(f, c.center, c.radius)) continue;
         float edge = dist - c.radius;
         const Mesh* m = edge < hiDist ? &c.hi : &c.lo;
         if (edge < l0Dist && world_.ensureL0(c, f.time, buildBudget)) m = &c.l0;
-        DrawMesh(*m, terrainMat_, MatrixIdentity());
+        drawMeshC(*m, terrainMat_, MatrixIdentity());
         ++drawCalls_;
     }
     if (!f.isPip) world_.evictL0(cp, f.time);
-    DrawMesh(world_.farRing, terrainMat_, MatrixIdentity());
+    drawMeshC(world_.farRing, terrainMat_, MatrixIdentity());
     ++drawCalls_;
     // sea
     setAtmosphere(water_, f);
     water_.setF("uMapHalf", static_cast<float>(Terrain::kHalfSize));
     water_.setF("uCloudCover", f.L.cloudCover);
-    DrawMesh(world_.water, waterMat_, MatrixIdentity());
+    drawMeshC(world_.water, waterMat_, MatrixIdentity());
     ++drawCalls_;
     rlEnableBackfaceCulling();
+    if (std::getenv("SKYFALL_TRIS")) {
+        static int n = 0;
+        if (++n % 5 == 0) TraceLog(LOG_INFO, "SKYFALL: terrain pass %ld tris (water %d, far %d)", g_tris, world_.water.vertexCount / 3, world_.farRing.vertexCount / 3);
+    }
 }
 
 void Renderer::drawStatics(const FrameParams& f) {
@@ -863,9 +899,9 @@ void Renderer::drawStatics(const FrameParams& f) {
     runway_.setF("uLength", static_cast<float>(rw.length));
     runway_.setF("uWidth", static_cast<float>(rw.width));
     runway_.setF("uKind", 0.0f);
-    DrawMesh(world_.runway, runwayMat_, MatrixIdentity());
+    drawMeshC(world_.runway, runwayMat_, MatrixIdentity());
     runway_.setF("uKind", 1.0f);
-    DrawMesh(world_.taxiways, runwayMat_, MatrixIdentity());
+    drawMeshC(world_.taxiways, runwayMat_, MatrixIdentity());
     drawCalls_ += 2;
     // airbase, town, trees
     setAtmosphere(lit_, f);
@@ -874,8 +910,8 @@ void Renderer::drawStatics(const FrameParams& f) {
     lit_.setF("uFogOn", 1.0f);
     litMat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     rlDisableBackfaceCulling();
-    DrawMesh(world_.airbase, litMat_, MatrixIdentity());
-    DrawMesh(world_.town, litMat_, MatrixIdentity());
+    drawMeshC(world_.airbase, litMat_, MatrixIdentity());
+    drawMeshC(world_.town, litMat_, MatrixIdentity());
     drawDressing(f);
     lit_.setF("uSpecular", 0.0f);
     Vector3 cp = f.cam.position;
@@ -886,8 +922,8 @@ void Renderer::drawStatics(const FrameParams& f) {
         Vector3 d = Vector3Subtract(c.center, cp);
         float dist = Vector3Length(d);
         if (dist - c.radius > treeDist) continue;
-        if (dist > c.radius && Vector3DotProduct(d, fwd) < -c.radius) continue;
-        DrawMesh(c.trees, litMat_, MatrixIdentity());
+        if (!sphereVisible(f, c.center, c.radius)) continue;
+        drawMeshC(c.trees, litMat_, MatrixIdentity());
         ++drawCalls_;
     }
     rlEnableBackfaceCulling();
@@ -958,7 +994,7 @@ void Renderer::drawGroundTargets(const FrameParams& f) {
         if (g.kind == GroundKind::Bridge) {
             float L = static_cast<float>(std::max(20.0, g.length));
             if (g.alive) {
-                DrawMesh(bridgeDeck_, litMat_, MatrixMultiply(MatrixMultiply(MatrixScale(L, 1, 1), R), T));
+                drawMeshC(bridgeDeck_, litMat_, MatrixMultiply(MatrixMultiply(MatrixScale(L, 1, 1), R), T));
             } else {
                 // collapsed: the two halves hinge down from the abutments into the valley
                 for (int side = -1; side <= 1; side += 2) {
@@ -966,19 +1002,19 @@ void Renderer::drawGroundTargets(const FrameParams& f) {
                     Matrix half = MatrixMultiply(MatrixScale(L * 0.48f, 1, 1), MatrixTranslate(-side * 0.24f * L, 0, 0));
                     half = MatrixMultiply(half, MatrixRotateZ(side * 0.42f));
                     half = MatrixMultiply(half, MatrixTranslate(side * 0.5f * L, 0, 0));
-                    DrawMesh(bridgeDeck_, litMat_, MatrixMultiply(MatrixMultiply(half, R), T));
+                    drawMeshC(bridgeDeck_, litMat_, MatrixMultiply(MatrixMultiply(half, R), T));
                 }
             }
             int piers = std::max(1, static_cast<int>(L / 36.0f));
             for (int k = 1; k < piers; ++k) {
                 float x = -L / 2 + L * k / piers;
                 if (!g.alive && std::fabs(x) < L * 0.2f) continue;
-                DrawMesh(bridgePier_, litMat_, MatrixMultiply(MatrixMultiply(MatrixTranslate(x, 0, 0), R), T));
+                drawMeshC(bridgePier_, litMat_, MatrixMultiply(MatrixMultiply(MatrixTranslate(x, 0, 0), R), T));
             }
             drawCalls_ += piers + 1;
             continue;
         }
-        DrawMesh(*m, litMat_, MatrixMultiply(R, T));
+        drawMeshC(*m, litMat_, MatrixMultiply(R, T));
         ++drawCalls_;
     }
     drawTanker(f);
@@ -994,7 +1030,7 @@ void Renderer::drawDressing(const FrameParams& f) {
         float dist = Vector3Length(d);
         if (dist - p.radius > maxDist) continue;
         if (dist > p.radius && Vector3DotProduct(d, fwd) < -p.radius) continue;
-        DrawMesh(p.mesh, litMat_, MatrixIdentity());
+        drawMeshC(p.mesh, litMat_, MatrixIdentity());
         ++drawCalls_;
     }
     const WorldLayout* L = dressing_.layout;
@@ -1005,7 +1041,7 @@ void Renderer::drawDressing(const FrameParams& f) {
         bool owned = false;
         if (gb) for (const GroundTarget& g : gb->ground()) if (g.kind == GroundKind::Factory && std::hypot(g.pos.x - fc.x, g.pos.z - fc.z) < 20) owned = true;
         if (owned || Vector3Distance(toRl(fc), cp) > maxDist) continue;
-        DrawMesh(factory_, litMat_, MatrixTranslate(static_cast<float>(fc.x), static_cast<float>(fc.y), static_cast<float>(fc.z)));
+        drawMeshC(factory_, litMat_, MatrixTranslate(static_cast<float>(fc.x), static_cast<float>(fc.y), static_cast<float>(fc.z)));
         ++drawCalls_;
     }
     // spinning wind-turbine rotors
@@ -1015,7 +1051,7 @@ void Renderer::drawDressing(const FrameParams& f) {
             if (Vector3Distance(h, cp) > maxDist * 0.7f) continue;
             Matrix M = MatrixMultiply(MatrixMultiply(MatrixRotateX(static_cast<float>(f.time * 1.3 + i * 0.7)), MatrixRotateY(-dressing_.rotorYaw[i])),
                                       MatrixTranslate(h.x, h.y, h.z));
-            DrawMesh(dressing_.rotor, litMat_, M);
+            drawMeshC(dressing_.rotor, litMat_, M);
             ++drawCalls_;
         }
     // ambient freight train (only when no mission train is on the line)
@@ -1033,7 +1069,7 @@ void Renderer::drawDressing(const FrameParams& f) {
             if (Vector3Distance(toRl(p), cp) > maxDist * 0.6f) continue;
             float yaw = static_cast<float>(std::atan2(tan.z, tan.x));
             Matrix M = MatrixMultiply(MatrixRotateY(-yaw), MatrixTranslate(static_cast<float>(p.x), static_cast<float>(p.y + 0.4), static_cast<float>(p.z)));
-            DrawMesh(k == 0 ? locomotive_ : wagon_, litMat_, M);
+            drawMeshC(k == 0 ? locomotive_ : wagon_, litMat_, M);
             ++drawCalls_;
         }
     }
@@ -1047,9 +1083,9 @@ void Renderer::drawTanker(const FrameParams& f) {
     Matrix R = MatrixRotateY(static_cast<float>(-tk.heading));
     litMat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     lit_.setF("uSpecular", 0.45f);
-    DrawMesh(tanker_, litMat_, MatrixMultiply(R, MatrixTranslate(static_cast<float>(tk.pos.x), static_cast<float>(tk.pos.y), static_cast<float>(tk.pos.z))));
+    drawMeshC(tanker_, litMat_, MatrixMultiply(R, MatrixTranslate(static_cast<float>(tk.pos.x), static_cast<float>(tk.pos.y), static_cast<float>(tk.pos.z))));
     Vec3 bk = tk.basket();
-    DrawMesh(drogue_, litMat_, MatrixMultiply(R, MatrixTranslate(static_cast<float>(bk.x), static_cast<float>(bk.y), static_cast<float>(bk.z))));
+    drawMeshC(drogue_, litMat_, MatrixMultiply(R, MatrixTranslate(static_cast<float>(bk.x), static_cast<float>(bk.y), static_cast<float>(bk.z))));
     lit_.setF("uSpecular", 0.2f);
     // hose: a sagging curve from the tail fairing to the basket
     Vec3 fwd{std::cos(tk.heading), 0, std::sin(tk.heading)};
@@ -1079,20 +1115,20 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
     jet_.setF("uHitFlash", hitFlash);
     jet_.setF("uDamage", damage);
     rlDisableBackfaceCulling();
-    DrawMesh(jm.body, jetMat_, M);
-    if (canopy) DrawMesh(jm.canopy, jetMat_, M);
+    drawMeshC(jm.body, jetMat_, M);
+    if (canopy) drawMeshC(jm.canopy, jetMat_, M);
     drawCalls_ += 2;
     if (jm.stabL.vertexCount) {
         float a = stabDeg * DEG2RAD;
         Matrix sl = MatrixMultiply(MatrixMultiply(MatrixRotateZ(a), MatrixTranslate(jm.stabPivotL.x, jm.stabPivotL.y, jm.stabPivotL.z)), M);
         Matrix sr = MatrixMultiply(MatrixMultiply(MatrixRotateZ(a), MatrixTranslate(jm.stabPivotR.x, jm.stabPivotR.y, jm.stabPivotR.z)), M);
-        DrawMesh(jm.stabL, jetMat_, sl);
-        DrawMesh(jm.stabR, jetMat_, sr);
+        drawMeshC(jm.stabL, jetMat_, sl);
+        drawMeshC(jm.stabR, jetMat_, sr);
         drawCalls_ += 2;
     }
     if (gearPos > 0.02f) {
         Matrix g = MatrixMultiply(MatrixTranslate(0, (1.0f - gearPos) * 1.6f, 0), M);
-        DrawMesh(jm.gear, jetMat_, g);
+        drawMeshC(jm.gear, jetMat_, g);
         ++drawCalls_;
     }
     rlEnableBackfaceCulling();
@@ -1109,7 +1145,7 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
             float len = (1.2f + 1.5f * throttle + 7.0f * ab) * pulse;
             float r = jm.nozzleRadius * (0.85f + 0.2f * ab);
             Matrix F = MatrixMultiply(MatrixMultiply(MatrixScale(len, r, r), MatrixTranslate(jm.nozzles[e].x, jm.nozzles[e].y, jm.nozzles[e].z)), M);
-            DrawMesh(flame_, flameMat_, F);
+            drawMeshC(flame_, flameMat_, F);
             ++drawCalls_;
         }
         EndBlendMode();
@@ -1191,7 +1227,7 @@ void Renderer::drawCloudLayer(const FrameParams& f) {
         cloud_.setF("uLayerShift", shifts[i]);
         float dy = std::fabs(f.cam.position.y - layers[i]);
         cloud_.setF("uLayerFade", std::clamp((dy - 15.0f) / 120.0f, 0.0f, 1.0f));
-        DrawMesh(world_.cloudPlane, cloudMat_, MatrixTranslate(sx, layers[i], sz));
+        drawMeshC(world_.cloudPlane, cloudMat_, MatrixTranslate(sx, layers[i], sz));
         ++drawCalls_;
     }
     EndBlendMode();
@@ -1287,14 +1323,14 @@ void Renderer::renderShadows(const FrameParams& f) {
         if (Vector3Distance(toRl(s.pos), focus) > 60.0f) continue;
         const JetModel& jm = jets_[static_cast<int>(j.fm->profile().style)];
         Matrix M = bodyMatrix(s.pos, s.q);
-        DrawMesh(jm.body, shadowMat_, M);
-        DrawMesh(jm.canopy, shadowMat_, M);
+        drawMeshC(jm.body, shadowMat_, M);
+        drawMeshC(jm.canopy, shadowMat_, M);
         if (jm.stabL.vertexCount) {
             float a = static_cast<float>(-j.lastInput.pitch * 15.0) * DEG2RAD;
-            DrawMesh(jm.stabL, shadowMat_, MatrixMultiply(MatrixMultiply(MatrixRotateZ(a), MatrixTranslate(jm.stabPivotL.x, jm.stabPivotL.y, jm.stabPivotL.z)), M));
-            DrawMesh(jm.stabR, shadowMat_, MatrixMultiply(MatrixMultiply(MatrixRotateZ(a), MatrixTranslate(jm.stabPivotR.x, jm.stabPivotR.y, jm.stabPivotR.z)), M));
+            drawMeshC(jm.stabL, shadowMat_, MatrixMultiply(MatrixMultiply(MatrixRotateZ(a), MatrixTranslate(jm.stabPivotL.x, jm.stabPivotL.y, jm.stabPivotL.z)), M));
+            drawMeshC(jm.stabR, shadowMat_, MatrixMultiply(MatrixMultiply(MatrixRotateZ(a), MatrixTranslate(jm.stabPivotR.x, jm.stabPivotR.y, jm.stabPivotR.z)), M));
         }
-        if (s.gearPos > 0.02) DrawMesh(jm.gear, shadowMat_, MatrixMultiply(MatrixTranslate(0, (1.0f - static_cast<float>(s.gearPos)) * 1.6f, 0), M));
+        if (s.gearPos > 0.02) drawMeshC(jm.gear, shadowMat_, MatrixMultiply(MatrixTranslate(0, (1.0f - static_cast<float>(s.gearPos)) * 1.6f, 0), M));
     }
     rlEnableBackfaceCulling();
     EndMode3D();
@@ -1302,25 +1338,64 @@ void Renderer::renderShadows(const FrameParams& f) {
     shadowsActive_ = true;
 }
 
+void Renderer::profMark(const char* pass) {
+    if (!profiling_) return;
+    rlDrawRenderBatchActive();
+    glFinish();   // serialise so each pass is charged with its own GPU work
+    auto now = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(now - profLast_).count();
+    profLast_ = now;
+    for (auto& e : prof_) if (e.first == pass) { e.second += ms; return; }
+    prof_.push_back({pass, ms});
+}
+
+void Renderer::profBegin() {
+    if (!profiling_) return;
+    rlDrawRenderBatchActive();
+    glFinish();
+    profLast_ = std::chrono::steady_clock::now();
+    ++profFrames_;
+}
+
+std::string Renderer::profReport() const {
+    std::string r;
+    double total = 0;
+    for (auto& e : prof_) total += e.second;
+    char b[96];
+    for (auto& e : prof_) {
+        std::snprintf(b, sizeof b, "  %-14s %6.2f ms  %4.0f%%\n", e.first.c_str(), e.second / std::max(1, profFrames_), 100.0 * e.second / std::max(1e-9, total));
+        r += b;
+    }
+    return r;
+}
+
 void Renderer::renderWorld(const FrameParams& f) {
     auto t0 = std::chrono::steady_clock::now();
+    if (!f.isPip) profBegin();
     drawCalls_ = 0;
+    g_tris = 0;
     if (Vector3DotProduct(world_.bakedSun, f.L.sunDir) < 0.99999f) {
         auto tb = std::chrono::steady_clock::now();
         world_.bakeSunShadows(f.L.sunDir);
         TraceLog(LOG_INFO, "SKYFALL: terrain sun shadows baked in %.0f ms",
                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tb).count());
     }
+    const bool pm = !f.isPip;
     renderShadows(f);
+    if (pm) profMark("shadow map");
     BeginTextureMode(scene_);
     ClearBackground(BLACK);
     drawSky(f);
+    if (pm) profMark("sky");
     rlSetClipPlanes(f.nearPlane, f.farPlane);
     BeginMode3D(f.cam);
     drawTerrain(f);
+    if (pm) profMark("terrain+sea");
     drawStatics(f);
+    if (pm) profMark("scenery");
     drawCarrier(f);
     drawGroundTargets(f);
+    if (pm) profMark("targets");
     if (f.battle) {
         setAtmosphere(jet_, f);
         for (const auto& jp : f.battle->jets()) {
@@ -1349,17 +1424,19 @@ void Renderer::renderWorld(const FrameParams& f) {
         for (const Missile& m : f.battle->missiles()) {
             Vec3 d = normalize(m.vel);
             Quat q = Quat::fromEuler(std::atan2(d.z, d.x), std::asin(clampd(d.y, -1, 1)), 0);
-            DrawMesh(missile_, litMat_, bodyMatrix(m.pos, q));
+            drawMeshC(missile_, litMat_, bodyMatrix(m.pos, q));
             ++drawCalls_;
         }
         if (f.extraMissiles)
             for (const ExtraMissile& m : *f.extraMissiles) {
                 Vec3 d = normalize(m.dir);
                 Quat q = Quat::fromEuler(std::atan2(d.z, d.x), std::asin(clampd(d.y, -1, 1)), 0);
-                DrawMesh(missile_, litMat_, bodyMatrix(m.pos, q));
+                drawMeshC(missile_, litMat_, bodyMatrix(m.pos, q));
             }
     }
+    if (pm) profMark("aircraft");
     drawShadows(f);
+    if (pm) profMark("blob shadows");
     // transparent: cloud layer then puffs then particles
     if (f.cam.position.y < 2360.0f) {
         drawCloudPuffs(f);
@@ -1368,11 +1445,14 @@ void Renderer::renderWorld(const FrameParams& f) {
         drawCloudLayer(f);
         drawCloudPuffs(f);
     }
+    if (pm) profMark("clouds");
     if (f.battle)
         effects_.draw(f.cam, *f.battle, f.L, particle_.sh, particle_.loc("uIntensity"), world_.edgeLights, f.showRunwayLights);
+    if (pm) profMark("particles");
     drawRain(f);
     EndMode3D();
     EndTextureMode();
+    if (pm) profMark("rain");
     worldMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
