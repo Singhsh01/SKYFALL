@@ -9,7 +9,7 @@
 
 namespace sky {
 
-enum class TimeOfDay { Morning = 0, GoldenHour = 1, Noon = 2, Count = 3 };
+enum class TimeOfDay { Morning = 0, GoldenHour = 1, Noon = 2, Count = 3, Storm = 4 };   // Storm: missions only
 
 struct Lighting {
     Vector3 sunDir{0.5f, 0.5f, 0.5f};
@@ -60,6 +60,20 @@ struct Lighting {
                 l.cloudCover = 0.38f;
                 l.exposure = 0.88f;
                 l.name = "NOON";
+                break;
+            case TimeOfDay::Storm:
+                // heavy overcast with rain: flat, cool light, low contrast, dense grey haze
+                l.sunDir = Vector3Normalize({0.35f, 0.75f, 0.30f});
+                l.sunColor = {1.05f, 1.08f, 1.12f};
+                l.zenith = {0.16f, 0.18f, 0.21f};
+                l.horizon = {0.36f, 0.39f, 0.42f};
+                l.groundHaze = {0.30f, 0.32f, 0.34f};
+                l.fogDensity = 2.6e-4f;
+                l.fogFalloff = 1.0f / 1400.0f;
+                l.cloudCover = 0.92f;
+                l.cirrus = 0.0f;
+                l.exposure = 1.25f;
+                l.name = "STORM";
                 break;
         }
         return l;

@@ -57,7 +57,7 @@ void quadOut(MeshBuilder& mb, Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector
 std::vector<Vector2> sectionRing(const Section& s, float pu, float pl) {
     // (z, y) points of a closed superellipse section with a chine line at y = s.chine.
     // Higher exponents give squarer, "stealthy" sections; the chine reads as a crisp edge.
-    const int R = 28;
+    const int R = 40;
     std::vector<Vector2> r;
     r.reserve(R);
     for (int k = 0; k < R; ++k) {
@@ -474,7 +474,7 @@ JetModel buildJetModel(AirframeStyle style) {
     // fuselage
     std::vector<float> xs;
     std::vector<std::vector<Vector2>> rings;
-    for (const Section& s : smoothStations(g.fus, 4)) { xs.push_back(s.x); rings.push_back(sectionRing(s, g.pu, g.pl)); }
+    for (const Section& s : smoothStations(g.fus, 6)) { xs.push_back(s.x); rings.push_back(sectionRing(s, g.pu, g.pl)); }
     loft(mb, xs, rings, paint(), 0.0f, 0.0f, true, false);
     // canopy (separate mesh)
     MeshBuilder cb;

@@ -16,7 +16,7 @@ const std::vector<LocationDef>& locations() {
          "The roof of the world: Everest, Lhotse and the Khumbu glacier. Thin air - mind your thrust."},
         {"matterhorn", "Matterhorn & Zermatt", "Switzerland / Alps", 45.99, 7.72, Biome::Alpine, 3000, 2100, 2600,
          "Knife-edge ridges, glaciers and the Zermatt valley."},
-        {"geiranger", "Geirangerfjord", "Norway / Europe", 62.10, 7.15, Biome::Temperate, 1350, 850, 1100,
+        {"geiranger", "Geirangerfjord", "Norway / Europe", 62.10, 7.15, Biome::Temperate, 1650, 950, 1250,
          "Deep sea fjord walls - perfect for low-level flying."},
         {"glencoe", "Glen Coe", "Scotland / Europe", 56.66, -5.05, Biome::Temperate, 1150, 550, 900,
          "Green glens, lochs and the Three Sisters."},

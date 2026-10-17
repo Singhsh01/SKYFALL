@@ -47,6 +47,10 @@ enum class ObjectiveKind {
     Stop,           // stop on the runway
     Rendezvous,     // fly within `radius` of the tanker
     Refuel,         // take on fuel until the tank is at least `value` (0..1) full
+    FullPower,      // on the deck: throttle into afterburner
+    Launch,         // catapult shot: off the bow and climbing
+    GearUp,         // airborne with the gear retracted
+    Climb,          // reach `value` metres altitude
 };
 
 struct ObjectiveDef {
@@ -79,7 +83,12 @@ struct CampaignMissionDef {
     bool tanker = false;         // refuelling tanker on a racetrack
     double tankerX = 0, tankerZ = 0, tankerAlt = 3000, tankerRadius = 6500, tankerSpeed = 175;
     double timeLimit = 0;        // seconds, 0 = none
+    bool carrier = false;        // start on the aircraft carrier's catapult
+    bool rain = false;           // rain and low overcast
 };
+
+/// The aircraft carrier used by the carrier missions: off the east coast, bow to the north.
+DeckInfo campaignCarrierDeck();
 
 /// Definitions for missions 4..40 (nullptr outside that range).
 const CampaignMissionDef* campaignMission(int number);

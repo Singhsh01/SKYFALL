@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <string>
 
@@ -303,7 +304,7 @@ void Renderer::shutdown() {
     UnloadMesh(flame_); UnloadMesh(missile_);
     UnloadMesh(tank_); UnloadMesh(truck_); UnloadMesh(aaa_); UnloadMesh(sam_); UnloadMesh(bunker_); UnloadMesh(radar_);
     for (Mesh* m : {&gun_, &artillery_, &oilRig_, &fuelTank_, &hangar_, &command_, &ship_, &powerPlant_, &refinery_, &bridgeDeck_,
-                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_})
+                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_, &carrier_})
         UnloadMesh(*m);
     for (Prog* p : {&sky_, &terrain_p_, &water_, &lit_, &jet_, &flameP_, &cloud_, &runway_, &particle_, &bright_, &blur_, &composite_})
         UnloadShader(p->sh);
@@ -600,6 +601,170 @@ void Renderer::buildGroundModels() {
         m.cylinder({0, 0, 0}, 0.45f, 0.4f, 16, {230, 230, 230, 255}, MatrixMultiply(MatrixRotateZ(PI / 2), MatrixTranslate(-1.0f, 0, 0)), 0.45f);
         drogue_ = m.build();
     }
+    buildCarrier();
+}
+
+// Aircraft carrier (Nimitz-like proportions). Origin at the deck centre on the flight deck
+// surface, bow towards +X, port side towards -Z. The waterline is 19.5 m below the deck.
+void Renderer::buildCarrier() {
+    MeshBuilder m;
+    const Color hull = {112, 118, 124, 255}, hullDark = {86, 91, 96, 255}, boot = {26, 26, 28, 255};
+    const Color deck = {30, 31, 33, 255}, deckWorn = {38, 39, 41, 255}, white = {222, 222, 214, 255}, yellow = {214, 178, 52, 255};
+    const Color island = {124, 130, 136, 255}, glass = {28, 34, 40, 255}, red = {150, 40, 32, 255};
+    const float wl = -19.5f;
+    // hull cross-sections: x, deck-edge half width, waterline half width, keel half width
+    struct Sec { float x, top, water, keel; };
+    const Sec secs[] = {{-160, 21, 19, 14}, {-120, 22, 20.5f, 16}, {-40, 22, 21, 17}, {40, 22, 21, 16.5f}, {95, 20, 17, 11},
+                        {128, 15, 10, 5}, {150, 9, 4.5f, 1.5f}, {166, 2.5f, 0.6f, 0.2f}};
+    const int ns = sizeof(secs) / sizeof(secs[0]);
+    const float yTop = -2.0f, yKeel = wl - 11.0f, yBoot = wl + 1.2f;
+    for (int i = 0; i + 1 < ns; ++i) {
+        const Sec &a = secs[i], &b = secs[i + 1];
+        for (float sd : {1.0f, -1.0f}) {
+            Vector3 at = {a.x, yTop, sd * a.top}, bt = {b.x, yTop, sd * b.top};
+            Vector3 ab = {a.x, yBoot, sd * a.water}, bb = {b.x, yBoot, sd * b.water};
+            Vector3 aw = {a.x, wl - 0.6f, sd * a.water}, bw = {b.x, wl - 0.6f, sd * b.water};
+            Vector3 ak = {a.x, yKeel, sd * a.keel}, bk = {b.x, yKeel, sd * b.keel};
+            if (sd > 0) {
+                m.quad(at, ab, bb, bt, i % 2 ? hull : hullDark);
+                m.quad(ab, aw, bw, bb, boot);
+                m.quad(aw, ak, bk, bw, {40, 30, 30, 255});
+            } else {
+                m.quad(at, bt, bb, ab, i % 2 ? hull : hullDark);
+                m.quad(ab, bb, bw, aw, boot);
+                m.quad(aw, bw, bk, ak, {40, 30, 30, 255});
+            }
+        }
+    }
+    // stern (transom) with the hangar-deck openings
+    m.quad({-160, yTop, -21}, {-160, yTop, 21}, {-160, yKeel, 14}, {-160, yKeel, -14}, hullDark);
+    m.box({-160.2f, -7.0f, 0}, {0.6f, 5.0f, 26.0f}, {30, 32, 34, 255});
+    // flight deck slab: main deck, tapered bow, angled-deck sponson to port, island sponson to starboard
+    const float dt = 0.0f, db = -2.0f;
+    auto slab = [&](std::vector<Vector2> poly, Color c) {   // convex polygon in (x, z), CCW seen from above
+        for (size_t i = 1; i + 1 < poly.size(); ++i) {
+            m.tri({poly[0].x, dt, poly[0].y}, {poly[i + 1].x, dt, poly[i + 1].y}, {poly[i].x, dt, poly[i].y}, c);
+            m.tri({poly[0].x, db, poly[0].y}, {poly[i].x, db, poly[i].y}, {poly[i + 1].x, db, poly[i + 1].y}, hullDark);
+        }
+        for (size_t i = 0; i < poly.size(); ++i) {
+            Vector2 a = poly[i], b = poly[(i + 1) % poly.size()];
+            m.quad({a.x, dt, a.y}, {b.x, dt, b.y}, {b.x, db, b.y}, {a.x, db, a.y}, hullDark);
+        }
+    };
+    slab({{-166, -24}, {-166, 24}, {120, 24}, {166, 7}, {166, -7}, {120, -24}}, deck);
+    slab({{-150, -24}, {40, -24}, {-10, -38}, {-140, -38}}, deck);          // angled deck sponson (port)
+    slab({{-60, 24}, {20, 24}, {14, 36}, {-54, 36}}, deck);                 // island sponson (starboard)
+    // deck markings (a few cm above the deck)
+    const float my = 0.04f;
+    auto stripe = [&](Vector2 a, Vector2 b, float w, Color c) {
+        Vector2 d = Vector2Normalize(Vector2Subtract(b, a));
+        Vector2 n = {-d.y * w * 0.5f, d.x * w * 0.5f};
+        m.quad({a.x - n.x, my, a.y - n.y}, {a.x + n.x, my, a.y + n.y}, {b.x + n.x, my, b.y + n.y}, {b.x - n.x, my, b.y - n.y}, c);
+    };
+    // angled deck: landing area edges and dashed centreline (axis 9 degrees to port)
+    Vector2 la0 = {-160, -6}, la1 = {30, -36};
+    Vector2 ax = Vector2Normalize(Vector2Subtract(la1, la0)), nx = {-ax.y, ax.x};
+    stripe(Vector2Add(la0, Vector2Scale(nx, 12)), Vector2Add(la1, Vector2Scale(nx, 12)), 0.5f, white);
+    stripe(Vector2Subtract(la0, Vector2Scale(nx, 12)), Vector2Subtract(la1, Vector2Scale(nx, 12)), 0.5f, white);
+    for (int k = 0; k < 12; ++k) {
+        float t0 = k / 12.0f, t1 = t0 + 0.045f;
+        stripe(Vector2Lerp(la0, la1, t0), Vector2Lerp(la0, la1, t1), 0.6f, white);
+    }
+    // foul line and arresting-wire area
+    stripe({-90, -24}, {-60, 24}, 0.35f, yellow);
+    for (int w = 0; w < 4; ++w) stripe(Vector2Add(Vector2Lerp(la0, la1, 0.18f + w * 0.035f), Vector2Scale(nx, 11)),
+                                       Vector2Subtract(Vector2Lerp(la0, la1, 0.18f + w * 0.035f), Vector2Scale(nx, 11)), 0.15f, {20, 20, 20, 255});
+    // bow catapults (cat 1 is the player's: on the deck axis), shuttle tracks and hold-back lines
+    for (float cz : {0.0f, -13.0f}) {
+        stripe({40, cz}, {150, cz}, 0.35f, {24, 24, 26, 255});
+        stripe({40, cz - 3}, {150, cz - 3}, 0.12f, yellow);
+        stripe({40, cz + 3}, {150, cz + 3}, 0.12f, yellow);
+        // jet blast deflector raised behind the launch position
+        m.box({26.0f, 2.2f, cz}, {0.6f, 4.6f, 13.0f}, {80, 84, 88, 255}, MatrixMultiply(MatrixRotateZ(-0.95f), MatrixTranslate(0, 0, 0)));
+    }
+    // deck-edge safety line and elevator outlines (starboard)
+    stripe({-166, 23.4f}, {120, 23.4f}, 0.3f, white);
+    for (float ex : {-40.0f, 60.0f}) {
+        stripe({ex - 13, 10}, {ex + 13, 10}, 0.25f, yellow);
+        stripe({ex - 13, 10}, {ex - 13, 23}, 0.25f, yellow);
+        stripe({ex + 13, 10}, {ex + 13, 23}, 0.25f, yellow);
+    }
+    m.box({-100.0f, my * 0.5f, 0}, {30.0f, my, 30.0f}, deckWorn);   // tyre-worn landing area
+    // island superstructure (starboard, amidships)
+    m.box({-22, 7.5f, 30.5f}, {36, 15, 9}, island);
+    m.box({-26, 18.0f, 30.0f}, {24, 6, 8}, island);
+    m.box({-26, 18.6f, 30.0f}, {24.2f, 1.6f, 8.2f}, glass);        // bridge windows
+    m.box({-30, 23.0f, 30.0f}, {12, 4, 6.5f}, island);
+    m.box({-30, 23.4f, 30.0f}, {12.2f, 1.0f, 6.7f}, glass);
+    m.cylinder({-28, 25.0f, 30.0f}, 0.5f, 22.0f, 8, {150, 154, 158, 255});                     // main mast
+    m.box({-28, 37.0f, 30.0f}, {0.4f, 0.4f, 9.0f}, {150, 154, 158, 255});                       // yardarm
+    m.box({-28, 33.0f, 30.0f}, {3.0f, 2.2f, 0.4f}, {170, 174, 178, 255}, MatrixMultiply(MatrixRotateY(0.5f), MatrixTranslate(0, 0, 0)));  // radar
+    m.cylinder({-14, 25.0f, 30.0f}, 1.6f, 1.2f, 14, {200, 202, 204, 255});                    // radome base
+    m.cylinder({-14, 26.2f, 30.0f}, 1.6f, 1.4f, 14, {220, 222, 224, 255}, MatrixIdentity(), 0.3f);
+    m.box({-22, 10.0f, 35.1f}, {6.0f, 3.0f, 0.2f}, red);                                         // hull number board
+    // deck-edge gun mounts and antennas
+    for (float gx : {-150.0f, 110.0f}) m.cylinder({gx, -2.0f, gx > 0 ? -20.0f : 20.0f}, 1.4f, 3.0f, 10, island);
+    carrier_ = m.build();
+}
+
+void Renderer::drawCarrier(const FrameParams& f) {
+    if (!terrain_ || !terrain_->deck().active) return;
+    const DeckInfo& d = terrain_->deck();
+    if (Vector3Distance(toRl(d.center), f.cam.position) > 40000) return;
+    Matrix R = MatrixRotateY(static_cast<float>(-d.heading));
+    Matrix M = MatrixMultiply(R, MatrixTranslate(static_cast<float>(d.center.x), static_cast<float>(d.center.y), static_cast<float>(d.center.z)));
+    setAtmosphere(lit_, f);
+    lit_.setF("uEmissive", 0.0f);
+    lit_.setF("uSpecular", f.L.cloudCover > 0.8f ? 0.32f : 0.18f);   // wet deck in the rain
+    lit_.setF("uFogOn", 1.0f);
+    litMat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    DrawMesh(carrier_, litMat_, M);
+    lit_.setF("uSpecular", 0.2f);
+    ++drawCalls_;
+    // parked aircraft along the starboard side and on the angled-deck corner
+    setAtmosphere(jet_, f);
+    const float spots[][3] = {{-120, 16, 2.4f}, {-100, 16, 2.4f}, {-80, 16, 2.4f}, {95, 16, 2.6f}, {110, 15, 2.7f}, {-20, -30, 0.8f}};
+    for (const auto& sp : spots) {
+        Matrix L = MatrixMultiply(MatrixRotateY(sp[2]), MatrixTranslate(sp[0], 2.35f, sp[1]));
+        drawJetModel(AirframeStyle::StealthSingle, MatrixMultiply(L, M), {0.32f, 0.34f, 0.36f}, {0.26f, 0.28f, 0.30f}, 0, 1, 0, 0, 0, 0, 0, f, true);
+    }
+}
+
+void Renderer::drawRain(const FrameParams& f) {
+    if (f.rain <= 0.0f) return;
+    // streaks in a box that follows the camera; they fall at 9 m/s and smear with the relative wind
+    const int n = f.quality == GraphicsQuality::Low ? 1800 : 4200;
+    const float box = 70.0f;
+    Vector3 fall = {f.rainWind.x, -9.0f + f.rainWind.y, f.rainWind.z};
+    float speed = Vector3Length(fall);
+    Vector3 dir = Vector3Scale(fall, 1.0f / std::max(speed, 0.1f));
+    float len = std::clamp(speed * 0.022f, 0.5f, 7.0f);
+    Vector3 c = f.cam.position;
+    rlDrawRenderBatchActive();
+    rlDisableDepthMask();
+    BeginBlendMode(BLEND_ALPHA);
+    rlBegin(RL_LINES);
+    float sky = 0.45f + 0.4f * f.L.exposure;
+    for (int i = 0; i < n; ++i) {
+        uint32_t hsh = static_cast<uint32_t>(i) * 2654435761u;
+        float rx = ((hsh & 1023) / 1023.0f), ry = (((hsh >> 10) & 1023) / 1023.0f), rz = (((hsh >> 20) & 1023) / 1023.0f);
+        // advect then wrap into the box around the camera
+        float t = static_cast<float>(f.time) * (0.85f + 0.3f * rx);
+        Vector3 p = {rx * box + fall.x * t, ry * box + fall.y * t, rz * box + fall.z * t};
+        p.x = c.x - box * 0.5f + std::fmod(std::fmod(p.x - (c.x - box * 0.5f), box) + box, box);
+        p.y = c.y - box * 0.5f + std::fmod(std::fmod(p.y - (c.y - box * 0.5f), box) + box, box);
+        p.z = c.z - box * 0.5f + std::fmod(std::fmod(p.z - (c.z - box * 0.5f), box) + box, box);
+        float d = Vector3Distance(p, c);
+        unsigned char a = static_cast<unsigned char>(std::clamp(120.0f * (1.0f - d / (box * 0.7f)) * f.rain, 0.0f, 120.0f));
+        if (a < 4) continue;
+        rlColor4ub(static_cast<unsigned char>(170 * sky), static_cast<unsigned char>(180 * sky), static_cast<unsigned char>(195 * sky), a);
+        rlVertex3f(p.x, p.y, p.z);
+        rlVertex3f(p.x - dir.x * len, p.y - dir.y * len, p.z - dir.z * len);
+    }
+    rlEnd();
+    rlDrawRenderBatchActive();
+    EndBlendMode();
+    rlEnableDepthMask();
 }
 
 void Renderer::buildClouds(const Terrain& t) {
@@ -685,6 +850,7 @@ void Renderer::drawTerrain(const FrameParams& f) {
     // sea
     setAtmosphere(water_, f);
     water_.setF("uMapHalf", static_cast<float>(Terrain::kHalfSize));
+    water_.setF("uCloudCover", f.L.cloudCover);
     DrawMesh(world_.water, waterMat_, MatrixIdentity());
     ++drawCalls_;
     rlEnableBackfaceCulling();
@@ -934,12 +1100,14 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
         setAtmosphere(flameP_, f);
         flameP_.setF("uThrottle", throttle);
         flameP_.setF("uAb", ab);
+        flameP_.setV3("uAxis", Vector3Normalize({-M.m0, -M.m1, -M.m2}));
         rlDisableDepthMask();
         rlDisableBackfaceCulling();
         BeginBlendMode(BLEND_ADDITIVE);
         for (int e = 0; e < jm.nozzleCount; ++e) {
-            float len = 1.2f + 1.5f * throttle + 7.5f * ab;
-            float r = jm.nozzleRadius * (0.85f + 0.15f * ab);
+            float pulse = 1.0f + 0.06f * std::sin(static_cast<float>(f.time) * 31.0f + e * 1.7f) * ab;
+            float len = (1.2f + 1.5f * throttle + 7.0f * ab) * pulse;
+            float r = jm.nozzleRadius * (0.85f + 0.2f * ab);
             Matrix F = MatrixMultiply(MatrixMultiply(MatrixScale(len, r, r), MatrixTranslate(jm.nozzles[e].x, jm.nozzles[e].y, jm.nozzles[e].z)), M);
             DrawMesh(flame_, flameMat_, F);
             ++drawCalls_;
@@ -1151,6 +1319,7 @@ void Renderer::renderWorld(const FrameParams& f) {
     BeginMode3D(f.cam);
     drawTerrain(f);
     drawStatics(f);
+    drawCarrier(f);
     drawGroundTargets(f);
     if (f.battle) {
         setAtmosphere(jet_, f);
@@ -1201,6 +1370,7 @@ void Renderer::renderWorld(const FrameParams& f) {
     }
     if (f.battle)
         effects_.draw(f.cam, *f.battle, f.L, particle_.sh, particle_.loc("uIntensity"), world_.edgeLights, f.showRunwayLights);
+    drawRain(f);
     EndMode3D();
     EndTextureMode();
     worldMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -1262,6 +1432,12 @@ void Renderer::composite(const FrameParams& f) {
     composite_.setF("uTime", static_cast<float>(fmod(f.time, 100.0)));
     composite_.setF("uGrain", 0.018f);
     composite_.setF("uSpeedFx", f.speedFx);
+    {
+        static float grade = std::getenv("SKYFALL_GRADE") ? static_cast<float>(std::atof(std::getenv("SKYFALL_GRADE"))) : 1.0f;
+        static float gk = std::getenv("SKYFALL_GK") ? static_cast<float>(std::atof(std::getenv("SKYFALL_GK"))) : 0.5f;
+        composite_.setF("uGrade", grade);
+        composite_.setF("uGradeK", gk);
+    }
     int l1 = composite_.loc("uBloom1"), l2 = composite_.loc("uBloom2");
     if (l1 >= 0) SetShaderValueTexture(composite_.sh, l1, bloomA_.texture);
     if (l2 >= 0) SetShaderValueTexture(composite_.sh, l2, bloomC_.texture);
@@ -1303,6 +1479,8 @@ void Renderer::renderPip(const FrameParams& f, int w, int h) {
     composite_.setF("uDamage", 0.0f);
     composite_.setF("uTime", static_cast<float>(fmod(f.time, 100.0)));
     composite_.setF("uGrain", 0.045f);
+    composite_.setF("uGrade", 1.0f);
+    composite_.setF("uGradeK", 0.5f);
     composite_.setF("uSpeedFx", 0.0f);
     int l1 = composite_.loc("uBloom1"), l2 = composite_.loc("uBloom2");
     if (l1 >= 0) SetShaderValueTexture(composite_.sh, l1, bloomA_.texture);

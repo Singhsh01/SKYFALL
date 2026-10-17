@@ -5,6 +5,7 @@
 #include "combat/Combat.hpp"
 #include "mission/Campaign.hpp"
 #include "mission/Mission.hpp"
+#include "mission/Voice.hpp"
 #include "sim/Locations.hpp"
 #include "sim/Atmosphere.hpp"
 #include "sim/FlightModel.hpp"
@@ -41,6 +42,7 @@ struct Reg { Reg(const char* n, std::function<void()> f) { registry().push_back(
 #define TEST(name) static void name(); static Reg reg_##name(#name, name); static void name()
 
 const Terrain& terrain() { static Terrain t; return t; }
+Terrain& carrierTerrain();
 const WorldLayout& layout() { static WorldLayout l = WorldLayout::build(terrain()); return l; }
 
 /// Scripted pilot used by several tests: cold start -> takeoff -> climb -> gear up.
@@ -579,10 +581,10 @@ TEST(all_eight_aircraft_profiles_are_defined) {
 // ------------------------------------------------------------------------------------------
 // Campaign 04-40
 // ------------------------------------------------------------------------------------------
-TEST(campaign_has_fifty_one_playable_missions) {
+TEST(campaign_has_sixty_one_playable_missions) {
     const auto& cat = campaignCatalogue();
     CHECK(cat.size() == static_cast<size_t>(kCampaignMissions));
-    CHECK(kCampaignMissions == 51);
+    CHECK(kCampaignMissions == 61);
     for (size_t i = 0; i < cat.size(); ++i) {
         CHECK(cat[i].number == static_cast<int>(i) + 1);
         CHECK(cat[i].playable);
@@ -605,7 +607,7 @@ TEST(campaign_layouts_are_valid) {
     };
     for (const CampaignMissionDef& m : campaignMissions()) {
         if (std::fabs(m.startX) > 14500 || std::fabs(m.startZ) > 14500) fail(m, "start outside the map");
-        if (m.startAlt < t.surfaceHeight(m.startX, m.startZ) + 300) fail(m, "start too close to the ground");
+        if (!m.carrier && m.startAlt < t.surfaceHeight(m.startX, m.startZ) + 300) fail(m, "start too close to the ground");
         for (const TargetDef& g : m.targets) {
             if (g.anchor == TargetDef::Anchor::Railway) {
                 if (layout().railway.length() < 5000) fail(m, g.label + ": no railway");
@@ -671,13 +673,16 @@ namespace {
 /// targets and bandits through the test hooks, but flies the manoeuvre objectives for real.
 struct CampaignPlaythrough {
     const CampaignMissionDef& def;
-    Battle battle{terrain()};
+    const Terrain& T;
+    Battle battle;
     Mission mission;
     CampaignDirector director;
-    explicit CampaignPlaythrough(const CampaignMissionDef& d) : def(d), mission(buildCampaignMission(d)) {
+    explicit CampaignPlaythrough(const CampaignMissionDef& d)
+        : def(d), T(d.carrier ? static_cast<const Terrain&>(carrierTerrain()) : terrain()), battle(T), mission(buildCampaignMission(d)) {
         battle.setLayout(&layout());
         Jet& p = battle.createPlayer(AircraftId::F22);
-        p.fm->resetAirborne({d.startX, d.startAlt, d.startZ}, campaignStartHeading(d), d.startSpeed, 0.8);
+        if (d.carrier) p.fm->resetOnCatapult();
+        else p.fm->resetAirborne({d.startX, d.startAlt, d.startZ}, campaignStartHeading(d), d.startSpeed, 0.8);
         if (d.startFuel >= 0) p.fm->mutableState().fuelKg = d.startFuel * p.fm->profile().fuelMassKg;
         director.begin(d, battle);
         battle.setAiEnabled(false);
@@ -685,7 +690,7 @@ struct CampaignPlaythrough {
     }
     void step(const ControlInputs& in) {
         battle.update(FlightModel::kDt, in, PlayerCommands{});
-        MissionContext ctx{&battle.player().fm->state(), &battle.player().fm->profile(), &terrain(), 0, &battle};
+        MissionContext ctx{&battle.player().fm->state(), &battle.player().fm->profile(), &T, 0, &battle};
         mission.update(ctx, FlightModel::kDt);
         director.update(mission, battle);
     }
@@ -718,6 +723,15 @@ struct CampaignPlaythrough {
                     if (!fm.state().onGround) fm.resetOnRunway(false);
                     break;
                 case ObjectiveKind::Stop: in.throttleRate = -1.0; in.brake = 1.0; break;
+                case ObjectiveKind::FullPower: in.throttleRate = 1.0; break;
+                case ObjectiveKind::Launch:
+                    in.throttleRate = 1.0;
+                    if (fm.state().parkingBrake && fm.state().throttle >= FlightModel::kAbDetent) fm.setParkingBrake(false);
+                    break;
+                case ObjectiveKind::GearUp:
+                    if (fm.state().gearDown && !fm.state().onGround && fm.state().agl > 40) fm.toggleGear();
+                    break;
+                case ObjectiveKind::Climb: in.pitch = toEuler(fm.state().q).pitch < 14 * kDeg ? 0.3 : 0.0; break;
                 case ObjectiveKind::Rendezvous: {
                     const Tanker& tk = battle.tanker();
                     Vec3 behind = tk.pos - Vec3{std::cos(tk.heading), 0, std::sin(tk.heading)} * 300.0 - Vec3{0, 30, 0};
@@ -1077,6 +1091,44 @@ TEST(real_terrain_file_round_trips_and_builds_a_flat_airfield) {
     std::filesystem::remove(path);
 }
 
+TEST(real_terrain_sea_level_samples_become_water) {
+    // elevation data stores the sea and fjords as exactly 0 m: they must be water, not flat land
+    Heightmap hm;
+    hm.n = 129;
+    hm.extent = 32000;
+    hm.h.assign(static_cast<size_t>(hm.n) * hm.n, 400.0f);
+    for (int j = 0; j < hm.n; ++j)
+        for (int i = 50; i < 70; ++i) hm.h[static_cast<size_t>(j) * hm.n + i] = 0.0f;   // a north-south fjord
+    TerrainInfo info;
+    info.id = "fjord_test";
+    Terrain t(hm, info);
+    double fx = -16000 + 60.0 / 128.0 * 32000;
+    CHECK(t.isWater(fx, 0));
+    CHECK(t.height(fx, 0) < -2.0);
+    CHECK(!t.isWater(-12000, 0));
+    CHECK(!t.isWater(fx, t.runway().center.z) || !t.onRunway(fx, t.runway().center.z));
+}
+
+TEST(every_spoken_line_has_a_recording_in_the_voice_pack) {
+    namespace fs = std::filesystem;
+    fs::path dir = fs::path(__FILE__).parent_path().parent_path() / "assets" / "voice";
+    if (!fs::exists(dir)) { std::printf("    (no voice pack in this checkout - skipped)\n"); return; }
+    int missing = 0;
+    auto lines = allVoiceLines();
+    CHECK(lines.size() > 150);
+    for (const VoiceLine& l : lines)
+        if (!fs::exists(dir / (voiceKey(l.who, l.text) + ".mp3"))) {
+            if (missing++ < 5) std::printf("    missing recording: %s\n", l.text.substr(0, 70).c_str());
+        }
+    CHECK(missing == 0);
+    // every briefing ends with the sign-off and names the mission
+    for (int n = 0; n <= kCampaignMissions; ++n) {
+        Briefing b = makeBriefing(n);
+        CHECK(b.speech.size() > 60);
+        CHECK(b.speech.find("Good luck, Captain.") != std::string::npos);
+    }
+}
+
 TEST(world_has_at_least_twelve_real_locations) {
     int real = 0;
     for (const LocationDef& l : locations()) {
@@ -1102,6 +1154,85 @@ TEST(generated_towns_do_not_cover_campaign_targets) {
             }
         }
     CHECK(bad == 0);
+}
+
+namespace {
+Terrain& carrierTerrain() {
+    static Terrain t;
+    static bool init = false;
+    if (!init) { t.setDeck(campaignCarrierDeck()); init = true; }
+    return t;
+}
+/// The carrier launch every carrier mission starts with: afterburner, release the brake,
+/// hands off. Returns the flight model after `seconds` of flight.
+struct CatShot {
+    bool released = false;
+    ControlInputs step(FlightModel& fm) {
+        ControlInputs in;
+        const FlightState& s = fm.state();
+        in.throttleRate = s.throttle < 1.0 ? 1.0 : 0.0;
+        if (!released && s.throttle >= FlightModel::kAbDetent) { fm.setParkingBrake(false); released = true; }
+        if (!s.onGround && s.agl > 60 && s.gearDown) fm.toggleGear();
+        return in;
+    }
+};
+}  // namespace
+
+TEST(carrier_deck_is_a_raised_runway_on_the_sea) {
+    const Terrain& t = carrierTerrain();
+    const DeckInfo& d = t.deck();
+    CHECK(d.active);
+    CHECK(t.isWater(d.center.x, d.center.z));
+    CHECK(t.onDeck(d.center.x, d.center.z));
+    CHECK_NEAR(t.surfaceHeight(d.center.x, d.center.z), d.center.y, 1e-6);
+    CHECK(t.surface(d.catapultStart().x, d.catapultStart().z) == SurfaceKind::Runway);
+    Vec3 off = d.center + Vec3{0, 0, 0} + Vec3{std::cos(d.heading + kPi / 2), 0, std::sin(d.heading + kPi / 2)} * 80.0;
+    CHECK(t.surfaceHeight(off.x, off.z) < 1.0);   // the sea beside the ship
+}
+
+TEST(catapult_holds_until_afterburner_and_brake_release) {
+    for (int ac = 0; ac < 8; ++ac) {
+        FlightModel fm(profile(static_cast<AircraftId>(ac)), carrierTerrain());
+        fm.resetOnCatapult();
+        Vec3 p0 = fm.state().pos;
+        ControlInputs in;
+        fm.setParkingBrake(false);   // brake off but idle: the holdback keeps it there
+        for (int i = 0; i < 240; ++i) fm.step(in);
+        CHECK(length(fm.state().pos - p0) < 0.01);
+        CHECK(fm.state().catArmed);
+        in.throttleRate = 1.0;
+        for (int i = 0; i < 600 && fm.state().catArmed; ++i) fm.step(in);
+        CHECK(!fm.state().catArmed);
+        CHECK(fm.state().catFiring || fm.state().launched);
+    }
+}
+
+TEST(hands_off_catapult_launch_climbs_away_safely_in_every_aircraft_and_mode) {
+    for (int mode = 0; mode < 3; ++mode)
+        for (int ac = 0; ac < 8; ++ac) {
+            FlightModel fm(profile(static_cast<AircraftId>(ac)), carrierTerrain());
+            fm.setHandling(static_cast<HandlingMode>(mode));
+            fm.resetOnCatapult();
+            CatShot pilot;
+            double deckY = carrierTerrain().deck().center.y;
+            double minAgl = 1e9, maxDeckSpeed = 0;
+            bool leftDeck = false;
+            for (int i = 0; i < 120 * 25 && !fm.state().crashed; ++i) {
+                fm.step(pilot.step(fm));
+                const FlightState& s = fm.state();
+                if (s.onGround) maxDeckSpeed = std::max(maxDeckSpeed, s.airspeed);
+                if (!s.onGround && s.launched) { leftDeck = true; minAgl = std::min(minAgl, s.pos.y); }
+            }
+            const FlightState& s = fm.state();
+            if (s.crashed || !leftDeck || s.pos.y < deckY + 250 || minAgl < 8.0)
+                std::printf("    aircraft %d mode %d: crashed=%d(%s) alt=%.0f minAlt=%.1f deckSpeed=%.0f\n", ac, mode, s.crashed,
+                            crashReasonText(s.crashReason), s.pos.y, minAgl, maxDeckSpeed);
+            CHECK(!s.crashed);
+            CHECK(leftDeck);
+            CHECK(minAgl > 8.0);                // never settles towards the waves
+            CHECK(s.pos.y > deckY + 250);       // climbing away after 25 s with no pitch input
+            CHECK(maxDeckSpeed > fm.profile().rotateSpeedMs);
+        }
 }
 
 int main(int argc, char** argv) {

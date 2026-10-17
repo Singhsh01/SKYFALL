@@ -61,6 +61,7 @@ struct HudContext {
     const LossReport* loss = nullptr;
     // missions
     RunwayInfo runway{};
+    DeckInfo deck{};                 // aircraft carrier (inactive unless a carrier mission)
     const CampaignMissionDef* campaign = nullptr;
     bool showGlidePath = false;
 };

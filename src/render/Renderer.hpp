@@ -61,6 +61,8 @@ struct FrameParams {
     const std::vector<ExtraJet>* extraJets = nullptr;    // replay aircraft
     const std::vector<ExtraMissile>* extraMissiles = nullptr;
     Vector3 shadowFocus{0, 0, 0};
+    float rain = 0;                 // 0..1 rain intensity
+    Vector3 rainWind{0, 0, 0};      // rain velocity relative to the camera (m/s, without the fall speed)
 };
 
 class Renderer {
@@ -128,7 +130,10 @@ private:
     Mesh tank_{}, truck_{}, aaa_{}, sam_{}, bunker_{}, radar_{};
     Mesh gun_{}, artillery_{}, oilRig_{}, fuelTank_{}, hangar_{}, command_{}, ship_{};
     Mesh powerPlant_{}, refinery_{}, bridgeDeck_{}, bridgePier_{}, commTower_{}, factory_{}, locomotive_{}, wagon_{},
-         launcher_{}, ammo_{}, substation_{}, tanker_{}, drogue_{};
+         launcher_{}, ammo_{}, substation_{}, tanker_{}, drogue_{}, carrier_{};
+    void buildCarrier();
+    void drawCarrier(const FrameParams& f);
+    void drawRain(const FrameParams& f);
     void drawTanker(const FrameParams& f);
     void drawDressing(const FrameParams& f);
     Dressing dressing_;

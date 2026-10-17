@@ -27,17 +27,42 @@ copyrighted models, textures, sounds or code from commercial games.
 |---|---|
 | ![Missile camera](docs/screenshots/missile_cam.jpg) | ![Hit camera](docs/screenshots/hit_cam.jpg) |
 | ![Crash replay](docs/screenshots/crash_replay.jpg) | ![Canyon](docs/screenshots/canyon.jpg) |
-| ![Cockpit](docs/screenshots/cockpit_air.jpg) | ![Hangar](docs/screenshots/hangar.jpg) |
-| ![Campaign](docs/screenshots/campaign_menu.jpg) | ![Gun line](docs/screenshots/gun_line.jpg) |
-| ![Briefing](docs/screenshots/briefing.jpg) | ![Refuelling](docs/screenshots/refuelling.jpg) |
+| ![Cockpit](docs/screenshots/cockpit_air.jpg) | ![Briefing](docs/screenshots/briefing.jpg) |
+| ![Gun line](docs/screenshots/gun_line.jpg) | ![Hangar](docs/screenshots/hangar.jpg) |
+| ![Refuelling](docs/screenshots/refuelling.jpg) | ![Dogfight arena](docs/screenshots/arena_chase.jpg) |
 | ![Town and railway](docs/screenshots/scenery_town.jpg) | ![Camouflage schemes](docs/screenshots/skins.jpg) |
+| ![Carrier deck in the rain](docs/screenshots/carrier_deck.jpg) | ![On the catapult in full afterburner](docs/screenshots/catapult_afterburner.jpg) |
+| ![Afterburner climb-out in a storm](docs/screenshots/afterburner_rain.jpg) | ![Campaign: 61 missions](docs/screenshots/campaign_menu.jpg) |
+| ![Everest, real elevation data](docs/screenshots/real_everest.jpg) | ![Geirangerfjord, real elevation data](docs/screenshots/real_geiranger.jpg) |
 
 > Screenshots are captured from the running executable (`skyfall --capture`) on a Linux
 > container with Mesa's software rasteriser: they show the real renderer output, not macOS
 > performance. Measured on a MacBook Air (v0.3 build): 66 fps mean, p95 20 ms at 1680x1050 High.
 > See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
-## What you can do in this build (v0.6)
+## What you can do in this build (v0.7)
+
+* **Carrier operations (missions 52-61)** — ten missions that start on the catapult of an aircraft
+  carrier in a rainstorm: push the throttle into afterburner (blue-white flame with shock
+  diamonds), release the brake, and the catapult throws you off the bow; the flight controls
+  rotate to a climb by themselves. Then patrols, picket boats, a coastal radar, a harbour, fleet
+  defence, oil platforms, a beachhead, a rail viaduct and a final strike, each ending with a low
+  pass over the carrier. Every launch is test-flown in all 8 aircraft and all 3 handling modes.
+* **A real voice for the whole game** — every briefing and every radio call (AWACS, tower,
+  instructor, your wingman) is spoken by a natural neural female voice, recorded once with the
+  open-source Kokoro-82M model (`tools/make_voice.py`) and shipped as `assets/voice/*.mp3`. Radio
+  calls get a radio-band filter; the captain's briefings are clean. If a recording is missing the
+  system voice reads the line instead.
+* **Download maps in the game** — Settings → DOWNLOAD WORLD MAPS (or click a location marked NOT
+  DOWNLOADED) fetches and converts the real elevation data in the background with a progress bar.
+* **Ultra HD and 75 fps** — Settings → Quality ULTRA HD renders the 3D scene at the display's real
+  pixel count (Retina / 4K, up to 3840 wide); Settings → Frame rate limit 60 / 75 / 120 /
+  unlimited (default 75). Dynamic resolution holds the chosen frame rate.
+* **More realistic image** — filmic ACES tone mapping with proper sRGB output and a photographic
+  grade, storm lighting with a slate-grey sea and whitecaps, rain, lightning, and real sea level
+  on the real maps (fjords and coasts are water).
+* **Camouflage everywhere** — the scheme you paint in the Hangar is what you fly, and you can
+  change it on the briefing screen with ← / →.
 
 * **World locations with real terrain** (title → WORLD LOCATIONS): Everest & Khumbu, Matterhorn,
   Geirangerfjord, Glen Coe, Erg Chebbi (Sahara), Wadi Rum, Musandam fjords, Grand Canyon,
@@ -55,9 +80,7 @@ copyrighted models, textures, sounds or code from commercial games.
   naval, digital urban, night, tiger) — ← / → on an aircraft in the Hangar. Choices are saved.
 * **Spoken briefings** — before every campaign mission and the Dogfight Arena, Captain Avery
   Langlois (Wing Operations) briefs you on the aim and objectives and signs off with
-  "Good luck, Captain." Uses the system voice: macOS `say` (an English (Canada) voice if
-  installed, otherwise a North-American female voice) or the browser's speech synthesis; captions
-  are always shown. Toggle in Settings.
+  "Good luck, Captain." Captions are always shown; Settings → Voice turns the voice off.
 * **Arcade handling (default)** — Battlefield-style: the flight path follows the nose, hard turns
   bleed energy, every jet has enough afterburner thrust to climb out of a low dive.
   **Double-tap ← / →** for an aileron roll. Assisted and Simulation handling remain in Settings.
@@ -78,13 +101,13 @@ copyrighted models, textures, sounds or code from commercial games.
   moving tapes, in both the minimal and the full HUD (`U`).
 * **Desert battlefield** — eroded arid mountains (procedural noise shaped by a deterministic
   hydraulic-erosion simulation), dry river bed with palms, desert town, coast to the east.
-* **51-mission campaign** (all unlocked, progress saved): training (takeoff, solo flight, landing,
+* **61-mission campaign** (all unlocked, progress saved): training (takeoff, solo flight, landing,
   navigation, high-g, low-level, gunnery / ATS / ATA ranges), strikes and air battles (gun lines
   GUN 1-4, offshore oil rigs, convoys, SAM sites, fuel depots, hangars, patrol boats, artillery),
   **air-to-air refuelling** behind a tanker (mission 41), and ten **critical-infrastructure
   strikes** (power station, refinery, rail viaduct and supply train, comms masts, armoured train,
   arms factories, parked fighters, mobile launchers against the clock, ammunition dump, and a final
-  strike that ends with a landing). Objective targets are orange on the HUD and minimap with live
+  strike that ends with a landing), plus ten **carrier missions** (see above). Objective targets are orange on the HUD and minimap with live
   counters; a debrief card shows time, kills, accuracy and hull at the end.
 * **Dogfight Arena**: endless waves of AI bandits with wingmen, SAM sites, AAA flak and a town garrison.
 * **Steady frame rate**: dynamic resolution lowers the 3D resolution in 10 % steps when frames drop
@@ -98,13 +121,29 @@ The real-world locations need elevation data, which is downloaded once (about 2 
 
 * **On GitHub (one click):** *Actions → real terrain → Run workflow*. It downloads, converts and
   commits the files; the browser version and the next macOS release pick them up automatically.
+* **In the game:** Settings → DOWNLOAD WORLD MAPS (uses the system's `curl`).
 * **On your Mac:** `python3 tools/fetch_real_terrain.py` (or `--only everest,rio`). No installs needed.
 
 Data: [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen "terrarium"
 encoding) — derived from SRTM, GMTED2010, ETOPO1, NED and other open sources
 ([attribution](https://github.com/tilezen/joerd/blob/master/docs/attribution.md)). Each location is
-a 32 × 32 km square at ~31 m resolution. Lakes above sea level are not rendered as water yet, and
+a 32 × 32 km square at ~31 m resolution. The sea and fjords are water; lakes above sea level are not rendered as water yet, and
 buildings/roads are generated (not OpenStreetMap), so they are plausible rather than exact.
+
+## Voice
+
+All spoken lines (`assets/voice/*.mp3`, about 200 lines) are synthesised offline with
+[Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) through
+[kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (MIT): `bf_isabella` (British English) for the captain,
+AWACS and instructor, `bf_emma` for the tower, `af_bella` for your wingman. The game lists its own lines
+(`build/skyfall_voicelines`), so after changing any text run:
+
+```bash
+pip install kokoro-onnx soundfile        # plus ffmpeg
+python3 tools/make_voice.py --model-dir <folder with kokoro-v1.0.onnx and voices-v1.0.bin>
+```
+
+Only new or changed lines are recorded; stale files are removed.
 
 ## Browser version (WebAssembly)
 
@@ -136,7 +175,7 @@ Command Line Tools linker/SDK mismatch by falling back to an older installed SDK
 `logs/skyfall.log` (GPU info, warnings, and a frame-time summary on exit).
 
 Useful flags: `--mode arena` / `--mode m01` (skip the menu), `--size 1440x900`, `--windowed`,
-`--quality 0|1|2`, `--bench 30` (writes `benchmarks/benchmark.json` + `frame_times.csv`),
+`--quality 0|1|2|3` (3 = Ultra HD), `--bench 30` (writes `benchmarks/benchmark.json` + `frame_times.csv`),
 `--capture shots/` (scripted screenshots from the real renderer).
 
 ## Controls

@@ -6,6 +6,7 @@
 #include "../audio/Audio.hpp"
 #include "../combat/Combat.hpp"
 #include "../audio/Speech.hpp"
+#include "TerrainDownload.hpp"
 #include "../mission/Campaign.hpp"
 #include "../mission/Mission.hpp"
 #include "../render/Lighting.hpp"
@@ -107,12 +108,19 @@ private:
     void updateBriefing(double dt);
     void drawBriefing();
     void launchFromBriefing();
+    void radio(Speaker who, const std::string& text, double dur, bool voice = true);
     void startMissionBriefed(int n) { startMission(n); if (switchTo_.empty()) beginBriefing(n); }
     void startArenaBriefed() { freeFlight_ = false; startArena(false); beginBriefing(0); }
     // ---- world locations (real terrain) ----
     bool freeFlight_ = false;
     std::string locStatus_;          // message on the locations screen
     std::string locPending_;         // web: location being downloaded
+    size_t voicedStep_ = 0;
+    bool rain_ = false;              // rain and overcast (carrier missions)          // last campaign objective announced by voice
+    std::string voiceDir();
+    std::string terrainDir();
+    TerrainDownloader download_;
+    Screen locReturn_ = Screen::Title;
     std::string switchTo_;           // location switch requested from a menu (done at the next frame start)
     int switchMission_ = 0;          // campaign mission to start after the switch
     bool loadLocation(const std::string& id, bool showProgress = true);

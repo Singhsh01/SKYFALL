@@ -62,6 +62,25 @@ void FlightModel::resetOnRunway(bool engineRunning) {
     }
 }
 
+void FlightModel::resetOnCatapult() {
+    const DeckInfo& d = terrain_->deck();
+    s_ = FlightState{};
+    Vec3 start = d.catapultStart();
+    s_.pos = {start.x, d.center.y + kGearHeight, start.z};
+    s_.q = Quat::fromEuler(d.heading, 0.0, 0.0);
+    s_.fuelKg = prof_->fuelMassKg;
+    s_.gearDown = true;
+    s_.gearPos = 1.0;
+    s_.parkingBrake = true;
+    s_.onGround = true;
+    s_.agl = kGearHeight;
+    s_.engine = EngineState::Running;
+    s_.rpm = 0.62;
+    s_.catArmed = true;
+}
+
+double FlightModel::catapultEndSpeed() const { return std::max(78.0, prof_->rotateSpeedMs * 1.3); }
+
 void FlightModel::resetAirborne(const Vec3& pos, double headingRad, double speedMs, double throttle) {
     s_ = FlightState{};
     s_.pos = pos;
@@ -125,7 +144,9 @@ void FlightModel::updateEngine(const ControlInputs& in, double dt, double rho) {
         }
         case EngineState::Running: {
             double target = kIdle + (1.0 - kIdle) * std::min(s_.throttle / kAbDetent, 1.0);
-            s_.rpm += (target - s_.rpm) * approachFactor(dt, target > s_.rpm ? p.spoolTimeS : p.spoolTimeS * 0.6);
+            // on the catapult the run-up is quicker (deck crews do not wait for a slow spool)
+            double spool = (target > s_.rpm ? p.spoolTimeS : p.spoolTimeS * 0.6) * (s_.catArmed ? 0.35 : 1.0);
+            s_.rpm += (target - s_.rpm) * approachFactor(dt, spool);
             double abTarget = (s_.throttle >= kAbDetent && s_.rpm > 0.96)
                                   ? 0.55 + 0.45 * (s_.throttle - kAbDetent) / (1.0 - kAbDetent)
                                   : 0.0;
@@ -317,8 +338,37 @@ void FlightModel::step(const ControlInputs& in, double dt) {
     if (mode_ == HandlingMode::Arcade && !s_.onGround && V > 1.0) arcadeVelocity(in, dt, atm.density);
     else s_.vel += fTotal / m * dt;
 
+    // Catapult: the holdback keeps the jet still; brake release with afterburner fires the shot.
+    const DeckInfo& deck = terrain_->deck();
+    if (s_.catArmed) {
+        // fires once the afterburner is lit (engine spooled up) and the brake is off
+        if (!s_.parkingBrake && s_.throttle >= kAbDetent - 1e-3 && s_.abLevel > 0.5 && s_.engine == EngineState::Running) {
+            s_.catArmed = false;
+            s_.catFiring = true;
+            s_.catTravel = 0;
+        } else {
+            s_.vel = {0, 0, 0};
+        }
+    }
+    if (s_.catFiring) {
+        Vec3 f = deck.forward();
+        double v = dot(s_.vel, f);
+        double vEnd = catapultEndSpeed();
+        // constant acceleration that reaches vEnd at the end of the stroke
+        double a = std::max(15.0, (vEnd * vEnd - v * v) / (2.0 * std::max(5.0, deck.catStroke - s_.catTravel)));
+        v = std::min(vEnd, v + a * dt);
+        s_.vel = f * v;
+        s_.q = Quat::fromEuler(deck.heading, 0.0, 0.0);
+        s_.catTravel += v * dt;
+        if (s_.catTravel >= deck.catStroke) {
+            s_.catFiring = false;
+            s_.launchAssist = 3.5;
+            s_.launched = true;
+        }
+    }
+
     // Ground friction (applied as a velocity change for unconditional stability).
-    if (s_.onGround) {
+    if (s_.onGround && !s_.catFiring) {
         double normalForce = std::max(0.0, -fTotal.y);
         Vec3 fwd = s_.q.forward();
         Vec3 fwdH = normalize(Vec3{fwd.x, 0, fwd.z});
@@ -338,8 +388,9 @@ void FlightModel::step(const ControlInputs& in, double dt) {
     s_.airspeed = length(s_.vel);
 
     // Surface contact
-    bool runway = terrain_->onRunway(s_.pos.x, s_.pos.z, 15.0);
-    double groundY = runway ? terrain_->runway().center.y : terrain_->surfaceHeight(s_.pos.x, s_.pos.z);
+    bool onDeck = terrain_->onDeck(s_.pos.x, s_.pos.z, 14.0);   // same footprint as surfaceHeight()
+    bool runway = terrain_->onRunway(s_.pos.x, s_.pos.z, 15.0) || onDeck;
+    double groundY = onDeck ? deck.center.y : runway ? terrain_->runway().center.y : terrain_->surfaceHeight(s_.pos.x, s_.pos.z);
     double contact = s_.gearPos > 0.9 ? kGearHeight : kBellyHeight;
     s_.agl = s_.pos.y - groundY;
     bool wasOnGround = s_.onGround;
@@ -375,8 +426,9 @@ void FlightModel::step(const ControlInputs& in, double dt) {
                              {-p.lengthM * 0.45, 2.5, 0}, {0, -1.4, 0}};
         for (const Vec3& b : pts) {
             Vec3 w = s_.pos + s_.q.rotate(b);
-            bool rw = terrain_->onRunway(w.x, w.z, 15.0);
-            double gy = rw ? terrain_->runway().center.y : terrain_->surfaceHeight(w.x, w.z);
+            bool dk = terrain_->onDeck(w.x, w.z, 14.0);
+            bool rw = terrain_->onRunway(w.x, w.z, 15.0) || dk;
+            double gy = dk ? deck.center.y : rw && terrain_->onRunway(w.x, w.z, 15.0) ? terrain_->runway().center.y : terrain_->surfaceHeight(w.x, w.z);
             if (w.y < gy && !(rw && s_.agl < 4.0)) {
                 forceCrash(terrain_->isWater(w.x, w.z) && !rw ? CrashReason::Water : CrashReason::Terrain);
                 return;
@@ -385,6 +437,20 @@ void FlightModel::step(const ControlInputs& in, double dt) {
     }
 
     updateAttitude(in, dt);
+
+    // Hands-off carrier launch: the flight controls rotate to a climb attitude after the shot
+    // unless the pilot is already pulling.
+    if (s_.launchAssist > 0 && !s_.onGround) {
+        s_.launchAssist -= dt;
+        Euler e = toEuler(s_.q);
+        if (e.pitch < 11.0 * kDeg && in.pitch < 0.3) {
+            double rate = 0.22 * clampd((11.0 * kDeg - e.pitch) / (6.0 * kDeg), 0.0, 1.0);
+            s_.q = s_.q.integrated(Vec3{0, 0, rate}, dt);
+            if (mode_ != HandlingMode::Arcade) s_.vel = s_.vel + s_.q.up() * (0.4 * kG * dt);
+        }
+        // wings level
+        if (std::fabs(e.bank) > 2.0 * kDeg && std::fabs(in.roll) < 0.1) s_.q = s_.q.integrated(Vec3{-e.bank * 1.5, 0, 0}, dt);
+    }
 }
 
 }  // namespace sky

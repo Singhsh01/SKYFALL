@@ -14,6 +14,7 @@
 #include <cctype>
 #include <memory>
 #include <chrono>
+#include <thread>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -64,7 +65,7 @@ void Game::initWindow() {
 #ifdef __EMSCRIPTEN__
     SetTargetFPS(0);  // the browser paces frames (requestAnimationFrame)
 #else
-    SetTargetFPS(capturing_ ? 0 : 120);
+    SetTargetFPS(capturing_ ? 0 : settings_.fpsCap);
 #endif
     ui::loadFonts();
 }
@@ -76,7 +77,7 @@ int Game::run(const Options& opt) {
     capturing_ = !opt.captureDir.empty() || opt.benchSeconds > 0;
     settingsPath_ = defaultSettingsPath();
     settings_.load(settingsPath_);
-    if (opt.quality >= 0) settings_.quality = static_cast<GraphicsQuality>(std::clamp(opt.quality, 0, 2));
+    if (opt.quality >= 0) settings_.quality = static_cast<GraphicsQuality>(std::clamp(opt.quality, 0, 3));
     initWindow();
     // splash while the world is generated
     BeginDrawing();
@@ -90,6 +91,7 @@ int Game::run(const Options& opt) {
     replayStage_.player().alive = false;
     cockpit_.init();
     if (!capturing_ || opt.benchSeconds > 0) audio_.init();
+    speech_.setVoiceDir(voiceDir());
     applySettings();
     lighting_ = Lighting::preset(tod_);
 
@@ -149,91 +151,37 @@ void Game::updateDynamicResolution(double dt) {
     if (dynTimer_ < 1.0) return;
     double meanMs = dynAccum_ / std::max(1, dynFrames_) * 1000.0;
     dynTimer_ = dynAccum_ = 0; dynFrames_ = 0;
-    if (meanMs > 19.0 && dynScale_ > 0.55) {
+    // budget follows the frame-rate cap (75 fps -> 13.3 ms)
+    double budget = 1000.0 / (settings_.fpsCap > 0 ? settings_.fpsCap : 75);
+    if (meanMs > budget * 1.12 && dynScale_ > 0.55) {
         dynScale_ = std::max(0.5, dynScale_ - 0.1);
         dynUpBlockedUntil_ = time_ + ((time_ - dynLastUp_) < 6.0 ? 60.0 : 8.0);
-    } else if (meanMs < 17.5 && dynScale_ < 1.0 && time_ > dynUpBlockedUntil_) {
+    } else if (meanMs < budget * 1.02 && dynScale_ < 1.0 && time_ > dynUpBlockedUntil_) {
         dynScale_ = std::min(1.0, dynScale_ + 0.1);
         dynLastUp_ = time_;
         dynUpBlockedUntil_ = time_ + 4.0;
     }
 }
 
-namespace {
-// Objective titles are written in capitals for the HUD; read them aloud in sentence case.
-std::string spoken(const std::string& caps) {
-    std::string out;
-    std::string word;
-    auto flush = [&]() {
-        if (word.empty()) return;
-        static const char* keep[] = {"SAM", "ATS", "ATA", "SEAD", "AAA"};
-        bool k = false;
-        for (const char* w : keep) if (word == w) k = true;
-        if (!k) for (char& ch : word) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        out += word;
-        word.clear();
-    };
-    for (char ch : caps) {
-        if (std::isalnum(static_cast<unsigned char>(ch))) word += ch;
-        else { flush(); out += ch; }
-    }
-    flush();
-    if (!out.empty()) out[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(out[0])));
-    return out;
-}
-}  // namespace
-
 void Game::beginBriefing(int missionNo) {
     briefT_ = 0;
-    briefObjectives_.clear();
-    std::string story, tip;
-    if (missionNo == 0) {
-        briefHeader_ = "DOGFIGHT ARENA";
-        briefTitle_ = "Hold the line";
-        story = "Waves of enemy fighters are inbound from the east, and the town below is ringed with flak guns and missile sites.";
-        tip = "Splash every bandit you can. Use flares the moment you hear the missile warning, and stay with your wingmen.";
-        briefObjectives_ = {"DESTROY INCOMING BANDIT WAVES", "SUPPRESS AAA AND SAM SITES (OPTIONAL)"};
-    } else {
-        char h[48];
-        std::snprintf(h, sizeof h, "MISSION %02d", missionNo);
-        briefHeader_ = h;
-        briefTitle_ = campaignCatalogue()[missionNo - 1].title;
-        if (campaignDef_) story = campaignDef_->briefing;
-        else if (missionNo == 1) story = "Today is your cold start and takeoff from runway zero nine. Start the engine, release the brakes, and climb out to three hundred metres heading east.";
-        else if (missionNo == 2) story = "Your first solo flight. Show me clean banks, a turn onto heading two seven zero, a climb to two thousand metres and a steady level-off.";
-        else story = "You're five kilometres out on final for runway zero nine. Gear down, fly the three degree glide path, touch down and bring it to a stop.";
-        if (mission_) for (const auto& st : mission_->steps()) briefObjectives_.push_back(st.title);
-        if (campaignDef_) {
-            bool ground = false, airObj = false;
-            for (const auto& o : campaignDef_->objectives) {
-                if (o.kind == ObjectiveKind::DestroyGroup) ground = true;
-                if (o.kind == ObjectiveKind::DestroyAir) airObj = true;
-            }
-            if (ground) tip = "For ground targets, select ATS with key two, keep the target near your nose until the lock tone, then fire. The cannon will also walk onto targets close to the nose.";
-            else if (airObj) tip = "Select ATA with key one, lock, and fire. Flares on X when they shoot back.";
-        }
-    }
-    briefText_ = story + (tip.empty() ? "" : " " + tip);
-    std::string say = "Captain, this is Captain Avery Langlois, Wing Operations. ";
-    say += missionNo == 0 ? std::string("Dogfight Arena. ") : (std::string("Mission ") + std::to_string(missionNo) + ", " + briefTitle_ + ". ");
-    say += story + " ";
-    if (!briefObjectives_.empty()) {
-        say += "Your objectives: ";
-        for (size_t i = 0; i < briefObjectives_.size(); ++i) {
-            say += spoken(briefObjectives_[i]);
-            say += i + 1 < briefObjectives_.size() ? "; " : ". ";
-        }
-    }
-    if (!tip.empty()) say += tip + " ";
-    say += "Good luck, Captain.";
-    briefText_ += " Good luck, Captain.";
+    Briefing br = makeBriefing(missionNo);
+    briefHeader_ = br.header;
+    briefTitle_ = br.title;
+    briefObjectives_ = br.objectives;
+    briefText_ = br.display;
     briefCam_ = camMode_;
     camMode_ = CameraMode::External;
     orbitYaw_ = 2.4; orbitPitch_ = 0.20; zoom_ = 1.25;
     screen_ = Screen::Briefing;
     nav_.focus = 0;
     speech_.setEnabled(settings_.voiceBriefings && !capturing_);
-    speech_.speak(say);
+    speech_.say(Speaker::Captain, br.speech, true);
+}
+
+void Game::radio(Speaker who, const std::string& text, double dur, bool voice) {
+    hud_.radio(speakerName(who), text, dur);
+    if (voice && !capturing_) speech_.say(who, text);
 }
 
 void Game::launchFromBriefing() {
@@ -249,6 +197,16 @@ void Game::updateBriefing(double dt) {
     orbitYaw_ += dt * 0.12;   // slow fly-around of your aircraft while the captain talks
     const InputState& in = input_.state();
     if (briefT_ > 0.25 && (in.confirm || IsKeyPressed(KEY_SPACE))) { launchFromBriefing(); return; }
+    if ((in.left || in.right) && !battle_.jets().empty()) {
+        // change the camouflage of the jet you are about to fly, right here in the briefing
+        Jet& p = battle_.player();
+        int id = static_cast<int>(p.fm->profile().id);
+        int sk = (settings_.skinFor(id) + (in.right ? 1 : kSkinCount - 1)) % kSkinCount;
+        settings_.setSkin(id, sk);
+        settings_.save(settingsPath_);
+        p.skin = sk;
+        audio_.play(Sfx::Click, 0.5f);
+    }
     if (in.back || in.pause) {
         speech_.stop();
         startTitle();
@@ -330,7 +288,8 @@ void Game::drawBriefing() {
     float pulse = 0.6f + 0.4f * std::sin(static_cast<float>(briefT_) * 3.0f);
     ui::textShadow("ENTER  LAUNCH", x, h - 60 * s, 20 * s, ui::withAlpha(accent, pulse));
     ui::text("ESC  BACK", x + 200 * s, h - 57 * s, 15 * s, Color{200, 210, 210, 200});
-    ui::text((std::string(battle_.player().fm->profile().name) + "  -  " + skin(battle_.player().skin).name), w - 40 * s, h - 57 * s, 14 * s, Color{200, 210, 210, 200}, Align::Right);
+    ui::text(battle_.player().fm->profile().name, w - 40 * s, h - 80 * s, 15 * s, Color{220, 228, 228, 230}, Align::Right);
+    ui::textShadow(std::string("<  CAMOUFLAGE: ") + skin(battle_.player().skin).name + "  >", w - 40 * s, h - 57 * s, 16 * s, accent, Align::Right);
 }
 
 
@@ -362,6 +321,28 @@ std::string Game::terrainPath(const std::string& id) {
                                  app + "../assets/terrain/" + id + ".skt", std::string("../assets/terrain/") + id + ".skt"})
         if (FileExists(p.c_str())) return p;
     return "assets/terrain/" + id + ".skt";
+#endif
+}
+
+std::string Game::terrainDir() {
+#ifdef __EMSCRIPTEN__
+    return "/terrain";
+#else
+    std::string app = GetApplicationDirectory();
+    for (const std::string& p : {std::string("assets/terrain"), app + "assets/terrain", app + "../assets/terrain", std::string("../assets/terrain")})
+        if (DirectoryExists(p.c_str())) return p;
+    return app + "assets/terrain";
+#endif
+}
+
+std::string Game::voiceDir() {
+#ifdef __EMSCRIPTEN__
+    return "voice";
+#else
+    std::string app = GetApplicationDirectory();
+    for (const std::string& p : {std::string("assets/voice"), app + "assets/voice", app + "../assets/voice", app + "../Resources/assets/voice", std::string("../assets/voice")})
+        if (DirectoryExists(p.c_str())) return p;
+    return "assets/voice";
 #endif
 }
 
@@ -421,7 +402,7 @@ void Game::drawLocations() {
     ui::title("WORLD LOCATIONS", 50 * s, 26 * s, 32 * s);
     const auto& L = locations();
     const int n = static_cast<int>(L.size());
-    nav_.begin(n + 3, in.up, in.down, in.confirm, in.left, in.right);
+    nav_.begin(n + 4, in.up, in.down, in.confirm, in.left, in.right);
 #ifdef __EMSCRIPTEN__
     // finish a pending download
     if (!locPending_.empty()) {
@@ -445,16 +426,16 @@ void Game::drawLocations() {
             else
 #endif
             if (!avail) {
-                Heightmap probe; std::string err;
-                loadHeightmap(terrainPath(l.id), probe, err);
-                locStatus_ = l.name + ": " + err + ". Run  python3 tools/fetch_real_terrain.py  (or the 'real terrain' GitHub action).";
+                if (download_.busy()) locStatus_ = "Another download is running - " + download_.status();
+                else if (download_.start({l.id}, terrainDir(), terrainDir() + "/.cache")) locStatus_.clear();
             } else if (l.id != terrain_.info().id) {
                 switchTo_ = l.id;
             }
             return;
         }
-        ui::text(avail ? l.region : "NOT DOWNLOADED", x + bw - 10 * s, y + 10 * s, 12 * s,
-                 avail ? Color{150, 255, 205, 200} : Color{255, 150, 110, 220}, Align::Right, false);
+        bool loading = download_.busy() && download_.current() == l.name;
+        ui::text(avail ? l.region : loading ? "DOWNLOADING..." : "NOT DOWNLOADED - CLICK TO GET", x + bw - 10 * s, y + 10 * s, 12 * s,
+                 avail ? Color{150, 255, 205, 200} : loading ? Color{255, 220, 120, 240} : Color{255, 150, 110, 220}, Align::Right, false);
         y += bh + 3 * s;
     }
     // details of the focused location
@@ -483,9 +464,32 @@ void Game::drawLocations() {
         startArena(false);
         return;
     }
-    if (ui::button(nav_, n + 2, {ax, ay + 108 * s, aw, 40 * s}, "BACK") || in.back) { startTitle(); nav_.focus = 2; return; }
+    if (ui::button(nav_, n + 2, {ax, ay + 108 * s, aw, 40 * s}, "BACK") || in.back) {
+        if (locReturn_ == Screen::Settings) { screen_ = Screen::Settings; nav_.focus = 21; locReturn_ = Screen::Title; return; }
+        startTitle(); nav_.focus = 2; return;
+    }
+    // map downloads
+    int missing = 0;
+    std::vector<std::string> missingIds;
+    for (const LocationDef& l : L) if (!locationAvailable(l.id)) { ++missing; missingIds.push_back(l.id); }
+    float dy = ay + 158 * s;
+#ifndef __EMSCRIPTEN__
+    if (download_.busy()) {
+        if (ui::button(nav_, n + 3, {ax, dy, aw, 40 * s}, "CANCEL DOWNLOAD", download_.current())) download_.cancel();
+        Rectangle pb = {ax, dy + 48 * s, aw, 10 * s};
+        DrawRectangleRec(pb, Color{255, 255, 255, 40});
+        DrawRectangleRec({pb.x, pb.y, pb.width * download_.progress(), pb.height}, Color{150, 255, 205, 230});
+        ui::text(download_.status(), ax, dy + 64 * s, 13 * s, Color{220, 230, 230, 230}, Align::Left, false);
+    } else {
+        std::string sub = missing ? std::to_string(missing) + " maps, about 2 MB each" : "All maps are downloaded";
+        if (ui::button(nav_, n + 3, {ax, dy, aw, 40 * s}, missing ? "DOWNLOAD ALL MISSING MAPS" : "ALL MAPS DOWNLOADED", sub) && missing)
+            download_.start(missingIds, terrainDir(), terrainDir() + "/.cache");
+        if (!download_.status().empty()) ui::text(download_.status(), ax, dy + 48 * s, 13 * s, Color{220, 230, 230, 230}, Align::Left, false);
+    }
+    dy += 84 * s;
+#endif
     if (!locStatus_.empty()) {
-        float ty = ay + 170 * s;
+        float ty = dy;
         std::string line, word;
         for (char ch : locStatus_ + " ") {
             if (ch != ' ') { word += ch; continue; }
@@ -540,6 +544,8 @@ void Game::startTitle() {
     screen_ = Screen::Title;
     mode_ = GameMode::None;
     mission_.reset();
+    terrain_.clearDeck();
+    rain_ = false;
     tod_ = TimeOfDay::GoldenHour;
     lighting_ = Lighting::preset(tod_);
     Jet& p = battle_.createPlayer(AircraftId::F22);
@@ -572,14 +578,19 @@ void Game::startMission(int n) {
     campaignDef_ = n >= 4 ? campaignMission(n) : nullptr;
     director_ = CampaignDirector{};
     tod_ = n == 3 ? TimeOfDay::Noon : TimeOfDay::Morning;
-    if (campaignDef_) tod_ = campaignDef_->timeOfDay == 1 ? TimeOfDay::GoldenHour : campaignDef_->timeOfDay == 2 ? TimeOfDay::Noon : TimeOfDay::Morning;
+    if (campaignDef_) tod_ = campaignDef_->timeOfDay == 1 ? TimeOfDay::GoldenHour : campaignDef_->timeOfDay == 2 ? TimeOfDay::Noon
+                           : campaignDef_->timeOfDay == 3 ? TimeOfDay::Storm : TimeOfDay::Morning;
     lighting_ = Lighting::preset(tod_);
+    rain_ = campaignDef_ && campaignDef_->rain;
+    if (campaignDef_ && campaignDef_->carrier) terrain_.setDeck(campaignCarrierDeck());
+    else terrain_.clearDeck();
     Jet& p = battle_.createPlayer(static_cast<AircraftId>(settings_.aircraft));
     battle_.setAiEnabled(true);
     const RunwayInfo& rw = terrain_.runway();
     if (campaignDef_) {
         const CampaignMissionDef& d = *campaignDef_;
-        p.fm->resetAirborne({d.startX, d.startAlt, d.startZ}, campaignStartHeading(d), d.startSpeed, 0.85);
+        if (d.carrier) p.fm->resetOnCatapult();
+        else p.fm->resetAirborne({d.startX, d.startAlt, d.startZ}, campaignStartHeading(d), d.startSpeed, 0.85);
         mission_ = buildCampaignMission(d);
         camMode_ = CameraMode::Chase;
         if (d.startFuel >= 0) p.fm->mutableState().fuelKg = d.startFuel * p.fm->profile().fuelMassKg;
@@ -603,6 +614,7 @@ void Game::startMission(int n) {
         camMode_ = CameraMode::Cockpit;
     }
     missionDone_ = false;
+    voicedStep_ = 0;
     radioStage_ = 0;
     playerDead_ = false;
     respawnTimer_ = -1;
@@ -618,10 +630,11 @@ void Game::startMission(int n) {
     killerName_.clear();
 
     applySettings();
-    if (campaignDef_) hud_.radio("AWACS", campaignDef_->briefing, 9);
-    else if (n == 1) hud_.radio("TOWER", "Skyfall One, runway 09, wind calm. Start-up approved.", 7);
-    else if (n == 2) hud_.radio("INSTRUCTOR", "Your aircraft. Let's see some clean flying, Skyfall One.", 6);
-    else hud_.radio("TOWER", "Skyfall One, cleared to land runway 09, wind calm.", 7);
+    if (campaignDef_ && campaignDef_->carrier) radio(Speaker::Tower, lines::kCarrierCat, 8);
+    else if (campaignDef_) radio(Speaker::Awacs, campaignDef_->briefing, 9, false);   // just heard in the briefing
+    else if (n == 1) radio(Speaker::Tower, lines::kTowerStartup, 7, false);
+    else if (n == 2) radio(Speaker::Instructor, lines::kInstructorStart, 6, false);
+    else radio(Speaker::Tower, lines::kTowerLanding, 7, false);
     audio_.play(Sfx::Radio);
 }
 
@@ -629,6 +642,8 @@ void Game::startArena(bool keepPlayerState) {
     screen_ = Screen::Playing;
     mode_ = GameMode::Arena;
     if (!keepPlayerState) {
+        terrain_.clearDeck();
+        rain_ = false;
         tod_ = TimeOfDay::Morning;
         lighting_ = Lighting::preset(tod_);
         Jet& p = battle_.createPlayer(static_cast<AircraftId>(settings_.aircraft));
@@ -660,8 +675,8 @@ void Game::startArena(bool keepPlayerState) {
     respawnTimer_ = -1;
     chaseInit_ = false;
     applySettings();
-    if (freeFlight_) hud_.radio("TOWER", "Skyfall One, free flight over " + terrain_.info().name + ". Enjoy the view.", 6);
-    else hud_.radio("AWACS", "Skyfall One, multiple bandits bearing 090. Weapons free.", 6);
+    if (freeFlight_) radio(Speaker::Tower, freeFlightLine(terrain_.info().name), 6);
+    else radio(Speaker::Awacs, lines::kArenaStart, 6, false);
     audio_.play(Sfx::Radio);
 }
 
@@ -710,13 +725,14 @@ void Game::respawnPlayer() {
     playerDead_ = false;
     respawnTimer_ = -1;
     chaseInit_ = false;
-    hud_.radio("AWACS", "Skyfall One, you're back in the fight.", 4);
+    radio(Speaker::Awacs, lines::kRespawn, 4);
 }
 
 // ------------------------------------------------------------------------------------------
 // Frame
 // ------------------------------------------------------------------------------------------
 void Game::frame(double dt, bool render) {
+    speech_.update();
     if (!switchTo_.empty()) {
         // menus request location changes; the world is rebuilt here, outside any drawing
         std::string id = switchTo_;
@@ -737,7 +753,12 @@ void Game::frame(double dt, bool render) {
         updateDynamicResolution(dt);
         double scale = settings_.quality == GraphicsQuality::Low ? 0.7 : (settings_.quality == GraphicsQuality::Medium ? 0.85 : 1.0);
         scale *= dynScale_;
-        int rw = std::min(1920, static_cast<int>(GetScreenWidth() * scale)), rh = static_cast<int>(GetScreenHeight() * scale * std::min(1.0, 1920.0 / std::max(1.0, GetScreenWidth() * scale)));
+        // Ultra renders at the display's real pixel count (Retina / 4K), up to 3840 wide
+        bool ultra = settings_.quality == GraphicsQuality::Ultra;
+        double baseW = ultra ? GetRenderWidth() : GetScreenWidth(), baseH = ultra ? GetRenderHeight() : GetScreenHeight();
+        double maxW = ultra ? 3840.0 : 1920.0;
+        int rw = std::min(static_cast<int>(maxW), static_cast<int>(baseW * scale));
+        int rh = static_cast<int>(baseH * scale * std::min(1.0, maxW / std::max(1.0, baseW * scale)));
         if (rw != renderer_.width() || rh != renderer_.height()) renderer_.resize(rw, rh);
     }
 
@@ -902,17 +923,24 @@ void Game::updatePlaying(double dt) {
     if (mission_) {
         size_t idx = mission_->stepIndex();
         if (missionNo_ != 1) radioStage_ = 99;
-        if (radioStage_ == 0 && idx >= 1) { hud_.radio("TOWER", "Engine start confirmed. Release brakes when ready.", 5); audio_.play(Sfx::Radio); radioStage_ = 1; }
-        if (radioStage_ == 1 && idx >= 3) { hud_.radio("TOWER", "Skyfall One, cleared for take-off runway 09.", 5); audio_.play(Sfx::Radio); radioStage_ = 2; }
-        if (radioStage_ == 2 && idx >= 6) { hud_.radio("TOWER", "Positive climb. Gear up, contact AWACS.", 5); audio_.play(Sfx::Radio); radioStage_ = 3; }
+        if (radioStage_ == 0 && idx >= 1) { radio(Speaker::Tower, lines::kTowerEngine, 5); audio_.play(Sfx::Radio); radioStage_ = 1; }
+        if (radioStage_ == 1 && idx >= 3) { radio(Speaker::Tower, lines::kTowerTakeoff, 5); audio_.play(Sfx::Radio); radioStage_ = 2; }
+        if (radioStage_ == 2 && idx >= 6) { radio(Speaker::Tower, lines::kTowerClimb, 5); audio_.play(Sfx::Radio); radioStage_ = 3; }
+        if (campaignDef_ && idx != voicedStep_ && mission_->status() == MissionStatus::Running) {
+            if (idx > voicedStep_ && mission_->current()) {
+                if (campaignDef_->carrier && mission_->current()->title == "GEAR UP") radio(Speaker::Tower, lines::kCarrierAirborne, 5);
+                else speech_.say(Speaker::Awacs, nextObjectiveLine(mission_->current()->title));
+            }
+            voicedStep_ = idx;
+        }
         if (mission_->status() == MissionStatus::Complete && !missionDone_) {
             missionDone_ = true;
             settings_.markCompleted(missionNo_);
             settings_.save(settingsPath_);
-            if (campaignDef_) hud_.radio("AWACS", campaignDef_->debrief, 9);
-            else if (missionNo_ == 1) hud_.radio("TOWER", "Good climb-out, Skyfall One. Press ENTER for your first solo flight.", 9);
-            else if (missionNo_ == 2) hud_.radio("INSTRUCTOR", "Nicely flown. Press ENTER for the landing lesson.", 8);
-            else hud_.radio("TOWER", "Skyfall One, welcome home. Press ENTER for navigation training.", 8);
+            if (campaignDef_) radio(Speaker::Awacs, campaignDef_->debrief, 9);
+            else if (missionNo_ == 1) radio(Speaker::Tower, lines::kTowerDone1, 9);
+            else if (missionNo_ == 2) radio(Speaker::Instructor, lines::kInstructorDone2, 8);
+            else radio(Speaker::Tower, lines::kTowerDone3, 8);
             audio_.play(Sfx::Radio);
         }
         // A crash or shoot-down fails the mission too, but it takes the normal loss path below
@@ -920,6 +948,7 @@ void Game::updatePlaying(double dt) {
         if (mission_->status() == MissionStatus::Failed && !playerDead_ && p.alive && !fm.state().crashed) {
             playerDead_ = true;
             deathReason_ = "MISSION FAILED: " + mission_->failure();
+            if (!capturing_) speech_.say(Speaker::Awacs, lines::kLost, true);
             deathCamPos_ = cam_.position;
             deathTarget_ = toRl(fm.state().pos);
         }
@@ -928,7 +957,10 @@ void Game::updatePlaying(double dt) {
     if (!p.alive && !playerDead_) {
         playerDead_ = true;
         deathReason_ = fm.state().crashReason == CrashReason::Destroyed ? "SHOT DOWN" : crashReasonText(fm.state().crashReason);
-        if (mode_ == GameMode::Mission01) deathReason_ = "MISSION FAILED: " + deathReason_;
+        if (mode_ == GameMode::Mission01) {
+            deathReason_ = "MISSION FAILED: " + deathReason_;
+            if (!capturing_) speech_.say(Speaker::Awacs, lines::kLost, true);
+        }
         deathCamPos_ = cam_.position;
         deathTarget_ = toRl(fm.state().pos);
         deathTime_ = time_;
@@ -983,8 +1015,7 @@ void Game::processEvents() {
                 if (e.a == p.id) {
                     hud_.popup("+100   ENEMY JET DESTROYED", Color{255, 225, 120, 255});
                     hud_.hitMarker(true);
-                    static const char* lines[] = {"Splash one! Good kill.", "Bandit down!", "Nice shooting, Skyfall.", "Target destroyed."};
-                    hud_.radio("WARDOG 2", lines[GetRandomValue(0, 3)], 3.5);
+                    radio(Speaker::Wingman, lines::kKills[GetRandomValue(0, 3)], 3.5);
                 }
                 break;
             case EventType::GroundKilled:
@@ -1015,7 +1046,7 @@ void Game::processEvents() {
                     pip_.lastPos = e.pos;
                     pip_.lastDir = p.fm->state().q.forward();
                 }
-                if (e.text == "SAM" && e.b == p.id) hud_.radio("AWACS", "SAM launch! Skyfall One, defend!", 4);
+                if (e.text == "SAM" && e.b == p.id) radio(Speaker::Awacs, lines::kSamLaunch, 4);
                 break;
             case EventType::FlaresOut: if (e.a == p.id) audio_.play(Sfx::Flares, 0.8f); break;
             case EventType::Hit:
@@ -1030,7 +1061,7 @@ void Game::processEvents() {
             }
             case EventType::PlayerHit: damagePulse_ = 1.0; audio_.play(Sfx::Hit, 0.9f); shake_ += 0.6; break;
             case EventType::MissileWarningStart:
-                hud_.radio("WARDOG 2", "Skyfall, missile on your six! Flares!", 3.5);
+                radio(Speaker::Wingman, lines::kMissileSix, 3.5);
                 break;
             case EventType::MissileMissed: hud_.popup("MISSILE DEFEATED", Color{150, 255, 205, 255}); break;
             default: break;
@@ -1185,6 +1216,14 @@ FrameParams Game::makeFrameParams() {
     f.bloom = settings_.bloom;
     f.quality = settings_.quality;
     f.shadowFocus = toRl(battle_.player().fm->state().pos);
+    if (rain_) {
+        f.rain = 1.0f;
+        Vec3 v = battle_.player().fm->state().vel;
+        f.rainWind = {static_cast<float>(-v.x), static_cast<float>(-v.y), static_cast<float>(-v.z)};
+        // distant lightning: a brief flash of the whole sky every so often
+        double ph = std::fmod(time_ * 0.043 + 0.37, 1.0);
+        if (ph < 0.012) f.exposureBoost *= 1.0f + 1.6f * static_cast<float>(std::sin(ph / 0.012 * kPi));
+    }
     return f;
 }
 
@@ -1241,7 +1280,7 @@ void Game::renderFrame() {
         pf.hideJetId = -1;
         pf.bloom = false;
         pf.nearPlane = 0.5f;
-        pf.quality = settings_.quality == GraphicsQuality::High ? GraphicsQuality::Medium : GraphicsQuality::Low;
+        pf.quality = settings_.quality >= GraphicsQuality::High ? GraphicsQuality::Medium : GraphicsQuality::Low;
         renderer_.renderPip(pf, pipW, pipH);
         rlSetClipPlanes(nearPlane_, farPlane_);
     }
@@ -1291,6 +1330,7 @@ void Game::renderFrame() {
             hc.missionNext = "CAMPAIGN COMPLETE  -  PRESS ENTER";
         }
         hc.runway = terrain_.runway();
+        hc.deck = terrain_.deck();
         hc.campaign = campaignDef_;
         hc.showGlidePath = (mission_ && mission_->id() == "M03") ||
                            (campaignDef_ && mission_ && mission_->stepIndex() < campaignDef_->objectives.size() &&
@@ -1352,7 +1392,7 @@ void Game::drawTitle() {
     ui::logo(70 * s, 70 * s, s, titleTime_);
     nav_.begin(6, in.up, in.down, in.confirm, in.left, in.right);
     float x = 70 * s, y = 236 * s, bw = 430 * s, bh = 50 * s, gap = 9 * s;
-    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "51 missions: training, strikes, refuelling, dogfights")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; nav_.focus = 0; return; }
+    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "61 missions: training, strikes, refuelling, carrier ops")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; nav_.focus = 0; return; }
     y += bh + gap;
     if (ui::button(nav_, 1, {x, y, bw, bh}, "DOGFIGHT ARENA", "Bandit waves over " + terrain_.info().name)) { audio_.play(Sfx::Click); startArenaBriefed(); return; }
     y += bh + gap;
@@ -1363,7 +1403,7 @@ void Game::drawTitle() {
     if (ui::button(nav_, 4, {x, y, bw, bh}, "SETTINGS", "Audio, graphics, controls")) { audio_.play(Sfx::Click); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 0; return; }
     y += bh + gap;
     if (ui::button(nav_, 5, {x, y, bw, bh}, "QUIT")) { quit_ = true; return; }
-    ui::text("v0.6  -  C++20 / raylib  -  fictional simulation, illustrative aircraft data", 70 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Left, false);
+    ui::text("v0.7  -  C++20 / raylib  -  fictional simulation, illustrative aircraft data", 70 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Left, false);
     ui::text("ENTER select   ARROWS navigate", w - 30 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Right, false);
 }
 
@@ -1381,18 +1421,20 @@ void Game::drawCampaign() {
     std::snprintf(prog, sizeof prog, "%d / %d COMPLETE", done, n);
     ui::text(prog, w - 50 * s, 40 * s, 15 * s, Color{150, 255, 205, 230}, Align::Right);
     nav_.begin(n + 1, in.up, in.down, in.confirm, in.left, in.right);
-    // five chapters: 1-10, 11-20, 21-30, 31-40, 41-51
-    auto colOf = [](int i) { return std::min(4, i / 10); };
-    auto rowOf = [&](int i) { return i - colOf(i) * 10; };
+    // six chapters: 1-10, 11-20, 21-30, 31-40, 41-51, 52-61 (carrier)
+    static const int starts[] = {0, 10, 20, 30, 40, 51, 61};
+    const int nc = 6;
+    auto colOf = [&](int i) { int c = 0; while (c + 1 < nc && i >= starts[c + 1]) ++c; return c; };
+    auto rowOf = [&](int i) { return i - starts[colOf(i)]; };
     if ((in.left || in.right) && nav_.focus < n) {
-        int c = colOf(nav_.focus) + (in.right ? 1 : 4);
-        c %= 5;
-        nav_.focus = std::min(c * 10 + std::min(rowOf(nav_.focus), c == 4 ? n - 41 : 9), n - 1);
+        int c = (colOf(nav_.focus) + (in.right ? 1 : nc - 1)) % nc;
+        int rows = std::min(starts[c + 1], n) - starts[c];
+        nav_.focus = std::min(starts[c] + std::min(rowOf(nav_.focus), rows - 1), n - 1);
     }
-    const float colW = (w - 100 * s) / 5.0f - 8 * s;
+    const float colW = (w - 100 * s) / static_cast<float>(nc) - 8 * s;
     const float rowH = 37 * s;
-    static const char* chapters[] = {"TRAINING", "OPERATIONS", "OFFENSIVE", "ENDGAME", "CRITICAL STRIKE"};
-    for (int c = 0; c < 5; ++c)
+    static const char* chapters[] = {"TRAINING", "OPERATIONS", "OFFENSIVE", "ENDGAME", "CRITICAL STRIKE", "CARRIER OPS"};
+    for (int c = 0; c < nc; ++c)
         ui::text(chapters[c], 50 * s + c * (colW + 8 * s), 78 * s, 12 * s, Color{255, 176, 60, 220});
     for (int i = 0; i < n; ++i) {
         const MissionInfo& m = cat[i];
@@ -1400,6 +1442,11 @@ void Game::drawCampaign() {
         Rectangle r = {50 * s + col * (colW + 8 * s), 96 * s + row * (rowH + 3 * s), colW, rowH};
         char label[96];
         std::snprintf(label, sizeof label, "%02d  %s", m.number, m.title.c_str());
+        if (ui::measure(label, 14 * s, true) > r.width - 24 * s) {
+            std::string t = m.title;
+            while (t.size() > 4 && ui::measure(std::to_string(m.number) + "    " + t + "..", 14 * s, true) > r.width - 24 * s) t.pop_back();
+            std::snprintf(label, sizeof label, "%02d  %s..", m.number, t.c_str());
+        }
         if (ui::button(nav_, i, r, label, "", true)) {
             audio_.play(Sfx::Click);
             startMissionBriefed(m.number);
@@ -1437,6 +1484,7 @@ void Game::drawHangar() {
         int sk = settings_.skinFor(nav_.focus);
         sk = (sk + (in.right ? 1 : kSkinCount - 1)) % kSkinCount;
         settings_.setSkin(nav_.focus, sk);
+        settings_.aircraft = nav_.focus;      // painting an aircraft also makes it the one you fly
         settings_.save(settingsPath_);
         if (!battle_.jets().empty()) battle_.player().skin = sk;
         audio_.play(Sfx::Click, 0.5f);
@@ -1484,6 +1532,7 @@ void Game::drawHangar() {
     for (int i = 0; i < kSkinCount; ++i) names.push_back(skin(i).name);
     if (ui::cycle(nav_, 10, {r.x, r.y + r.height + 14 * s, r.width, 44 * s}, "Camouflage", sk, names)) {
         settings_.setSkin(hangarSel_, sk);
+        settings_.aircraft = hangarSel_;      // painting an aircraft also makes it the one you fly
         settings_.save(settingsPath_);
         if (!battle_.jets().empty()) battle_.player().skin = sk;
         audio_.play(Sfx::Click, 0.5f);
@@ -1497,7 +1546,7 @@ void Game::drawSettings() {
     float s = h / 720.0f;
     DrawRectangle(0, 0, static_cast<int>(w), static_cast<int>(h), Color{0, 0, 0, 170});
     ui::title("SETTINGS", 60 * s, 34 * s, 38 * s);
-    nav_.begin(21, in.up, in.down, in.confirm, in.left, in.right);
+    nav_.begin(23, in.up, in.down, in.confirm, in.left, in.right);
     float cw = 420 * s, rh = 42 * s, g = 6 * s;
     float x1 = 60 * s, x2 = 60 * s + cw + 40 * s;
     float y = 110 * s;
@@ -1510,12 +1559,12 @@ void Game::drawSettings() {
     changed |= ui::slider(nav_, 4, {x1, y, cw, rh}, "Radio / instructor", settings_.radio); y += rh + g;
     changed |= ui::slider(nav_, 5, {x1, y, cw, rh}, "Effects", settings_.effects); y += rh + g;
     changed |= ui::toggle(nav_, 6, {x1, y, cw, rh}, "Radio captions", settings_.captions); y += rh + g;
-    changed |= ui::toggle(nav_, 20, {x1, y, cw, rh}, "Spoken mission briefings", settings_.voiceBriefings); y += rh + g;
+    changed |= ui::toggle(nav_, 20, {x1, y, cw, rh}, "Voice (briefings & radio calls)", settings_.voiceBriefings); y += rh + g;
     ui::text("Music from other apps keeps playing; in-game music is off by default.", x1, y + 4 * s, 12 * s, Color{180, 190, 190, 200}, Align::Left, false);
     float y2 = 110 * s;
     ui::text("GRAPHICS & COMFORT", x2, y2 - 26 * s, 15 * s, kAccent);
     int q = static_cast<int>(settings_.quality);
-    if (ui::cycle(nav_, 7, {x2, y2, cw, rh}, "Quality", q, {"LOW", "MEDIUM", "HIGH"})) { settings_.quality = static_cast<GraphicsQuality>(q); changed = true; }
+    if (ui::cycle(nav_, 7, {x2, y2, cw, rh}, "Quality", q, {"LOW", "MEDIUM", "HIGH", "ULTRA HD"})) { settings_.quality = static_cast<GraphicsQuality>(q); changed = true; }
     y2 += rh + g;
     int t = static_cast<int>(tod_);
     if (ui::cycle(nav_, 8, {x2, y2, cw, rh}, "Time of day", t, {"MORNING", "GOLDEN HOUR", "NOON"})) { tod_ = static_cast<TimeOfDay>(t); lighting_ = Lighting::preset(tod_); }
@@ -1528,9 +1577,31 @@ void Game::drawSettings() {
     if (ui::cycle(nav_, 14, {x2, y2, cw, rh}, "Handling", settings_.handling, {"ARCADE", "ASSISTED", "SIMULATION"})) changed = true;
     y2 += rh + g;
     changed |= ui::slider(nav_, 15, {x2, y2, cw, rh}, "Control sensitivity", settings_.sensitivity, 0.3, 2.0); y2 += rh + g;
-    changed |= ui::toggle(nav_, 19, {x2, y2, cw, rh}, "Dynamic resolution (hold 60 fps)", settings_.dynamicResolution); y2 += rh + g;
+    changed |= ui::toggle(nav_, 19, {x2, y2, cw, rh}, "Dynamic resolution (hold frame rate)", settings_.dynamicResolution); y2 += rh + g;
     changed |= ui::toggle(nav_, 16, {x1, y + 22 * s, cw, rh}, "Missile / target camera", settings_.missileCam);
     changed |= ui::toggle(nav_, 17, {x1, y + 22 * s + rh + g, cw, rh}, "Crash replay + analysis", settings_.crashReplay);
+    {
+        static const int caps[] = {60, 75, 120, 0};
+        int fi = 1;
+        for (int i = 0; i < 4; ++i) if (caps[i] == settings_.fpsCap) fi = i;
+        if (ui::cycle(nav_, 22, {x1, y + 22 * s + 2 * (rh + g), cw, rh}, "Frame rate limit", fi, {"60 FPS", "75 FPS", "120 FPS", "UNLIMITED"})) {
+            settings_.fpsCap = caps[fi];
+            SetTargetFPS(settings_.fpsCap);
+            changed = true;
+        }
+    }
+    {
+        int have = 0, total = 0;
+        for (const LocationDef& l : locations()) if (l.id != "desert") { ++total; if (locationAvailable(l.id)) ++have; }
+        std::string sub = std::to_string(have) + " of " + std::to_string(total) + " real-world maps downloaded" + (download_.busy() ? " - downloading..." : "");
+        if (ui::button(nav_, 21, {x2, y2 + 10 * s, cw, rh + 4 * s}, have < total ? "DOWNLOAD WORLD MAPS" : "WORLD MAPS", sub)) {
+            settings_.save(settingsPath_);
+            locReturn_ = Screen::Settings;
+            screen_ = Screen::Locations;
+            nav_.focus = 0;
+            return;
+        }
+    }
     if (ui::button(nav_, 18, {x1, h - 64 * s, 200 * s, 46 * s}, "BACK") || in.back) {
         settings_.save(settingsPath_);
         screen_ = settingsReturn_;
@@ -1763,10 +1834,77 @@ int Game::runCapture() {
         }
         return 0;
     }
+    if (set == "download") {
+        // downloader self-test: SKYFALL_TILES=<url template> SKYFALL_DLOUT=<dir>
+        const char* url = std::getenv("SKYFALL_TILES");
+        const char* out = std::getenv("SKYFALL_DLOUT");
+        if (url) download_.tileUrl = url;
+        std::string dir = out ? out : "/tmp/skyfall_dl";
+        download_.start({"fuji"}, dir, dir + "/.cache");
+        while (download_.busy()) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+        std::printf("download: %s\n", download_.status().c_str());
+        return 0;
+    }
+    if (set == "carrier") {
+        hideHud_ = false;
+        startMission(52);
+        Jet& p = battle_.player();
+        camMode_ = CameraMode::External; orbitYaw_ = 2.3; orbitPitch_ = 0.22; zoom_ = 2.4; chaseInit_ = false;
+        scriptedStep(0.2, [&](double) { setInput(0, 0, 0, 0); });
+        snap("carrier_deck", 3);
+        camMode_ = CameraMode::Chase; chaseInit_ = false;
+        scriptedStep(2.0, [&](double) { setInput(0, 0, 0, 1.0); });
+        snap("carrier_full_ab", 3);
+        scriptedStep(2.5, [&](double) { setInput(0, 0, 0, 1.0); });
+        snap("carrier_ab_lit", 2);
+        p.fm->setParkingBrake(false);
+        scriptedStep(1.6, [&](double) { setInput(0, 0, 0, 1.0); });
+        snap("carrier_cat_shot", 2);
+        scriptedStep(5.0, [&](double) { setInput(0, 0, 0, 0); });
+        snap("carrier_climb_out", 2);
+        camMode_ = CameraMode::External; orbitYaw_ = 3.6; orbitPitch_ = 0.1; zoom_ = 1.4;
+        scriptedStep(0.1, [&](double) { setInput(0, 0, 0, 0); });
+        snap("carrier_ab_side", 2);
+        camMode_ = CameraMode::Cockpit;
+        scriptedStep(0.3, [&](double) { setInput(0, 0, 0, 0); });
+        snap("carrier_cockpit_rain", 2);
+        return 0;
+    }
+    if (set == "menus") {
+        hideHud_ = true;
+        startTitle(); screen_ = Screen::Campaign; nav_.focus = 54;
+        snap("menu_campaign", 2);
+        startTitle(); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 21;
+        snap("menu_settings", 2);
+        startTitle(); locReturn_ = Screen::Settings; screen_ = Screen::Locations; nav_.focus = 3;
+        snap("menu_locations", 2);
+        startMission(55); beginBriefing(55);
+        for (int i = 0; i < 300; ++i) briefT_ += 1.0 / 30.0;
+        snap("menu_briefing_carrier", 2);
+        return 0;
+    }
+    if (set == "skinplay") {
+        // the hangar camouflage must follow the jet into every mode
+        settings_.aircraft = 0;
+        settings_.setSkin(0, 7);
+        startArena(false);
+        hideHud_ = false;
+        camMode_ = CameraMode::Chase; chaseInit_ = false;
+        scriptedStep(0.3, [&](double) { setInput(0, 0, 0, 0); });
+        snap("skinplay_arena", 3);
+        startMission(10);
+        camMode_ = CameraMode::Chase; chaseInit_ = false;
+        scriptedStep(0.3, [&](double) { setInput(0, 0, 0, 0); });
+        snap("skinplay_campaign", 3);
+        settings_.setSkin(0, 0);
+        return 0;
+    }
     if (set == "locations") {
         // every location whose data is present: title flyover + a free-flight view
+        const char* only = std::getenv("SKYFALL_LOC");
         for (const LocationDef& l : locations()) {
             if (!locationAvailable(l.id)) continue;
+            if (only && std::string(only).find(l.id) == std::string::npos) continue;
             loadLocation(l.id, false);
             startTitle();
             scriptedStep(0.2, [&](double) {});

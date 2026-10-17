@@ -7,11 +7,12 @@
 
 namespace sky {
 
-enum class GraphicsQuality { Low = 0, Medium = 1, High = 2 };
+enum class GraphicsQuality { Low = 0, Medium = 1, High = 2, Ultra = 3 };   // Ultra: native (Retina / 4K) resolution
 
 struct Settings {
     // Graphics
-    GraphicsQuality quality = GraphicsQuality::High;
+    GraphicsQuality quality = GraphicsQuality::Ultra;
+    int fpsCap = 75;            // frame-rate limit (0 = unlimited)
     int width = 1280, height = 720;
     bool fullscreen = false;
     bool vsync = true;
@@ -42,7 +43,7 @@ struct Settings {
     bool captions = true;
     bool voiceBriefings = true;   // spoken mission briefings (system text-to-speech)
     // Progress: one character per campaign mission ('1' = completed)
-    std::string campaignDone = std::string(51, '0');
+    std::string campaignDone = std::string(61, '0');
     bool missionCompleted(int n) const { return n >= 1 && n <= static_cast<int>(campaignDone.size()) && campaignDone[n - 1] == '1'; }
     void markCompleted(int n) { if (n >= 1 && n <= static_cast<int>(campaignDone.size())) campaignDone[n - 1] = '1'; }
 

@@ -50,6 +50,19 @@ struct Heightmap {
     float at(int i, int j) const { return h[static_cast<size_t>(j) * n + i]; }
 };
 
+/// A ship's flight deck: a raised, flat landing surface on the sea (aircraft carrier).
+struct DeckInfo {
+    bool active = false;
+    Vec3 center;              // deck centre at deck height
+    double heading = 0;       // radians, 0 = +X (bow direction)
+    double length = 333;      // m
+    double width = 42;        // m: the usable strip (the hull is wider; see Renderer)
+    double catStart = 40;     // catapult start, m forward of the centre
+    double catStroke = 100;   // m
+    Vec3 forward() const;
+    Vec3 catapultStart() const;
+};
+
 class Terrain {
 public:
     static constexpr double kHalfSize = 16000.0;  // map spans [-16 km, +16 km] on X and Z
@@ -78,12 +91,20 @@ public:
     /// Centre of the fictional battlefield town (ground targets live here).
     Vec3 townCenter() const { return town_; }
     bool onRunway(double x, double z, double margin = 0.0) const;
+    /// Aircraft carrier deck (inactive unless a mission places one).
+    void setDeck(const DeckInfo& d) { deck_ = d; }
+    void clearDeck() { deck_ = DeckInfo{}; }
+    const DeckInfo& deck() const { return deck_; }
+    bool onDeck(double x, double z, double margin = 0.0) const;
+    /// Distance along the deck axis from the centre (+ = towards the bow).
+    double deckAlong(double x, double z) const;
 
 private:
     double rawHeight(double x, double z) const;
     double applyModifiers(double x, double z, double h) const;
     std::vector<float> grid_;
     RunwayInfo runway_;
+    DeckInfo deck_;
     Vec3 town_;
     TerrainInfo info_;
 };

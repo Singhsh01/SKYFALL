@@ -576,6 +576,14 @@ void Hud::minimap(const HudContext& c) {
         DrawTriangle(a, d, b, col);
         DrawTriangle(a, b, d, col);
     };
+    if (c.deck.active) {
+        // the carrier: a ship outline along its heading
+        Vec3 f{std::cos(c.deck.heading), 0, std::sin(c.deck.heading)};
+        Vector2 bow = toMap(c.deck.center + f * 170.0), stern = toMap(c.deck.center - f * 170.0);
+        DrawLineEx(stern, bow, std::max(3.0f, 330.0f * pxPerM * 0.13f) * 1.0f + 2.0f * s, Color{150, 200, 255, 230});
+        Vector2 m = toMap(c.deck.center);
+        ui::text("CV", m.x + 6 * s, m.y - 6 * s, 11 * s, Color{150, 200, 255, 230}, Align::Left, false);
+    }
     if (c.battle) {
         for (const GroundTarget& g : c.battle->ground()) {
             if (!g.alive) continue;
@@ -990,6 +998,23 @@ void Hud::objectiveMarkers(const HudContext& c) {
     float s = c.h / 720.0f;
     const FlightState& ps = c.player->fm->state();
     if (c.battle && c.battle->tanker().active) refuelCues(c);
+    if (ps.catArmed || ps.catFiring) {
+        // catapult launch cues: one clear instruction at a time
+        bool ab = ps.throttle >= FlightModel::kAbDetent - 1e-3;
+        bool lit = ps.abLevel > 0.5;
+        const char* msg = ps.catFiring ? "LAUNCH!" : !ab ? "HOLD  W  -  FULL AFTERBURNER" : !lit ? "AFTERBURNER LIGHTING..."
+                        : ps.parkingBrake ? "PRESS  B  -  RELEASE BRAKE TO LAUNCH" : "STAND BY...";
+        float pulse = 0.65f + 0.35f * std::sin(static_cast<float>(ps.simTime) * 5.0f);
+        ui::textShadow(msg, c.w * 0.5f, c.h * 0.68f, 24 * s, ui::withAlpha(ps.catFiring ? Color{255, 220, 120, 255} : kHud, pulse), Align::Center);
+        // throttle bar towards the afterburner detent
+        float bw = 260 * s, bx = c.w * 0.5f - bw / 2, by = c.h * 0.68f + 34 * s;
+        DrawRectangle(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(bw), static_cast<int>(8 * s), Color{0, 0, 0, 120});
+        DrawRectangle(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(bw * std::min(1.0, ps.throttle)), static_cast<int>(8 * s),
+                      ab ? Color{120, 190, 255, 230} : kHud);
+        float det = bx + bw * static_cast<float>(FlightModel::kAbDetent);
+        DrawRectangle(static_cast<int>(det), static_cast<int>(by - 4 * s), static_cast<int>(2 * s), static_cast<int>(16 * s), WHITE);
+        ui::text("AB", det + 4 * s, by - 14 * s, 11 * s, Color{120, 190, 255, 230}, Align::Left, false);
+    }
     if (o.kind != ObjectiveKind::Waypoint && o.kind != ObjectiveKind::Rendezvous) return;
     Vec3 wp{o.x, ps.pos.y, o.z};
     double dist = std::hypot(o.x - ps.pos.x, o.z - ps.pos.z);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SKYFALL VERSION 0.6.0 LANGUAGES C CXX)
+project(SKYFALL VERSION 0.7.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -25,6 +25,7 @@ add_library(skyfall_core STATIC
   src/combat/Combat.cpp
   src/mission/Mission.cpp
   src/mission/Campaign.cpp
+  src/mission/Voice.cpp
   src/telemetry/FrameStats.cpp
   src/telemetry/Replay.cpp
   src/app/Settings.cpp
@@ -76,6 +77,7 @@ if(SKYFALL_BUILD_GAME)
     src/main.cpp
     src/app/Game.cpp
     src/app/Cinematics.cpp
+    src/app/TerrainDownload.cpp
     src/app/Input.cpp
     src/render/Renderer.cpp
     src/render/JetMesh.cpp
@@ -122,4 +124,7 @@ if(SKYFALL_BUILD_TESTS)
   add_executable(skyfall_tests tests/sim_tests.cpp)
   target_link_libraries(skyfall_tests PRIVATE skyfall_core)
   add_test(NAME skyfall_tests COMMAND skyfall_tests)
+  # lists every spoken line for tools/make_voice.py
+  add_executable(skyfall_voicelines tools/voice_lines.cpp)
+  target_link_libraries(skyfall_voicelines PRIVATE skyfall_core)
 endif()

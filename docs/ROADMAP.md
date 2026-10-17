@@ -64,8 +64,10 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 | 31–40 | Supply lines, mountain SAM belt, harbour raid, interceptor waves, oil-field recapture, final assault + landing | ✅ |
 | 41 | Air-to-air refuelling behind a tanker (probe-and-drogue, steering cues, collision) | ✅ |
 | 42–51 | Critical infrastructure: power station, refinery, rail viaduct + train, comms masts, armoured train, factories, airfield, mobile launchers (time limit), ammo dump, final strike + landing | ✅ |
+| 52–61 | Carrier operations in a rainstorm: catapult launch (afterburner, brake release, hands-off rotation), patrol, picket boats, coastal radar, harbour, fleet defence, platforms, beachhead, viaduct, final strike; low pass over the carrier | ✅ launch tested in 8 aircraft × 3 handling modes |
+| — | Arrested landing back on the carrier | ⬜ |
 
-Missions 04–51 are data (`CampaignMissionDef`); targets can be anchored to generated
+Missions 04–61 are data (`CampaignMissionDef`); targets can be anchored to generated
 infrastructure (railway position, largest bridge, industrial zone). Tests validate every layout
 against the terrain and play every mission to completion; refuelling, trains, bridges, ATS
 hit-rates and the cannon assist have their own tests.
@@ -79,6 +81,10 @@ hit-rates and the cannon assist have their own tests.
 | Climate materials: desert / alpine / temperate / tropical | ✅ |
 | OpenStreetMap buildings and roads for real locations | ⬜ needs an OSM extract pipeline |
 | Lakes and rivers above sea level | ⬜ |
+| Sea level from real data (0 m samples become sea floor: fjords, coasts) | ✅ |
+| In-game map download (Settings) | ✅ native (curl) and browser (Pages) |
+| Neural female voice for every briefing and radio call (Kokoro-82M, pre-recorded) | ✅ |
+| Rain, lightning, storm sea | ✅ carrier missions |
 
 ## Vision laboratory (H) — ⬜ next major milestone
 

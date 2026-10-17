@@ -252,7 +252,56 @@ double Terrain::analyticHeight(double x, double z) const {
     return applyModifiers(x, z, rawHeight(x, z));
 }
 
-Terrain::Terrain(const Heightmap& hm, const TerrainInfo& info) : info_(info) {
+namespace {
+// Elevation sources store the sea surface (and fjords) as exactly 0 m. Turn those samples into a
+// sea floor that deepens away from the shore so they read and behave as water.
+Heightmap withSeaFloor(const Heightmap& in) {
+    Heightmap hm = in;
+    const int n = hm.n;
+    if (n <= 0) return hm;
+    const float inf = 1e9f;
+    std::vector<float> d(static_cast<size_t>(n) * n);
+    bool any = false;
+    for (size_t k = 0; k < d.size(); ++k) {
+        bool sea = hm.h[k] <= 0.3f;
+        d[k] = sea ? inf : 0.0f;
+        any |= sea;
+    }
+    if (!any) return hm;
+    const float c1 = 1.0f, c2 = 1.41421f;
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            float& v = d[static_cast<size_t>(j) * n + i];
+            if (i > 0) v = std::min(v, d[static_cast<size_t>(j) * n + i - 1] + c1);
+            if (j > 0) {
+                v = std::min(v, d[static_cast<size_t>(j - 1) * n + i] + c1);
+                if (i > 0) v = std::min(v, d[static_cast<size_t>(j - 1) * n + i - 1] + c2);
+                if (i + 1 < n) v = std::min(v, d[static_cast<size_t>(j - 1) * n + i + 1] + c2);
+            }
+        }
+    for (int j = n - 1; j >= 0; --j)
+        for (int i = n - 1; i >= 0; --i) {
+            float& v = d[static_cast<size_t>(j) * n + i];
+            if (i + 1 < n) v = std::min(v, d[static_cast<size_t>(j) * n + i + 1] + c1);
+            if (j + 1 < n) {
+                v = std::min(v, d[static_cast<size_t>(j + 1) * n + i] + c1);
+                if (i + 1 < n) v = std::min(v, d[static_cast<size_t>(j + 1) * n + i + 1] + c2);
+                if (i > 0) v = std::min(v, d[static_cast<size_t>(j + 1) * n + i - 1] + c2);
+            }
+        }
+    const float cell = static_cast<float>(hm.extent / (n - 1));
+    for (size_t k = 0; k < d.size(); ++k) {
+        if (hm.h[k] > 0.3f) continue;
+        float depth = std::min(70.0f, 2.5f + d[k] * cell * 0.035f);
+        if (d[k] >= inf * 0.5f) depth = 70.0f;   // no land anywhere
+        hm.h[k] = std::min(hm.h[k], -depth);
+    }
+    return hm;
+}
+}  // namespace
+
+Terrain::Terrain(const Heightmap& hmIn, const TerrainInfo& info) : info_(info) {
+    const Heightmap hm = withSeaFloor(hmIn);
     info_.real = true;
     runway_.heading = 0.0;
     runway_.length = 3000.0;
@@ -391,7 +440,27 @@ double Terrain::height(double x, double z) const {
     return (a + (b - a) * tx) * (1.0 - tz) + (c + (d - c) * tx) * tz;
 }
 
-double Terrain::surfaceHeight(double x, double z) const { return std::max(height(x, z), kSeaLevel); }
+double Terrain::surfaceHeight(double x, double z) const {
+    double h = std::max(height(x, z), kSeaLevel);
+    if (deck_.active && onDeck(x, z, 14.0)) h = std::max(h, deck_.center.y);   // hull is wider than the strip
+    return h;
+}
+
+Vec3 DeckInfo::forward() const { return {std::cos(heading), 0.0, std::sin(heading)}; }
+Vec3 DeckInfo::catapultStart() const { return center + forward() * catStart; }
+
+double Terrain::deckAlong(double x, double z) const {
+    return (x - deck_.center.x) * std::cos(deck_.heading) + (z - deck_.center.z) * std::sin(deck_.heading);
+}
+
+bool Terrain::onDeck(double x, double z, double margin) const {
+    if (!deck_.active) return false;
+    double c = std::cos(deck_.heading), s = std::sin(deck_.heading);
+    double dx = x - deck_.center.x, dz = z - deck_.center.z;
+    double along = dx * c + dz * s;
+    double across = -dx * s + dz * c;
+    return std::fabs(along) <= deck_.length * 0.5 + margin * 0.2 && std::fabs(across) <= deck_.width * 0.5 + margin;
+}
 
 Vec3 Terrain::normal(double x, double z, double eps) const {
     double hl = height(x - eps, z), hr = height(x + eps, z);
@@ -408,7 +477,7 @@ bool Terrain::onRunway(double x, double z, double margin) const {
 }
 
 SurfaceKind Terrain::surface(double x, double z) const {
-    if (onRunway(x, z)) return SurfaceKind::Runway;
+    if (onRunway(x, z) || onDeck(x, z)) return SurfaceKind::Runway;
     double h = height(x, z);
     if (h < kSeaLevel) return SurfaceKind::Water;
     if (h < 8.0) return SurfaceKind::Sand;

@@ -226,7 +226,8 @@ void main() {
     // green climates: grey granite instead of red strata, soil instead of sand
     float green = step(0.5, uBiome);
     vec3 granite = mix(vec3(0.27, 0.27, 0.28), vec3(0.38, 0.38, 0.39), meso) * (0.82 + 0.3 * micro * grain);
-    vec3 soil = mix(vec3(0.24, 0.21, 0.16), vec3(0.30, 0.27, 0.21), micro);
+    // upland heath / moss on green-climate ground (not desert sand)
+    vec3 soil = mix(vec3(0.17, 0.18, 0.12), vec3(0.24, 0.24, 0.18), micro * 0.6 + meso * 0.4);
     albedo = mix(albedo, mix(soil, granite, rockW), green * 0.9);
     albedo = mix(albedo, highRock, smoothstep(uHighRock, uHighRock + 450.0, h + meso * 200.0) * (0.6 + 0.4 * rockW));
     // vegetation: meadows and forest on gentle ground below the tree line
@@ -291,15 +292,17 @@ in vec3 vPos;
 uniform sampler2D uNoise;
 uniform sampler2D uDepthMap;   // sea-floor height over the map
 uniform float uMapHalf;
+uniform float uCloudCover;
 out vec4 finalColor;
 void main() {
-    vec2 uv1 = vPos.xz / 210.0 + vec2(uTime * 0.012, uTime * 0.007);
+    float storm = smoothstep(0.7, 0.95, uCloudCover);
+    vec2 uv1 = vPos.xz / 210.0 + vec2(uTime * 0.012, uTime * 0.007) * (1.0 + storm * 2.0);
     vec2 uv2 = vPos.xz / 77.0 - vec2(uTime * 0.017, -uTime * 0.011);
     vec2 uv3 = vPos.xz / 1900.0 + vec2(uTime * 0.002, 0.0);
     vec3 n1 = texture(uNoise, uv1).rgb * 2.0 - 1.0;
     vec3 n2 = texture(uNoise, uv2).gbr * 2.0 - 1.0;
     vec3 n3 = texture(uNoise, uv3).rgb * 2.0 - 1.0;
-    vec3 n = normalize(vec3(n1.x + n2.x * 0.6 + n3.x * 0.8, 6.0, n1.y + n2.y * 0.6 + n3.y * 0.8));
+    vec3 n = normalize(vec3(n1.x + n2.x * 0.6 + n3.x * 0.8, 6.0 - storm * 3.0, n1.y + n2.y * 0.6 + n3.y * 0.8));
     vec3 v = normalize(uCamPos - vPos);
     float dist = length(uCamPos - vPos);
     n = normalize(mix(n, vec3(0, 1, 0), smoothstep(2000.0, 14000.0, dist)));
@@ -316,13 +319,18 @@ void main() {
     vec3 shallow = vec3(0.06, 0.32, 0.36);
     vec3 body = mix(shallow, deep, smoothstep(2.0, 45.0, depth));
     body *= (0.45 + 0.55 * max(uSunDir.y, 0.0)) * (uSunColor * 0.6 + 0.4);
-    vec3 col = mix(body, refl, fres);
+    // storm sea: slate grey-green, wind-roughened, with whitecaps
+    body = mix(body, vec3(0.035, 0.05, 0.05) + uHorizon * 0.06, storm);
+    vec3 col = mix(body, refl, fres * (1.0 - storm * 0.35));
     vec3 h = normalize(uSunDir + v);
     float spec = pow(max(dot(n, h), 0.0), 900.0) * 25.0 + pow(max(dot(n, h), 0.0), 90.0) * 0.6;
     col += uSunColor * spec;
     // shoreline foam
     float foam = smoothstep(3.5, 0.0, depth) * smoothstep(0.45, 0.75, texture(uNoise, vPos.xz / 18.0 + uTime * 0.02).r);
     col = mix(col, vec3(0.9), foam * 0.6);
+    float caps = smoothstep(0.70, 0.80, texture(uNoise, vPos.xz / 31.0 + vec2(uTime * 0.05, uTime * 0.03)).r * 0.6
+                                        + texture(uNoise, vPos.xz / 9.0 - uTime * 0.04).g * 0.4);
+    col = mix(col, uHorizon * 1.4 + 0.15, caps * storm * 0.55 * (1.0 - smoothstep(1500.0, 6000.0, dist)));
     col = applyFog(col, vPos);
     finalColor = vec4(col, 1.0);
 }
@@ -540,6 +548,7 @@ in vec3 vNormal;
 in vec4 vColor;
 uniform float uThrottle;   // 0..1 mil power
 uniform float uAb;         // 0..1 afterburner
+uniform vec3 uAxis;        // world direction of the plume (out of the nozzle)
 uniform sampler2D uNoise;
 out vec4 finalColor;
 void main() {
@@ -547,15 +556,22 @@ void main() {
     float t = clamp(-vObj.x, 0.0, 1.0);
     vec3 v = normalize(uCamPos - vPos);
     float rim = abs(dot(normalize(vNormal), v));
-    float core = pow(rim, 1.5);
-    float flick = 0.8 + 0.4 * texture(uNoise, vec2(t * 0.6 - uTime * 3.7, vObj.y * 0.4 + uTime * 1.3)).r;
-    float diamonds = 0.65 + 0.35 * pow(abs(sin(t * 26.0)), 6.0) * (1.0 - t);
-    vec3 hot = vec3(1.0, 0.85, 0.55);
-    vec3 mid = vec3(1.0, 0.45, 0.12);
-    vec3 cool = vec3(0.45, 0.35, 0.9);
-    vec3 col = mix(hot, mid, smoothstep(0.0, 0.5, t));
-    col = mix(col, cool, smoothstep(0.55, 1.0, t) * 0.5);
-    float intensity = (uAb * 3.2 + uThrottle * 0.35) * core * flick * diamonds * (1.0 - smoothstep(0.35, 1.0, t)) ;
+    // turbulent, pulsing plume ("gushing"): two noise octaves scrolling down the plume
+    float n1 = texture(uNoise, vec2(t * 0.6 - uTime * 4.3, vObj.y * 0.4 + uTime * 1.3)).r;
+    float n2 = texture(uNoise, vec2(t * 1.7 - uTime * 7.9, vObj.z * 0.6 - uTime * 2.1)).g;
+    float flick = 0.7 + 0.45 * n1 + 0.25 * n2;
+    // shock diamonds: bright white-blue bands, strongest in afterburner and near the nozzle
+    float diamonds = 0.55 + uAb * 1.1 * pow(abs(sin(t * 23.0)), 8.0) * (1.0 - t) + 0.25 * (1.0 - uAb);
+    vec3 core = vec3(0.86, 0.93, 1.0);      // white-hot, slightly blue
+    vec3 blue = vec3(0.32, 0.52, 1.0);      // clean afterburner blue
+    vec3 tail = vec3(1.0, 0.52, 0.22);      // cooler orange where the plume mixes with air
+    vec3 col = mix(core, blue, smoothstep(0.02, 0.42, t));
+    col = mix(col, tail, smoothstep(0.45, 1.0, t) * (0.65 - 0.35 * uAb));
+    col = mix(col, vec3(1.0), pow(rim, 4.0) * 0.35 * (1.0 - t));
+    // seen from behind the jet the plume is end-on: the glowing nozzle and core still show
+    float axial = pow(abs(dot(normalize(uAxis), v)), 4.0) * (1.0 - smoothstep(0.0, 0.35, t));
+    float shape = max(pow(rim, 1.3), axial * 1.4);
+    float intensity = (uAb * 1.9 + uThrottle * 0.25) * shape * flick * diamonds * (1.0 - smoothstep(0.3, 1.0, t));
     finalColor = vec4(col * intensity * vColor.rgb, 1.0);
 }
 )GLSL";
@@ -734,6 +750,8 @@ uniform float uDamage;          // red damage pulse
 uniform float uTime;
 uniform float uGrain;
 uniform float uSpeedFx;
+uniform float uGrade;     // 1 = filmic pipeline with sRGB output
+uniform float uGradeK;
 out vec4 finalColor;
 
 vec3 aces(vec3 x) {
@@ -742,7 +760,21 @@ vec3 aces(vec3 x) {
 }
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
-vec3 tone(vec2 uv) { return aces(texture(texture0, uv).rgb * uExposure); }
+// ACES RRT+ODT fit (Hill): more faithful hue and highlight roll-off than the one-line fit
+vec3 acesHill(vec3 c) {
+    const mat3 i = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777);
+    const mat3 o = mat3(1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602);
+    c = i * c;
+    vec3 a = c * (c + 0.0245786) - 0.000090537;
+    vec3 b = c * (0.983729 * c + 0.4329510) + 0.238081;
+    return clamp(o * (a / b), 0.0, 1.0);
+}
+vec3 toSrgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
+vec3 tone(vec2 uv) {
+    vec3 hdr = texture(texture0, uv).rgb;
+    if (uGrade > 0.5) return toSrgb(acesHill(hdr * uExposure * uGradeK));
+    return aces(hdr * uExposure);
+}
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
 void main() {
@@ -769,13 +801,26 @@ void main() {
         col = (lb < lMin || lb > lMax) ? a : b;
     }
     vec3 bloom = texture(uBloom1, uv).rgb * 0.6 + texture(uBloom2, uv).rgb * 0.8;
-    col += aces(bloom * uBloomStrength * uExposure) * 0.9;
-    col = clamp(col, 0.0, 1.0);
-    // gentle filmic grade: lift shadows to teal, warm highlights
-    float l = luma(col);
-    col = mix(col, col * vec3(0.92, 1.0, 1.06), (1.0 - l) * 0.25);
-    col = mix(col, col * vec3(1.05, 1.0, 0.94), l * 0.15);
-    col = pow(col, vec3(1.0 / 1.05));
+    float l;
+    if (uGrade > 0.5) {
+        col += toSrgb(acesHill(bloom * uBloomStrength * uExposure * uGradeK)) * 0.6;
+        col = clamp(col, 0.0, 1.0);
+        // photographic grade: gentle S-curve, a touch of saturation, cool shadows / warm highlights
+        col = col * col * (3.0 - 2.0 * col) * 0.35 + col * 0.65;
+        l = luma(col);
+        col = mix(vec3(l), col, 1.08);
+        col = mix(col, col * vec3(0.96, 1.0, 1.04), (1.0 - l) * 0.3);
+        col = mix(col, col * vec3(1.03, 1.0, 0.96), l * 0.2);
+        col = clamp(col, 0.0, 1.0);
+    } else {
+        col += aces(bloom * uBloomStrength * uExposure) * 0.9;
+        col = clamp(col, 0.0, 1.0);
+        // gentle filmic grade: lift shadows to teal, warm highlights
+        l = luma(col);
+        col = mix(col, col * vec3(0.92, 1.0, 1.06), (1.0 - l) * 0.25);
+        col = mix(col, col * vec3(1.05, 1.0, 0.94), l * 0.15);
+        col = pow(col, vec3(1.0 / 1.05));
+    }
     // vignette
     col *= 1.0 - uVignette * smoothstep(0.15, 0.75, r2 * 1.6);
     // G effects

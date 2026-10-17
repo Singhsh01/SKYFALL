@@ -42,7 +42,8 @@ bool Settings::load(const std::string& path) {
         if (eq == std::string::npos) continue;
         std::string k = trim(line.substr(0, eq)), v = trim(line.substr(eq + 1));
         try {
-            if (k == "quality") quality = static_cast<GraphicsQuality>(std::clamp(std::stoi(v), 0, 2));
+            if (k == "quality") quality = static_cast<GraphicsQuality>(std::clamp(std::stoi(v), 0, 3));
+            else if (k == "fps_cap") fpsCap = std::clamp(std::stoi(v), 0, 240);
             else if (k == "width") width = std::max(640, std::stoi(v));
             else if (k == "height") height = std::max(360, std::stoi(v));
             else if (k == "fullscreen") fullscreen = toBool(v);
@@ -90,7 +91,7 @@ bool Settings::save(const std::string& path) const {
     std::ofstream f(path, std::ios::trunc);
     if (!f) return false;
     f << "# SKYFALL settings - safe to edit by hand\n[graphics]\n"
-      << "quality=" << static_cast<int>(quality) << "\nwidth=" << width << "\nheight=" << height
+      << "quality=" << static_cast<int>(quality) << "\nfps_cap=" << fpsCap << "\nwidth=" << width << "\nheight=" << height
       << "\nfullscreen=" << fullscreen << "\nvsync=" << vsync << "\nfov=" << fovDeg << "\nbloom=" << bloom
       << "\ncamera_shake=" << cameraShake << "\ng_effects=" << gEffects << "\nui_scale=" << uiScale
       << "\nshow_fps=" << showFps << "\nhigh_contrast_hud=" << highContrastHud << "\nhud_style=" << hudStyle << "\nmissile_cam=" << missileCam << "\ncrash_replay=" << crashReplay << "\ndynamic_resolution=" << dynamicResolution << "\n[input]\n"

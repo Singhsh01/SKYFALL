@@ -40,6 +40,8 @@ jobs:
           # real-terrain locations are fetched by the page on demand
           mkdir -p site/terrain
           cp assets/terrain/*.skt site/terrain/ 2>/dev/null || echo "no real terrain data yet (run the 'real terrain' workflow)"
+          # recorded voice lines, streamed by the page when spoken
+          if [ -d assets/voice ]; then cp -R assets/voice site/voice; fi
           touch site/.nojekyll
 
       - uses: actions/upload-pages-artifact@v3

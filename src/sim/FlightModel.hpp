@@ -67,6 +67,12 @@ struct FlightState {
     double agl = 0;               // height of CG above surface
     double timeAirborne = 0;
     double simTime = 0;
+    // Aircraft-carrier catapult
+    bool catArmed = false;        // hooked up: the holdback keeps the jet still until launch
+    bool catFiring = false;
+    double catTravel = 0;         // m along the stroke
+    double launchAssist = 0;      // s of automatic rotation after the stroke (hands-off launch)
+    bool launched = false;        // left the deck from a catapult shot
 };
 
 class FlightModel {
@@ -82,6 +88,11 @@ public:
     void resetOnRunway(bool engineRunning = false);
     /// Airborne, gear up, engine running at the given speed/heading (deg/rad documented).
     void resetAirborne(const Vec3& pos, double headingRad, double speedMs, double throttle = 0.75);
+    /// On the carrier's catapult: engine running at idle, parking brake set, holdback attached.
+    /// The catapult fires when the brake is released with the throttle in afterburner.
+    void resetOnCatapult();
+    /// End-of-stroke speed the catapult delivers (m/s).
+    double catapultEndSpeed() const;
 
     void step(const ControlInputs& in, double dt = kDt);
 

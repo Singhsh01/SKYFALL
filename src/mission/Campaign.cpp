@@ -110,6 +110,31 @@ void landAtHome(CampaignMissionDef& m) {
     m.objectives.push_back(simple(ObjectiveKind::Stop, "BRAKE TO A STOP", "Throttle idle and hold the brakes until stopped.", "S + LEFT CTRL"));
 }
 
+// Aircraft-carrier start in a storm: afterburner, catapult, gear up (simple and hands-off).
+void carrierStart(CampaignMissionDef& m) {
+    DeckInfo d = campaignCarrierDeck();
+    Vec3 c = d.catapultStart();
+    m.carrier = true;
+    m.rain = true;
+    m.timeOfDay = 3;
+    m.startX = c.x; m.startZ = c.z; m.startAlt = d.center.y; m.startSpeed = 0; m.startHeading = d.heading;
+    std::vector<ObjectiveDef> pre = {
+        simple(ObjectiveKind::FullPower, "FULL AFTERBURNER", "You're on the catapult. Push the throttle all the way into afterburner (hold W).",
+               "W = THROTTLE UP", FlightModel::kAbDetent, 0.6),
+        simple(ObjectiveKind::Launch, "CATAPULT LAUNCH", "When the afterburner lights, release the brake (B). The catapult throws you off the bow - the jet climbs by itself.",
+               "B = RELEASE BRAKE"),
+        simple(ObjectiveKind::GearUp, "GEAR UP", "Positive climb: raise the landing gear (G).", "G = GEAR"),
+    };
+    m.objectives.insert(m.objectives.begin(), pre.begin(), pre.end());
+}
+
+// Low pass over the carrier to finish.
+void recoverOverCarrier(CampaignMissionDef& m) {
+    DeckInfo d = campaignCarrierDeck();
+    m.objectives.push_back(waypoint("RETURN TO THE CARRIER", d.center.x, d.center.z, 900, 700,
+                                    "Head back to the carrier and make a low pass overhead, below 700 m."));
+}
+
 std::vector<CampaignMissionDef> buildAll() {
     std::vector<CampaignMissionDef> v;
     auto add = [&](int n, const std::string& title, const std::string& summary) -> CampaignMissionDef& {
@@ -631,12 +656,134 @@ std::vector<CampaignMissionDef> buildAll() {
                         destroy(3, "DESTROY COMMAND POST AND BUNKERS"), air("DESTROY THE LAST FIGHTERS", {0, 1})};
         landAtHome(m);
     }
+    // ---------------- Carrier operations (52-61): catapult launches in a storm ----------------
+    {
+        auto& m = add(52, "Cat Shot", "Your first catapult launch, in the rain, then a patrol.");
+        m.briefing = "Welcome aboard. Weather is closing in, but the deck is open. One catapult shot, climb out, check the patrol station, and come back overhead.";
+        m.debrief = "Smooth shot and a tidy patrol. Welcome to carrier aviation, Captain.";
+        m.objectives = {simple(ObjectiveKind::Climb, "CLIMB TO 1200 M", "Keep climbing straight ahead to 1200 metres.", "PULL BACK GENTLY", 1200),
+                        waypoint("PATROL STATION", 12500, -7000, 900)};
+        carrierStart(m);
+        recoverOverCarrier(m);
+    }
+    {
+        auto& m = add(53, "Storm Front", "Two bandits are probing the fleet under the storm.");
+        m.briefing = "Radar has two bandits low over the water, using the storm for cover. Launch, climb, and splash them before they find the fleet.";
+        m.debrief = "Two kills in the rain. The fleet never even saw them.";
+        m.waves = {wave(2, AiSkill::Rookie, 11500, -9000, 1500, 1200)};
+        m.objectives = {air("SPLASH 2 BANDITS", {0})};
+        carrierStart(m);
+        recoverOverCarrier(m);
+    }
+    {
+        auto& m = add(54, "Picket Boats", "Four fast attack boats are shadowing the carrier.");
+        m.briefing = "Four fast attack boats are shadowing us from the north. Sink them before they get into missile range.";
+        m.debrief = "All four boats are on the bottom. Good shooting.";
+        for (int i = 0; i < 4; ++i) {
+            TargetDef b = tgt(K::Ship, 12600, -6500, "BOAT " + std::to_string(i + 1), 1);
+            b.pathRadius = 600; b.pathAngle = i * 1.57; m.targets.push_back(b);
+        }
+        m.objectives = {destroy(1, "SINK 4 ATTACK BOATS", "Select ATS (2), lead the moving boats and fire. The cannon works well on them too.")};
+        carrierStart(m);
+        recoverOverCarrier(m);
+    }
+    {
+        auto& m = add(55, "Coastal Radar", "Blind the coast: radar, SAM and gun pits.");
+        m.briefing = "A coastal radar is tracking the fleet and cueing a SAM. Take out the radar and the launcher; the gun pits are optional.";
+        m.debrief = "The coast is blind. The fleet can move in.";
+        m.targets.push_back(tgt(K::Radar, 3087, -8150, "COASTAL RADAR", 1));
+        m.targets.push_back(tgt(K::SAM, 2587, -8650, "SAM", 1));
+        line(m.targets, K::Gun, "GUN", 2, 3087, -7550, 300, 0.0, 0);
+        m.objectives = {destroy(1, "DESTROY RADAR AND SAM", "Lock from range with ATS (2). Flares (X) on the missile warning.")};
+        carrierStart(m);
+        recoverOverCarrier(m);
+    }
+    {
+        auto& m = add(56, "Harbour Strike", "Boats in the bay and fuel on the quay, from the sea.");
+        m.briefing = "The enemy harbour on the south-east coast is refuelling their navy. Sink the boats in the bay, then burn the fuel tanks.";
+        m.debrief = "Harbour closed. Nothing is sailing out of there tonight.";
+        for (int i = 0; i < 4; ++i) {
+            TargetDef b = tgt(K::Ship, 10200, 9800, "BOAT " + std::to_string(i + 1), 1);
+            b.pathRadius = 650; b.pathAngle = i * 1.57; m.targets.push_back(b);
+        }
+        ring(m.targets, K::FuelTank, "FUEL TANK", 4, 5850, 9760, 60, 2);
+        m.targets.push_back(tgt(K::Gun, 6150, 9460, "GUN 1", 0));
+        m.objectives = {destroy(1, "SINK 4 BOATS"), destroy(2, "DESTROY 4 FUEL TANKS")};
+        carrierStart(m);
+        recoverOverCarrier(m);
+    }
+    {
+        auto& m = add(57, "Fleet Defence", "Two raids are coming for the carrier. Stop both.");
+        m.allies = 1;
+        m.briefing = "Two enemy raids are inbound on the carrier, one behind the other. You and your wingman are the only fighters up. Stop both raids.";
+        m.debrief = "Both raids turned back. The carrier is untouched, thanks to you.";
+        m.waves = {wave(3, AiSkill::Rookie, 6000, -6000, 1800, 1400), wave(3, AiSkill::Veteran, 5000, 8000, 2200, 1400)};
+        m.objectives = {air("STOP THE FIRST RAID", {0}), air("STOP THE SECOND RAID", {1})};
+        carrierStart(m);
+        recoverOverCarrier(m);
+    }
+    {
+        auto& m = add(58, "Offshore Platforms", "Two enemy rigs and their patrol boat.");
+        m.briefing = "Two enemy platforms north of the fleet are fuelling their navy. Destroy both rigs; the patrol boat will shoot at you.";
+        m.debrief = "Both platforms are burning. Their fuel supply is cut.";
+        m.targets.push_back(tgt(K::OilRig, 11500, -6000, "OIL RIG A", 1));
+        m.targets.push_back(tgt(K::OilRig, 12500, -3200, "OIL RIG B", 1));
+        TargetDef boat = tgt(K::Ship, 11800, -4600, "PATROL BOAT", 0);
+        boat.pathRadius = 500; m.targets.push_back(boat);
+        m.objectives = {destroy(1, "DESTROY OIL RIG A AND B", "Rigs take two ATS hits each.")};
+        carrierStart(m);
+        recoverOverCarrier(m);
+    }
+    {
+        auto& m = add(59, "Beachhead", "Clear the artillery off the coast for the landing force.");
+        m.briefing = "Our marines are going ashore in an hour. Artillery is dug in behind the coast and a refinery feeds their trucks. Clear the guns first.";
+        m.debrief = "The beach is clear. The landing force is on its way in.";
+        line(m.targets, K::Artillery, "ARTILLERY", 4, 5586, -9246, 140, 0.0, 1);
+        m.targets.push_back(tgt(K::Refinery, 5586, -9696, "REFINERY", 2));
+        m.objectives = {destroy(1, "DESTROY 4 ARTILLERY PIECES"), destroy(2, "DESTROY THE REFINERY")};
+        carrierStart(m);
+        recoverOverCarrier(m);
+    }
+    {
+        auto& m = add(60, "Bridge Breaker", "Drop the viaduct their reinforcements must cross.");
+        m.briefing = "Their reinforcements have one way to the coast: the railway viaduct inland. Drop it, then get back to the boat.";
+        m.debrief = "The viaduct is in the river. The coast is cut off.";
+        TargetDef br = tgt(K::Bridge, 0, 0, "RAIL VIADUCT", 1);
+        br.anchor = TargetDef::Anchor::Bridge; m.targets.push_back(br);
+        m.objectives = {destroy(1, "DESTROY THE RAIL VIADUCT", "Bridges take several hits: ATS from range, then the cannon.")};
+        carrierStart(m);
+        recoverOverCarrier(m);
+    }
+    {
+        auto& m = add(61, "Typhoon", "Air defences, the command post and the last fighters, in the storm.");
+        m.allies = 1;
+        m.briefing = "Final strike from the boat, Captain. Their coastal SAM belt, then the command post, then whatever fighters they launch. Then bring it home to the carrier.";
+        m.debrief = "Command post destroyed and the sky is ours. Welcome back aboard, Captain. Outstanding.";
+        m.targets.push_back(tgt(K::Radar, 3087, -8150, "RADAR", 1));
+        m.targets.push_back(tgt(K::SAM, 2587, -8650, "SAM 1", 1));
+        m.targets.push_back(tgt(K::SAM, 3687, -8550, "SAM 2", 1));
+        m.targets.push_back(tgt(K::Command, 1050, -1913, "COMMAND POST", 2));
+        ring(m.targets, K::Bunker, "BUNKER", 3, 1050, -1913, 170, 2, true, 0.3);
+        m.waves = {wave(3, AiSkill::Veteran, 3000, 0, 2400)};
+        m.objectives = {destroy(1, "DESTROY RADAR AND SAM 1-2"), destroy(2, "DESTROY COMMAND POST AND BUNKERS"),
+                        air("DESTROY THE LAST FIGHTERS", {0})};
+        carrierStart(m);
+        recoverOverCarrier(m);
+    }
     for (auto& m : v) if (m.atsReload <= 0) m.atsReload = 10.0;
     return v;
 }
 
 double horizDist(const Vec3& a, double x, double z) { return std::hypot(a.x - x, a.z - z); }
 }  // namespace
+
+DeckInfo campaignCarrierDeck() {
+    DeckInfo d;
+    d.active = true;
+    d.center = {13600.0, 19.5, 1500.0};
+    d.heading = -kPi / 2;   // bow to the north (-Z)
+    return d;
+}
 
 const std::vector<CampaignMissionDef>& campaignMissions() {
     static const std::vector<CampaignMissionDef> k = buildAll();
@@ -784,6 +931,30 @@ Mission buildCampaignMission(const CampaignMissionDef& def) {
                 double f = o.value;
                 s.done = [f](const MissionContext& c) { return c.flight->fuelKg >= f * c.aircraft->fuelMassKg - 1e-6; };
                 s.progress = [f](const MissionContext& c) { return clampd(c.flight->fuelKg / (f * c.aircraft->fuelMassKg), 0.0, 1.0); };
+                break;
+            }
+            case ObjectiveKind::FullPower: {
+                double v = o.value;
+                s.done = [v](const MissionContext& c) { return c.flight->throttle >= v - 1e-3 && c.flight->engine == EngineState::Running; };
+                s.holdSeconds = o.hold;
+                s.progress = [v](const MissionContext& c) { return clampd(c.flight->throttle / v, 0.0, 1.0); };
+                break;
+            }
+            case ObjectiveKind::Launch:
+                s.done = [](const MissionContext& c) { return c.flight->launched && !c.flight->onGround && c.flight->agl > 25.0; };
+                s.progress = [](const MissionContext& c) {
+                    if (c.flight->launched) return 1.0;
+                    return c.flight->catFiring ? 0.5 + 0.5 * clampd(c.flight->catTravel / 100.0, 0.0, 1.0) : 0.0;
+                };
+                break;
+            case ObjectiveKind::GearUp:
+                s.done = [](const MissionContext& c) { return !c.flight->onGround && !c.flight->gearDown && c.flight->gearPos < 0.05; };
+                s.progress = [](const MissionContext& c) { return c.flight->gearDown ? 0.0 : 1.0 - c.flight->gearPos; };
+                break;
+            case ObjectiveKind::Climb: {
+                double alt = o.value;
+                s.done = [alt](const MissionContext& c) { return c.flight->pos.y >= alt && !c.flight->onGround; };
+                s.progress = [alt](const MissionContext& c) { return clampd(c.flight->pos.y / alt, 0.0, 1.0); };
                 break;
             }
         }
