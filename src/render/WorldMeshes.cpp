@@ -548,13 +548,21 @@ void WorldMeshes::build(const Terrain& t) {
         SetTextureWrap(depthMap, TEXTURE_WRAP_CLAMP);
         UnloadImage(img);
 
-        const int M = 384;
+        const int M = 480;
+        const double E = kMinimapHalf;
         Image mm = GenImageColor(M, M, BLACK);
         Color* mp = static_cast<Color*>(mm.data);
         for (int y = 0; y < M; ++y)
             for (int x = 0; x < M; ++x) {
-                double wx = -Terrain::kHalfSize + (x + 0.5) / M * 2 * Terrain::kHalfSize;
-                double wz = -Terrain::kHalfSize + (y + 0.5) / M * 2 * Terrain::kHalfSize;
+                double wx = -E + (x + 0.5) / M * 2 * E;
+                double wz = -E + (y + 0.5) / M * 2 * E;
+                if (std::fabs(wx) > Terrain::kHalfSize || std::fabs(wz) > Terrain::kHalfSize) {
+                    // beyond the playable map: flat desert plain or open sea, slightly darkened
+                    double ex = std::clamp(wx, -Terrain::kHalfSize, Terrain::kHalfSize), ez = std::clamp(wz, -Terrain::kHalfSize, Terrain::kHalfSize);
+                    bool sea = t.height(ex, ez) < 0;
+                    mp[y * M + x] = sea ? Color{11, 40, 63, 255} : Color{150, 134, 104, 255};
+                    continue;
+                }
                 double h = t.height(wx, wz);
                 Vec3 n = t.normal(wx, wz, 60.0);
                 double shade = std::clamp(0.55 + 0.9 * dot(n, normalize(Vec3{-0.6, 0.7, -0.4})) - 0.45, 0.25, 1.15);
@@ -573,6 +581,9 @@ void WorldMeshes::build(const Terrain& t) {
             }
         minimap = LoadTextureFromImage(mm);
         SetTextureFilter(minimap, TEXTURE_FILTER_BILINEAR);
+        // Beyond the map edge show the edge itself, never the opposite side of the map (the
+        // default REPEAT wrap drew the eastern sea when flying off the western desert edge).
+        SetTextureWrap(minimap, TEXTURE_WRAP_CLAMP);
         UnloadImage(mm);
     }
 }

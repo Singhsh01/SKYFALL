@@ -26,7 +26,106 @@ double segmentPointDistance(const Vec3& a, const Vec3& b, const Vec3& c) {
 }
 }  // namespace
 
+const char* groundKindName(GroundKind k) {
+    switch (k) {
+        case GroundKind::Tank: return "TANK";
+        case GroundKind::Truck: return "TRUCK";
+        case GroundKind::AAA: return "AAA";
+        case GroundKind::SAM: return "SAM SITE";
+        case GroundKind::Bunker: return "BUNKER";
+        case GroundKind::Radar: return "RADAR";
+        case GroundKind::Gun: return "GUN";
+        case GroundKind::Artillery: return "ARTILLERY";
+        case GroundKind::OilRig: return "OIL RIG";
+        case GroundKind::FuelTank: return "FUEL TANK";
+        case GroundKind::Hangar: return "HANGAR";
+        case GroundKind::Command: return "COMMAND POST";
+        case GroundKind::Ship: return "PATROL BOAT";
+        default: return "TARGET";
+    }
+}
+
+double groundAimHeight(GroundKind k) {
+    switch (k) {
+        case GroundKind::OilRig: return 24.0;
+        case GroundKind::FuelTank: return 6.0;
+        case GroundKind::Hangar: return 7.0;
+        case GroundKind::Command: return 5.0;
+        case GroundKind::Radar: return 3.0;
+        case GroundKind::Ship: return 3.0;
+        case GroundKind::Bunker: return 2.0;
+        default: return 1.5;
+    }
+}
+
+double groundHitRadius(GroundKind k) {
+    switch (k) {
+        case GroundKind::OilRig: return 34.0;
+        case GroundKind::Hangar: return 24.0;
+        case GroundKind::Ship: return 18.0;
+        case GroundKind::Command: case GroundKind::FuelTank: case GroundKind::Bunker: return 15.0;
+        default: return 14.0;
+    }
+}
+
+double groundMaxHealth(GroundKind k) {
+    switch (k) {
+        case GroundKind::Truck: return 60;
+        case GroundKind::Bunker: case GroundKind::Radar: return 160;
+        case GroundKind::Gun: case GroundKind::Artillery: return 120;
+        case GroundKind::OilRig: return 380;      // two ATS hits
+        case GroundKind::FuelTank: return 90;
+        case GroundKind::Hangar: return 300;
+        case GroundKind::Command: return 260;
+        case GroundKind::Ship: return 220;
+        default: return 100;
+    }
+}
+
 Battle::Battle(const Terrain& terrain) : terrain_(&terrain), rng_(1234) {}
+
+int Battle::addGround(GroundTarget g) {
+    if (g.pathRadius > 0 && g.pathCenter.x == 0 && g.pathCenter.z == 0) g.pathCenter = g.pos;
+    if (groundIsNaval(g.kind)) g.pos.y = std::max(Terrain::kSeaLevel, terrain_->height(g.pos.x, g.pos.z));
+    else g.pos.y = terrain_->height(g.pos.x, g.pos.z);
+    g.maxHealth = groundMaxHealth(g.kind);
+    g.health = g.maxHealth;
+    g.alive = true;
+    if (g.fireCooldown <= 0) g.fireCooldown = rng_.range(1.0, 6.0);
+    ground_.push_back(g);
+    return static_cast<int>(ground_.size()) - 1;
+}
+
+void Battle::spawnEnemies(int count, AiSkill skill, const Vec3& center, double radius, double altitude, bool unarmed) {
+    static const AircraftId types[] = {AircraftId::Su35, AircraftId::MiG29, AircraftId::Su57, AircraftId::Su30};
+    const Vec3 pp = player().fm->state().pos;
+    for (int i = 0; i < count; ++i) {
+        double a = 2.0 * kPi * i / std::max(1, count) + rng_.range(-0.4, 0.4);
+        Vec3 pos{center.x + std::cos(a) * radius, 0, center.z + std::sin(a) * radius};
+        pos.x = clampd(pos.x, -15000, 15000);
+        pos.z = clampd(pos.z, -15000, 15000);
+        pos.y = std::max(altitude + rng_.range(-150, 150), terrain_->surfaceHeight(pos.x, pos.z) + 600.0);
+        double hdg = std::atan2(pp.z - pos.z, pp.x - pos.x) + rng_.range(-0.3, 0.3);
+        Jet& j = debugAddJet(Team::Red, types[(i + wave_) % 4], pos, hdg, 220);
+        j.ai = AiState::Engage;
+        j.skill = skill;
+        if (unarmed) { j.missiles = 0; j.rounds = 0; j.flareCharges = 0; j.ai = AiState::Patrol; }
+    }
+    ++wave_;
+    waveBanner_ = 4.0;
+}
+
+int Battle::groundAlive(int group) const {
+    int n = 0;
+    for (const GroundTarget& g : ground_) if (g.group == group && g.alive) ++n;
+    return n;
+}
+
+int Battle::groundTotal(int group) const {
+    int n = 0;
+    for (const GroundTarget& g : ground_) if (g.group == group) ++n;
+    return n;
+}
 
 Jet& Battle::createPlayer(AircraftId id) {
     jets_.clear();
@@ -45,6 +144,7 @@ Jet& Battle::createPlayer(AircraftId id) {
     jets_.push_back(std::move(j));
     active_ = false;
     score_ = 0;
+    groundKills_ = 0;
     wave_ = 0;
     return *jets_[0];
 }
@@ -101,7 +201,7 @@ void Battle::start(const BattleConfig& cfg) {
             g.pos = g.pathCenter;
             g.pos.y = terrain_->height(g.pos.x, g.pos.z);
             g.heading = rng_.range(0, 2 * kPi);
-            g.health = (k == GroundKind::Bunker || k == GroundKind::Radar) ? 160 : 100;
+            g.health = g.maxHealth = (k == GroundKind::Bunker || k == GroundKind::Radar) ? 160 : 100;
             g.fireCooldown = rng_.range(1.0, 6.0);
             ground_.push_back(g);
         };
@@ -113,7 +213,7 @@ void Battle::start(const BattleConfig& cfg) {
         place(GroundKind::Radar, 4.0, 700, 0);
         for (int i = 0; i < 4; ++i) place(GroundKind::Bunker, 0.8 + i * 1.6, 450, 0);
     }
-    spawnWave();
+    if (cfg.enemyJets > 0) spawnWave();
 }
 
 void Battle::spawnWave() {
@@ -285,10 +385,13 @@ void Battle::damageGround(int idx, double dmg, int attacker) {
     if (att && att->isPlayer) events_.push_back({EventType::Hit, g.pos, dmg, attacker, -1, ""});
     if (g.health <= 0) {
         g.alive = false;
-        events_.push_back({EventType::GroundKilled, g.pos + Vec3{0, 2, 0}, g.kind == GroundKind::Bunker ? 2.5 : 2.0, attacker, idx, ""});
-        static const char* names[] = {"TANK", "TRUCK", "AAA", "SAM SITE", "BUNKER", "RADAR"};
-        pushFeed(att ? att->callsign : "?", names[static_cast<int>(g.kind)], "", true);
-        if (att && att->isPlayer) score_ += 50;
+        double size = 2.0;
+        if (g.kind == GroundKind::Bunker) size = 2.5;
+        if (g.kind == GroundKind::FuelTank || g.kind == GroundKind::Hangar || g.kind == GroundKind::Command) size = 3.4;
+        if (g.kind == GroundKind::OilRig) size = 4.5;
+        events_.push_back({EventType::GroundKilled, g.pos + Vec3{0, groundAimHeight(g.kind), 0}, size, attacker, idx, ""});
+        pushFeed(att ? att->callsign : "?", g.label.empty() ? groundKindName(g.kind) : g.label, "", g.team == Team::Red);
+        if (att && att->isPlayer) { score_ += g.group > 0 ? 100 : 50; ++groundKills_; }
     }
 }
 
@@ -304,7 +407,7 @@ void Battle::updateLock(Jet& j, double dt, bool cycle) {
         } else if (tid <= -1000) {
             int gi = -1000 - tid;
             if (gi >= static_cast<int>(ground_.size()) || !ground_[gi].alive || ground_[gi].team == j.team) return false;
-            tp = ground_[gi].pos + Vec3{0, 2, 0};
+            tp = ground_[gi].pos + Vec3{0, groundAimHeight(ground_[gi].kind), 0};
         } else return false;
         Vec3 d = tp - s.pos;
         distOut = length(d);
@@ -499,7 +602,7 @@ void Battle::updateJet(Jet& j, double dt, const ControlInputs* override, const P
     }
     if (j.isPlayer && active_ && j.agms < 4) {
         j.agReload += dt;
-        if (j.agReload > 14.0) { j.agms++; j.agReload = 0; }
+        if (j.agReload > cfg_.agReloadSeconds) { j.agms++; j.agReload = 0; }
     }
     // flare burst
     if (j.flareBurstTimer > 0) {
@@ -553,7 +656,7 @@ void Battle::updateMissiles(double dt) {
             tj = jetById(m.targetJet);
             if (tj && tj->alive) { tPos = tj->fm->state().pos; tVel = tj->fm->state().vel; hasTarget = true; }
         } else if (m.targetGround >= 0 && m.targetGround < static_cast<int>(ground_.size()) && ground_[m.targetGround].alive) {
-            tPos = ground_[m.targetGround].pos + Vec3{0, 1.5, 0}; hasTarget = true;
+            tPos = ground_[m.targetGround].pos + Vec3{0, groundAimHeight(ground_[m.targetGround].kind), 0}; hasTarget = true;
         }
         double speed = length(m.vel);
         Vec3 dir = normalize(m.vel);
@@ -598,7 +701,8 @@ void Battle::updateMissiles(double dt) {
         if (m.targetGround >= 0) {
             for (int gi = 0; gi < static_cast<int>(ground_.size()); ++gi) {
                 if (!ground_[gi].alive) continue;
-                if (segmentPointDistance(prev, m.pos, ground_[gi].pos) < 14.0) {
+                const GroundTarget& gt = ground_[gi];
+                if (segmentPointDistance(prev, m.pos, gt.pos + Vec3{0, groundAimHeight(gt.kind), 0}) < groundHitRadius(gt.kind)) {
                     m.active = false;
                     events_.push_back({EventType::Explosion, m.pos, m.airToSurface ? 2.6 : 1.8, m.owner, -1, ""});
                     damageGround(gi, 200.0, m.owner);
@@ -654,7 +758,10 @@ void Battle::updateBullets(double dt) {
         if (!hit && b.team == Team::Blue) {
             for (int gi = 0; gi < static_cast<int>(ground_.size()); ++gi) {
                 if (!ground_[gi].alive) continue;
-                if (segmentPointDistance(prev, b.pos, ground_[gi].pos + Vec3{0, 1.5, 0}) < kGroundHitRadius) {
+                const GroundTarget& gt = ground_[gi];
+                if (gt.team == b.team) continue;
+                double hr = std::max(kGroundHitRadius, groundHitRadius(gt.kind) * 0.7);
+                if (segmentPointDistance(prev, b.pos, gt.pos + Vec3{0, groundAimHeight(gt.kind), 0}) < hr) {
                     damageGround(gi, 9.0, b.owner);
                     hit = true;
                     break;
@@ -706,13 +813,15 @@ void Battle::updateGround(double dt) {
         GroundTarget& g = ground_[gi];
         if (!g.alive) continue;
         if (g.pathRadius > 0) {
-            double speed = g.kind == GroundKind::Truck ? 9.0 : 4.5;
+            double speed = g.kind == GroundKind::Truck ? 9.0 : (g.kind == GroundKind::Ship ? 8.0 : 4.5);
             g.pathAngle += speed / g.pathRadius * dt;
             g.pos = {g.pathCenter.x + std::cos(g.pathAngle) * g.pathRadius, 0,
                      g.pathCenter.z + std::sin(g.pathAngle) * g.pathRadius};
-            g.pos.y = terrain_->height(g.pos.x, g.pos.z);
+            g.pos.y = groundIsNaval(g.kind) ? std::max(Terrain::kSeaLevel, terrain_->height(g.pos.x, g.pos.z))
+                                            : terrain_->height(g.pos.x, g.pos.z);
             g.heading = g.pathAngle + kPi / 2;
         }
+        if (!g.armed || g.team == Team::Blue || !groundShootsAir(g.kind)) continue;
         g.fireCooldown -= dt;
         if (g.fireCooldown > 0) continue;
         // nearest blue aircraft
@@ -724,7 +833,7 @@ void Battle::updateGround(double dt) {
             if (d < bd) { bd = d; best = jp.get(); }
         }
         if (!best) { g.fireCooldown = 1.0; continue; }
-        if (g.kind == GroundKind::AAA && bd < 2600.0) {
+        if ((g.kind == GroundKind::AAA || g.kind == GroundKind::Gun || g.kind == GroundKind::Ship) && bd < 2600.0) {
             // short tracer burst with lead and dispersion
             const FlightState& ts = best->fm->state();
             double tof = bd / 900.0;
@@ -782,7 +891,7 @@ void Battle::update(double dt, const ControlInputs& playerInput, const PlayerCom
 
     // Remove long-dead AI jets, spawn next wave
     jets_.erase(std::remove_if(jets_.begin() + 1, jets_.end(), [](const std::unique_ptr<Jet>& j) { return !j->alive && j->deadTimer > 12.0; }), jets_.end());
-    if (active_ && enemiesAlive() == 0) {
+    if (active_ && cfg_.endlessWaves && enemiesAlive() == 0) {
         waveTimer_ += dt;
         if (waveTimer_ > 5.0) { waveTimer_ = 0; spawnWave(); }
     }

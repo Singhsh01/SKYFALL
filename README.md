@@ -28,13 +28,14 @@ copyrighted models, textures, sounds or code from commercial games.
 | ![Missile camera](docs/screenshots/missile_cam.jpg) | ![Hit camera](docs/screenshots/hit_cam.jpg) |
 | ![Crash replay](docs/screenshots/crash_replay.jpg) | ![Canyon](docs/screenshots/canyon.jpg) |
 | ![Cockpit](docs/screenshots/cockpit_air.jpg) | ![Hangar](docs/screenshots/hangar.jpg) |
+| ![Campaign](docs/screenshots/campaign_menu.jpg) | ![Gun line](docs/screenshots/gun_line.jpg) |
 
 > Screenshots are captured from the running executable (`skyfall --capture`) on a Linux
 > container with Mesa's software rasteriser: they show the real renderer output, not macOS
 > performance. Measured on a MacBook Air (v0.3 build): 66 fps mean, p95 20 ms at 1680x1050 High.
 > See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
-## What you can do in this build (v0.4)
+## What you can do in this build (v0.5)
 
 * **All eight aircraft are flyable** (Hangar → select → FLY): F-22, F-35, Rafale, Su-57, Su-35,
   MiG-29, Su-30, F-16. Each has its own roll/pitch rates and missile load; the selection is used
@@ -56,8 +57,17 @@ copyrighted models, textures, sounds or code from commercial games.
   moving tapes, in both the minimal and the full HUD (`U`).
 * **Desert battlefield** — eroded arid mountains (procedural noise shaped by a deterministic
   hydraulic-erosion simulation), dry river bed with palms, desert town, coast to the east.
-* **Campaign** missions 01–03 (cold start & takeoff, first solo flight, runway landing) and the
-  **Dogfight Arena** (waves of AI bandits, wingmen, SAM sites, AAA with flak, ground targets).
+* **40-mission campaign** (all unlocked, progress saved): training (takeoff, solo flight, landing,
+  navigation, high-g, low-level, gunnery / ATS / ATA ranges), then strikes and air battles across
+  the map: gun lines (GUN 1-4), offshore oil rigs, convoys, SAM sites and radars, fuel depots,
+  hangars, command posts, patrol boats, artillery batteries, escalating fighter waves and a final
+  assault that ends with a landing at home. Objective targets are marked in orange on the HUD and
+  minimap with live "targets left" counters; friendly assets you must protect are blue.
+  Missions 04-40 are data in `src/mission/Campaign.cpp`, and every one is played through by the tests.
+* **Dogfight Arena**: endless waves of AI bandits with wingmen, SAM sites, AAA flak and a town garrison.
+* **Steady frame rate**: dynamic resolution lowers the 3D resolution in 10 % steps when frames drop
+  below ~55 fps and raises it again when there is headroom (Settings → Dynamic resolution; the HUD
+  stays sharp). `F3` shows simulation and HUD CPU time per frame.
 
 ## Browser version (WebAssembly)
 

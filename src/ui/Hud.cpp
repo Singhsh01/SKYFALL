@@ -23,6 +23,7 @@ const Color kPanel = {8, 14, 18, 150};
 const Color kPanelBorder = {150, 255, 205, 60};
 
 std::string fmt(const char* f, double v) { char b[64]; std::snprintf(b, sizeof b, f, v); return b; }
+std::string fmt2(const char* f, int a, int b2) { char b[96]; std::snprintf(b, sizeof b, f, a, b2); return b; }
 std::string fmti(const char* f, int v) { char b[64]; std::snprintf(b, sizeof b, f, v); return b; }
 
 /// Odometer-style rolling readout: every digit is a drum; the lowest drum rolls continuously
@@ -84,17 +85,25 @@ void drawTape(float x, float cy, float halfH, double value, double step, int lab
     }
 }
 
-const char* groundName(GroundKind k) {
-    switch (k) {
-        case GroundKind::Tank: return "TANK";
-        case GroundKind::Truck: return "TRUCK";
-        case GroundKind::AAA: return "AAA";
-        case GroundKind::SAM: return "SAM";
-        case GroundKind::Bunker: return "BUNKER";
-        case GroundKind::Radar: return "RADAR";
-    }
-    return "";
+/// Greedy word wrap for HUD text.
+std::vector<std::string> wrapText(const std::string& text, float size, float maxW, bool bold = false) {
+    std::vector<std::string> out;
+    std::string line, word;
+    auto flush = [&]() {
+        if (word.empty()) return;
+        std::string cand = line.empty() ? word : line + " " + word;
+        if (ui::measure(cand, size, bold) > maxW && !line.empty()) { out.push_back(line); line = word; }
+        else line = cand;
+        word.clear();
+    };
+    for (char ch : text) { if (ch == ' ') flush(); else word += ch; }
+    flush();
+    if (!line.empty()) out.push_back(line);
+    return out;
 }
+
+const Color kObjective = {255, 176, 60, 255};
+const Color kFriendlyAsset = {110, 190, 255, 255};
 }  // namespace
 
 void Hud::update(double dt) {
@@ -138,13 +147,14 @@ void Hud::draw(const HudContext& c) {
             else flightSymbology(c, false);
         }
         targets(c);
+        objectiveMarkers(c);
         weapons(c);
         minimap(c);
         warnings(c);
     }
     killFeed(c);
     missionPanel(c);
-    if (c.mission && c.mission->id() == "M03" && !c.dead) glidePath(c);
+    if (c.showGlidePath && !c.dead) glidePath(c);
     radioPanel(c);
     popups(c);
     // hit marker
@@ -391,20 +401,37 @@ void Hud::targets(const HudContext& c) {
         }
     }
     // ground targets
+    std::vector<Rectangle> labelRects;   // declutter: one label per screen area
+    auto labelFree = [&](Rectangle r) {
+        for (const Rectangle& o : labelRects) if (CheckCollisionRecs(r, o)) return false;
+        labelRects.push_back(r);
+        return true;
+    };
     for (size_t gi = 0; gi < c.battle->ground().size(); ++gi) {
         const GroundTarget& g = c.battle->ground()[gi];
         if (!g.alive) continue;
         double dist = length(g.pos - ps.pos);
-        if (dist > 3500) continue;
+        bool objective = g.group > 0 && g.team == Team::Red;
+        bool friendly = g.team == Team::Blue;
+        // mission targets are marked from far away so they can be found; others only up close
+        if (dist > (objective || friendly ? 26000.0 : 3500.0)) continue;
         double off = std::acos(std::clamp(dot(normalize(g.pos - ps.pos), ps.q.forward()), -1.0, 1.0));
-        bool important = g.kind == GroundKind::SAM || g.kind == GroundKind::AAA;
-        if (off > (important ? 35.0 : 14.0) * kDeg && p.lockTarget != -1000 - static_cast<int>(gi)) continue;
+        bool important = objective || friendly || groundShootsAir(g.kind);
+        if (off > (important ? 40.0 : 14.0) * kDeg && p.lockTarget != -1000 - static_cast<int>(gi)) continue;
         bool front;
-        Vector2 sp = project(c, toRl(g.pos + Vec3{0, 3, 0}), &front);
+        Vector2 sp = project(c, toRl(g.pos + Vec3{0, groundAimHeight(g.kind) + 1.5, 0}), &front);
         if (!front || sp.x < 0 || sp.x > c.w || sp.y < 0 || sp.y > c.h) continue;
-        float r = 6 * s;
-        DrawRectangleLinesEx({sp.x - r, sp.y - r, 2 * r, 2 * r}, 1.5f * s, ui::withAlpha(kEnemy, 0.85f));
-        if (dist < 2500) ui::textShadow(groundName(g.kind), sp.x, sp.y + r + 2 * s, 11 * s, ui::withAlpha(kEnemy, 0.85f), Align::Center);
+        Color col = friendly ? kFriendlyAsset : objective ? kObjective : kEnemy;
+        float r = (objective ? 7.0f : 6.0f) * s;
+        DrawRectangleLinesEx({sp.x - r, sp.y - r, 2 * r, 2 * r}, (objective ? 2.0f : 1.5f) * s, ui::withAlpha(col, 0.9f));
+        const std::string name = g.label.empty() ? groundKindName(g.kind) : g.label;
+        if (objective || friendly || dist < 2500) {
+            float lw = ui::measure(name, 11 * s);
+            if (labelFree({sp.x - lw / 2 - 2 * s, sp.y + r + 1 * s, lw + 4 * s, 14 * s}))
+                ui::textShadow(name, sp.x, sp.y + r + 2 * s, 11 * s, ui::withAlpha(col, 0.9f), Align::Center);
+            if (dist > 3000 && labelFree({sp.x - 14 * s, sp.y - r - 16 * s, 28 * s, 14 * s}))
+                ui::textShadow(fmt("%.1f", dist / 1000.0), sp.x, sp.y - r - 15 * s, 11 * s, ui::withAlpha(col, 0.8f), Align::Center);
+        }
     }
     // lock box
     if (p.lockTarget != -1) {
@@ -518,14 +545,14 @@ void Hud::minimap(const HudContext& c) {
     float size = 190 * s;
     Rectangle r = {18 * s, c.h - size - 18 * s, size, size};
     double range = 7000.0;            // metres from centre to edge
-    double mPerPx = 2.0 * Terrain::kHalfSize / c.minimap.width;
+    double mPerPx = 2.0 * c.minimapHalf / c.minimap.width;
     double hdg = compassHeadingDeg(ps.q);
     float cx = r.x + size / 2, cy = r.y + size / 2;
     float pxPerM = static_cast<float>(size / 2 / range);
     BeginScissorMode(static_cast<int>(r.x), static_cast<int>(r.y), static_cast<int>(r.width), static_cast<int>(r.height));
     DrawRectangleRec(r, Color{10, 16, 20, 255});
     float srcHalf = static_cast<float>(range * 1.45 / mPerPx);
-    float u = static_cast<float>((ps.pos.x + Terrain::kHalfSize) / mPerPx), v = static_cast<float>((ps.pos.z + Terrain::kHalfSize) / mPerPx);
+    float u = static_cast<float>((ps.pos.x + c.minimapHalf) / mPerPx), v = static_cast<float>((ps.pos.z + c.minimapHalf) / mPerPx);
     float dstHalf = static_cast<float>(range * 1.45) * pxPerM;
     DrawTexturePro(c.minimap, {u - srcHalf, v - srcHalf, srcHalf * 2, srcHalf * 2}, {cx, cy, dstHalf * 2, dstHalf * 2}, {dstHalf, dstHalf},
                    static_cast<float>(-hdg), Color{255, 255, 255, 215});
@@ -550,8 +577,27 @@ void Hud::minimap(const HudContext& c) {
         DrawTriangle(a, b, d, col);
     };
     if (c.battle) {
-        for (const GroundTarget& g : c.battle->ground())
-            if (g.alive) { Vector2 m = toMap(g.pos); DrawRectangleV({m.x - 2 * s, m.y - 2 * s}, {4 * s, 4 * s}, Color{255, 90, 70, 200}); }
+        for (const GroundTarget& g : c.battle->ground()) {
+            if (!g.alive) continue;
+            Vector2 m = toMap(g.pos);
+            bool objective = g.group > 0 && g.team == Team::Red;
+            Color col = g.team == Team::Blue ? kFriendlyAsset : objective ? kObjective : Color{255, 90, 70, 200};
+            float hs = (objective || g.team == Team::Blue ? 3.0f : 2.0f) * s;
+            DrawRectangleV({m.x - hs, m.y - hs}, {2 * hs, 2 * hs}, col);
+        }
+        if (c.campaign && c.mission && c.mission->status() == MissionStatus::Running && c.mission->stepIndex() < c.campaign->objectives.size()) {
+            Vec3 op;
+            if (objectivePoint(*c.campaign, c.campaign->objectives[c.mission->stepIndex()], c.battle, op)) {
+                Vector2 m = toMap(op);
+                // clamp to the minimap edge so the direction is always shown
+                Vector2 d = {m.x - cx, m.y - cy};
+                float len = std::sqrt(d.x * d.x + d.y * d.y), maxR = size * 0.47f;
+                if (len > maxR) { m = {cx + d.x / len * maxR, cy + d.y / len * maxR}; }
+                float k = 5 * s;
+                DrawTriangle({m.x, m.y - k}, {m.x - k, m.y}, {m.x + k, m.y}, kObjective);
+                DrawTriangle({m.x - k, m.y}, {m.x, m.y + k}, {m.x + k, m.y}, kObjective);
+            }
+        }
         for (const auto& jp : c.battle->jets()) {
             if (jp->isPlayer || !jp->alive) continue;
             tri(toMap(jp->fm->state().pos), compassHeadingDeg(jp->fm->state().q), 6 * s, jp->team == Team::Red ? kEnemy : kAlly);
@@ -839,7 +885,10 @@ void Hud::missionPanel(const HudContext& c) {
         const Mission& m = *c.mission;
         float w = 330 * s;
         float lineH = 22 * s;
-        float h = 52 * s + lineH * m.stepCount() + 38 * s;
+        std::vector<std::string> instr;
+        if (const MissionStep* cur = m.current()) instr = wrapText(cur->instruction, 13 * s, w - 24 * s);
+        bool chip = m.current() && !m.current()->keyHint.empty();
+        float h = 52 * s + lineH * m.stepCount() + 26 * s + 17 * s * std::max<size_t>(1, instr.size()) + (chip ? 24 * s : 0);
         Rectangle r = {18 * s, 18 * s, w, h};
         ui::panel(r, kPanel, kPanelBorder);
         ui::text(std::string("MISSION ") + m.id().substr(1), r.x + 12 * s, r.y + 8 * s, 13 * s, Color{150, 255, 205, 200});
@@ -855,21 +904,33 @@ void Hud::missionPanel(const HudContext& c) {
             ui::text(mark, r.x + 12 * s, y, 15 * s, col);
             ui::text(st.title, r.x + 30 * s, y, 15 * s, col);
             if (cur && !st.keyHint.empty()) {
+                // key chip sits in the header row so long objective titles are never covered
                 float kw = ui::measure(st.keyHint, 12 * s) + 12 * s;
-                Rectangle kb = {r.x + w - kw - 10 * s, y - 1 * s, kw, 18 * s};
+                Rectangle kb = {r.x + 12 * s, r.y + 52 * s + lineH * m.stepCount() + 2 * s, kw, 18 * s};
                 DrawRectangleRec(kb, Color{255, 255, 255, 220});
                 ui::text(st.keyHint, kb.x + kw / 2, kb.y + 3 * s, 12 * s, BLACK, Align::Center);
             }
             y += lineH;
         }
         if (const MissionStep* cur = m.current()) {
-            ui::text(cur->instruction, r.x + 12 * s, y + 4 * s, 13 * s, Color{220, 230, 230, 230}, Align::Left, false);
+            float iy = y + 4 * s + (chip ? 24 * s : 0);
+            for (const std::string& l : instr) { ui::text(l, r.x + 12 * s, iy, 13 * s, Color{220, 230, 230, 230}, Align::Left, false); iy += 17 * s; }
             if (cur->progress && c.player) {
-                MissionContext ctx{&c.player->fm->state(), &c.player->fm->profile(), nullptr, 0};
+                MissionContext ctx{&c.player->fm->state(), &c.player->fm->profile(), nullptr, 0, c.battle};
                 float pr = static_cast<float>(std::clamp(cur->progress(ctx), 0.0, 1.0));
                 if (cur->holdSeconds > 0 && m.holdTimer() > 0) pr = static_cast<float>(m.holdTimer() / cur->holdSeconds);
-                DrawRectangle(static_cast<int>(r.x + 12 * s), static_cast<int>(y + 24 * s), static_cast<int>((w - 24 * s)), static_cast<int>(4 * s), Color{255, 255, 255, 40});
-                DrawRectangle(static_cast<int>(r.x + 12 * s), static_cast<int>(y + 24 * s), static_cast<int>((w - 24 * s) * pr), static_cast<int>(4 * s), Color{150, 255, 205, 220});
+                DrawRectangle(static_cast<int>(r.x + 12 * s), static_cast<int>(iy + 4 * s), static_cast<int>((w - 24 * s)), static_cast<int>(4 * s), Color{255, 255, 255, 40});
+                DrawRectangle(static_cast<int>(r.x + 12 * s), static_cast<int>(iy + 4 * s), static_cast<int>((w - 24 * s) * pr), static_cast<int>(4 * s), Color{150, 255, 205, 220});
+            }
+            // live counters for campaign objectives
+            if (c.campaign && c.battle && m.stepIndex() < c.campaign->objectives.size()) {
+                const ObjectiveDef& o = c.campaign->objectives[m.stepIndex()];
+                std::string tag;
+                if (o.kind == ObjectiveKind::DestroyGroup)
+                    tag = fmt2("TARGETS LEFT  %d / %d", c.battle->groundAlive(o.group), c.battle->groundTotal(o.group));
+                else if (o.kind == ObjectiveKind::DestroyAir)
+                    tag = fmti("BANDITS LEFT  %d", c.battle->enemiesAlive());
+                if (!tag.empty()) ui::text(tag, r.x + w - 12 * s, r.y + 8 * s, 13 * s, kObjective, Align::Right);
             }
         }
         if (m.stepFlash() > 0 && m.stepIndex() > 0) {
@@ -896,10 +957,47 @@ void Hud::missionPanel(const HudContext& c) {
     }
 }
 
+void Hud::objectiveMarkers(const HudContext& c) {
+    // waypoint diamond (with distance) for the current campaign objective; target groups are
+    // already marked individually by targets()
+    if (!c.campaign || !c.mission || c.mission->status() != MissionStatus::Running) return;
+    size_t idx = c.mission->stepIndex();
+    if (idx >= c.campaign->objectives.size()) return;
+    const ObjectiveDef& o = c.campaign->objectives[idx];
+    if (o.kind != ObjectiveKind::Waypoint) return;
+    float s = c.h / 720.0f;
+    const FlightState& ps = c.player->fm->state();
+    Vec3 wp{o.x, ps.pos.y, o.z};
+    double dist = std::hypot(o.x - ps.pos.x, o.z - ps.pos.z);
+    bool front;
+    Vector2 sp = project(c, toRl(wp), &front);
+    Vector2 ctr = {c.w * 0.5f, c.h * 0.5f};
+    bool onScreen = front && sp.x > 30 * s && sp.x < c.w - 30 * s && sp.y > 30 * s && sp.y < c.h - 30 * s;
+    if (!onScreen) {
+        // pin to the screen edge in the direction of the waypoint
+        Vector2 d = {sp.x - ctr.x, sp.y - ctr.y};
+        if (!front) { d.x = -d.x; d.y = -d.y; }
+        float len = std::max(1.0f, std::sqrt(d.x * d.x + d.y * d.y));
+        float rad = std::min(c.w, c.h) * 0.42f;
+        sp = {ctr.x + d.x / len * rad, ctr.y + d.y / len * rad};
+    }
+    float k = 11 * s;
+    Vector2 top = {sp.x, sp.y - k}, left = {sp.x - k, sp.y}, bot = {sp.x, sp.y + k}, right = {sp.x + k, sp.y};
+    ui::line(top, right, 2 * s, kObjective); ui::line(right, bot, 2 * s, kObjective);
+    ui::line(bot, left, 2 * s, kObjective); ui::line(left, top, 2 * s, kObjective);
+    ui::textShadow(o.title, sp.x, sp.y + k + 3 * s, 12 * s, kObjective, Align::Center);
+    ui::textShadow(fmt("%.1f KM", dist / 1000.0), sp.x, sp.y - k - 16 * s, 12 * s, kObjective, Align::Center);
+    if (o.maxAgl > 0) {
+        bool ok = ps.agl < o.maxAgl;
+        ui::textShadow(fmt2("AGL %d  /  MAX %d", static_cast<int>(ps.agl), static_cast<int>(o.maxAgl)), ctr.x, c.h * 0.28f, 15 * s,
+                       ok ? Color{150, 255, 205, 255} : Color{255, 90, 70, 255}, Align::Center);
+    }
+}
+
 void Hud::glidePath(const HudContext& c) {
     // ILS-style glide-slope and localiser deviation for Mission 03
     const FlightState& st = c.player->fm->state();
-    const RunwayInfo rw = Terrain().runway();
+    const RunwayInfo& rw = c.runway;   // never construct a Terrain here: that rebuilds the whole eroded world
     float s = c.h / 720.0f;
     double d = rw.threshold().x - st.pos.x;
     double hAbove = st.pos.y - rw.center.y;
@@ -924,15 +1022,26 @@ void Hud::radioPanel(const HudContext& c) {
     if (c.settings && !c.settings->captions) return;
     float s = c.h / 720.0f;
     float y = 84 * s;
+    // keep captions in the centre column, clear of the mission panel (left) and gauges (right)
+    float maxW = std::max(320.0f * s, c.w - 2.0f * 372.0f * s);
     for (auto it = radio_.begin(); it != radio_.end(); ++it) {
         float a = static_cast<float>(std::clamp(std::min(it->t * 4.0, it->dur - it->t), 0.0, 1.0));
-        std::string full = it->who + ":  " + it->text;
-        float tw = ui::measure(full, 16 * s);
-        DrawRectangle(static_cast<int>(c.w / 2 - tw / 2 - 12 * s), static_cast<int>(y - 4 * s), static_cast<int>(tw + 24 * s), static_cast<int>(26 * s), Color{0, 0, 0, static_cast<unsigned char>(120 * a)});
-        float x = c.w / 2 - tw / 2;
+        std::string who = it->who + ":  ";
+        float whoW = ui::measure(who, 16 * s);
+        std::vector<std::string> lines = wrapText(it->text, 16 * s, maxW - whoW);
+        float tw = 0;
+        for (const auto& l : lines) tw = std::max(tw, ui::measure(l, 16 * s, false));
+        float boxW = whoW + tw;
+        float boxH = 22 * s * lines.size() + 4 * s;
+        DrawRectangle(static_cast<int>(c.w / 2 - boxW / 2 - 12 * s), static_cast<int>(y - 4 * s), static_cast<int>(boxW + 24 * s),
+                      static_cast<int>(boxH + 4 * s), Color{0, 0, 0, static_cast<unsigned char>(130 * a)});
+        float x = c.w / 2 - boxW / 2;
         ui::text(it->who + ":", x, y, 16 * s, ui::withAlpha(Color{150, 255, 205, 255}, a));
-        ui::text(it->text, x + ui::measure(it->who + ":  ", 16 * s), y, 16 * s, ui::withAlpha(WHITE, a), Align::Left, false);
-        y += 30 * s;
+        for (const auto& l : lines) {
+            ui::text(l, x + whoW, y, 16 * s, ui::withAlpha(WHITE, a), Align::Left, false);
+            y += 22 * s;
+        }
+        y += 12 * s;
     }
 }
 
@@ -950,7 +1059,7 @@ void Hud::popups(const HudContext& c) {
 void Hud::debug(const HudContext& c) {
     float s = c.h / 720.0f;
     const FlightState& st = c.player->fm->state();
-    Rectangle r = {c.w - 300 * s, 200 * s, 282 * s, 300 * s};
+    Rectangle r = {c.w - 300 * s, 200 * s, 282 * s, 340 * s};
     ui::panel(r, Color{0, 0, 0, 170}, kPanelBorder);
     float x = r.x + 10 * s, y = r.y + 8 * s, lh = 17 * s;
     auto row = [&](const std::string& t) { ui::text(t, x, y, 13 * s, WHITE, Align::Left, false); y += lh; };
@@ -958,6 +1067,8 @@ void Hud::debug(const HudContext& c) {
     row(fmt("frame p50 %.2f ms", c.frame.p50) + fmt("  p95 %.2f", c.frame.p95));
     row(fmt("frame p99 %.2f ms", c.frame.p99) + fmt("  max %.1f", c.frame.max));
     row(fmt("world pass %.2f ms (CPU submit)", c.worldMs));
+    row(fmt("simulation %.2f ms", c.simMs));
+    row(fmt("hud %.2f ms (previous frame)", c.hudMs));
     row(fmti("draw calls %d", c.drawCalls) + fmti("   particles %d", static_cast<int>(c.particles)));
     row(fmt("sim %.0f Hz fixed", c.fixedHz) + fmti("  dropped %d", c.droppedSteps));
     row(fmt("pos %.0f, ", st.pos.x) + fmt("%.0f, ", st.pos.y) + fmt("%.0f", st.pos.z));

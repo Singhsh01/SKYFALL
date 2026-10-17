@@ -2,6 +2,7 @@
 // held true for its required duration — elapsed time alone never completes a step.
 #pragma once
 
+#include "../combat/Combat.hpp"
 #include "../sim/FlightModel.hpp"
 
 #include <functional>
@@ -15,6 +16,7 @@ struct MissionContext {
     const AircraftProfile* aircraft = nullptr;
     const Terrain* terrain = nullptr;
     int enemiesDestroyed = 0;
+    const Battle* battle = nullptr;   // campaign objectives (targets / bandits alive)
 };
 
 struct MissionStep {
@@ -34,6 +36,8 @@ public:
         : id_(std::move(id)), title_(std::move(title)), steps_(std::move(steps)) {}
 
     void update(const MissionContext& ctx, double dt);
+    /// Checked every update while running; returning a non-empty reason fails the mission.
+    void addFailCondition(std::function<std::string(const MissionContext&)> f) { failIf_.push_back(std::move(f)); }
     void fail(const std::string& why);
     void reset();
 
@@ -58,6 +62,7 @@ private:
     MissionStatus status_ = MissionStatus::Running;
     std::string failure_;
     std::vector<double> times_;
+    std::vector<std::function<std::string(const MissionContext&)>> failIf_;
 };
 
 /// Mission 01 — Cold Start & Takeoff.
@@ -69,14 +74,16 @@ Mission makeMission03();
 /// Ideal 3-degree glide-path height above the runway for a horizontal distance to the threshold.
 double glidePathHeight(double distanceToThreshold);
 
-/// Catalogue of the 20 planned campaign missions (only some are playable in this build).
+/// Campaign catalogue: 40 missions, all playable (01-03 hand-written training, 04-40 from
+/// data in Campaign.cpp).
 struct MissionInfo {
     int number;
-    const char* title;
-    const char* summary;
+    std::string title;
+    std::string summary;
     bool playable;
 };
 const std::vector<MissionInfo>& campaignCatalogue();
+constexpr int kCampaignMissions = 40;
 
 /// Compass heading in degrees (0 = north = world -Z, 90 = east = world +X).
 double compassHeadingDeg(const Quat& q);

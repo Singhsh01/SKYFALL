@@ -119,6 +119,7 @@ private:
     JetModel jets_[6];
     Mesh flame_{}, missile_{};
     Mesh tank_{}, truck_{}, aaa_{}, sam_{}, bunker_{}, radar_{};
+    Mesh gun_{}, artillery_{}, oilRig_{}, fuelTank_{}, hangar_{}, command_{}, ship_{};
     std::vector<CloudPuff> puffs_;
 
     Prog sky_, terrain_p_, water_, lit_, jet_, flameP_, cloud_, runway_, particle_, bright_, blur_, composite_;

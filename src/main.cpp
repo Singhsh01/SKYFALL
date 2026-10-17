@@ -61,7 +61,7 @@ static int skyfallMain(int argc, char** argv) {
 #ifdef __EMSCRIPTEN__
     // Browser build: index.html?mode=arena (or m01) jumps straight into a mode.
     if (const char* m = emscripten_run_script_string(
-            "(function(){var m=new URLSearchParams(location.search).get('mode')||'';return /^(arena|m01)$/.test(m)?m:'';})()"))
+            "(function(){var m=new URLSearchParams(location.search).get('mode')||'';return /^(arena|[mc][0-9]{2})$/.test(m)?m:'';})()"))
         if (*m) opt.startMode = m;
     // Browser build: the game lives for the whole page; Game::run hands control to the
     // browser's animation loop and never returns, so it must not live on the stack.

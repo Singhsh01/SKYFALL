@@ -5,6 +5,7 @@
 
 #include "../audio/Audio.hpp"
 #include "../combat/Combat.hpp"
+#include "../mission/Campaign.hpp"
 #include "../mission/Mission.hpp"
 #include "../render/Lighting.hpp"
 #include "../render/Renderer.hpp"
@@ -94,6 +95,20 @@ private:
     Terrain terrain_;
     Battle battle_{terrain_};
     std::optional<Mission> mission_;
+    const CampaignMissionDef* campaignDef_ = nullptr;   // missions 04-40
+    CampaignDirector director_;
+    // dynamic resolution: 3D scene scale chosen from measured frame times
+    double dynScale_ = 1.0;
+    double dynTimer_ = 0, dynAccum_ = 0;
+    int dynFrames_ = 0;
+    double dynUpBlockedUntil_ = 0;
+    double dynLastUp_ = -100;
+    // CPU cost of the last frame's simulation and HUD (ms), for F3 and the benchmark
+    double simMs_ = 0, hudMs_ = 0;
+    std::vector<double> benchSim_, benchHud_;
+    bool startModeFromString(const std::string& m);
+    void updateDynamicResolution(double dt);
+    MissionContext missionContext();
     Renderer renderer_;
     Hud hud_;
     Cockpit cockpit_;

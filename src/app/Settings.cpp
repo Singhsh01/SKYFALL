@@ -56,6 +56,8 @@ bool Settings::load(const std::string& path) {
             else if (k == "high_contrast_hud") highContrastHud = toBool(v);
             else if (k == "missile_cam") missileCam = toBool(v);
             else if (k == "crash_replay") crashReplay = toBool(v);
+            else if (k == "dynamic_resolution") dynamicResolution = toBool(v);
+            else if (k == "campaign_done") { for (size_t i = 0; i < v.size() && i < campaignDone.size(); ++i) campaignDone[i] = v[i] == '1' ? '1' : '0'; }
             else if (k == "hud_style") hudStyle = std::clamp(std::stoi(v), 0, 1);
             else if (k == "invert_pitch") invertPitch = toBool(v);
             else if (k == "sensitivity") sensitivity = std::clamp(std::stod(v), 0.3, 2.0);
@@ -88,11 +90,11 @@ bool Settings::save(const std::string& path) const {
       << "quality=" << static_cast<int>(quality) << "\nwidth=" << width << "\nheight=" << height
       << "\nfullscreen=" << fullscreen << "\nvsync=" << vsync << "\nfov=" << fovDeg << "\nbloom=" << bloom
       << "\ncamera_shake=" << cameraShake << "\ng_effects=" << gEffects << "\nui_scale=" << uiScale
-      << "\nshow_fps=" << showFps << "\nhigh_contrast_hud=" << highContrastHud << "\nhud_style=" << hudStyle << "\nmissile_cam=" << missileCam << "\ncrash_replay=" << crashReplay << "\n[input]\n"
+      << "\nshow_fps=" << showFps << "\nhigh_contrast_hud=" << highContrastHud << "\nhud_style=" << hudStyle << "\nmissile_cam=" << missileCam << "\ncrash_replay=" << crashReplay << "\ndynamic_resolution=" << dynamicResolution << "\n[input]\n"
       << "invert_pitch=" << invertPitch << "\nsensitivity=" << sensitivity << "\ndeadzone=" << deadzone
       << "\nhandling=" << handling << "\naircraft=" << aircraft << "\n[audio]\n"
       << "master=" << master << "\nmusic=" << music << "\nengine=" << engine << "\nradio=" << radio
-      << "\neffects=" << effects << "\nmusic_enabled=" << musicEnabled << "\ncaptions=" << captions << "\n";
+      << "\neffects=" << effects << "\nmusic_enabled=" << musicEnabled << "\ncaptions=" << captions << "\n[progress]\ncampaign_done=" << campaignDone << "\n";
     if (!extra.empty()) {
         f << "[extra]\n";
         for (auto& [k, v] : extra) f << k << '=' << v << '\n';

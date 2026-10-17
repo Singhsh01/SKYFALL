@@ -81,19 +81,40 @@ struct Flare {
     bool active = true;
 };
 
-enum class GroundKind { Tank, Truck, AAA, SAM, Bunker, Radar };
+enum class GroundKind { Tank, Truck, AAA, SAM, Bunker, Radar,
+                        Gun,        // anti-aircraft gun emplacement (sandbags + twin cannon), fires flak
+                        Artillery,  // field gun battery (long barrel), no air threat
+                        OilRig,     // offshore oil platform (stands in the sea)
+                        FuelTank,   // storage tank at a fuel depot
+                        Hangar,     // aircraft shelter
+                        Command,    // command post building with masts
+                        Ship,       // patrol boat with a deck gun (moves on the sea)
+                        Count };
+
+/// Display name, missile aim height above the base, hit radius and default health per kind.
+const char* groundKindName(GroundKind k);
+double groundAimHeight(GroundKind k);
+double groundHitRadius(GroundKind k);
+double groundMaxHealth(GroundKind k);
+inline bool groundIsNaval(GroundKind k) { return k == GroundKind::OilRig || k == GroundKind::Ship; }
+/// Kinds that shoot at aircraft when armed.
+inline bool groundShootsAir(GroundKind k) { return k == GroundKind::AAA || k == GroundKind::Gun || k == GroundKind::Ship || k == GroundKind::SAM; }
 
 struct GroundTarget {
     GroundKind kind = GroundKind::Tank;
     Vec3 pos;
     double heading = 0;
     double health = 100;
+    double maxHealth = 100;
     bool alive = true;
     double fireCooldown = 0;
-    double pathAngle = 0;     // vehicles drive along a circle
+    double pathAngle = 0;     // vehicles (and boats) drive along a circle
     double pathRadius = 0;
     Vec3 pathCenter;
     Team team = Team::Red;
+    std::string label;        // e.g. "GUN 2", "OIL RIG A" (shown on the HUD and in the kill feed)
+    int group = 0;            // mission objective group (0 = not an objective)
+    bool armed = true;        // false for range targets that never shoot back
 };
 
 enum class EventType { Explosion, SmallExplosion, Hit, JetKilled, GroundKilled, MissileLaunch, FlaresOut,
@@ -117,10 +138,12 @@ struct KillFeedEntry {
 struct BattleConfig {
     int enemyJets = 4;
     int allyJets = 1;
-    bool groundTargets = true;
+    bool groundTargets = true;   // the arena's town garrison
+    bool endlessWaves = true;    // arena: a new wave after each cleared one; campaign: scripted waves only
     AiSkill skill = AiSkill::Veteran;
     unsigned seed = 1234;
     bool playerInvulnerable = false;
+    double agReloadSeconds = 14.0;
 };
 
 struct PlayerCommands {
@@ -138,6 +161,18 @@ public:
     Jet& createPlayer(AircraftId id);
     void start(const BattleConfig& cfg);   // spawn allies, enemies and ground forces
     void clearCombatants();                // remove everything except the player
+
+    // ---- scripted scenarios (campaign) ----
+    /// Adds a ground target; y is set from the terrain (sea surface for naval kinds), health from the kind.
+    int addGround(GroundTarget g);
+    /// Spawns `count` hostile jets around `center` at `altitude` (MSL), heading towards the player.
+    void spawnEnemies(int count, AiSkill skill, const Vec3& center, double radius, double altitude, bool unarmed = false);
+    int groundAlive(int group) const;      // live targets in an objective group
+    int groundTotal(int group) const;
+    int groundKilledByPlayer() const { return groundKills_; }
+    // test helpers (as if destroyed by the player)
+    void debugDestroyGround(int idx) { damageGround(idx, 1e6, player().id); }
+    void debugKillJet(int id) { if (Jet* j = jetById(id)) damageJet(*j, 1e6, player().id, "TEST"); }
 
     void update(double dt, const ControlInputs& playerInput, const PlayerCommands& cmd);
 
@@ -202,6 +237,7 @@ private:
     int nextJetId_ = 0;
     int nextMissileId_ = 0;
     int score_ = 0;
+    int groundKills_ = 0;
     int wave_ = 0;
     double waveTimer_ = 0;
     double waveBanner_ = 0;

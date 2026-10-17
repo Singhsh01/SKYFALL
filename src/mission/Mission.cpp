@@ -34,6 +34,10 @@ void Mission::update(const MissionContext& ctx, double dt) {
         fail(crashReasonText(ctx.flight->crashReason));
         return;
     }
+    for (auto& f : failIf_) {
+        std::string why = f(ctx);
+        if (!why.empty()) { fail(why); return; }
+    }
     // Allow several quick steps to resolve in one frame, but each needs its own predicate.
     for (int guard = 0; guard < 4 && index_ < steps_.size(); ++guard) {
         const MissionStep& s = steps_[index_];
@@ -135,32 +139,6 @@ Mission makeMission03() {
                   [](const MissionContext& c) { return c.flight->onGround && c.flight->airspeed < 2.0; }, 0.0,
                   [](const MissionContext& c) { return clampd(1.0 - c.flight->airspeed / 80.0, 0.0, 1.0); }});
     return Mission("M03", "RUNWAY LANDING", std::move(st));
-}
-
-const std::vector<MissionInfo>& campaignCatalogue() {
-    static const std::vector<MissionInfo> k = {
-        {1, "Cold Start & Takeoff", "Start engine, release brakes, throttle, rotate, climb, gear up.", true},
-        {2, "First Solo Flight", "Pitch, roll, yaw, coordinated turns and altitude hold.", true},
-        {3, "Runway Landing", "Approach, gear, touchdown and braking.", true},
-        {4, "Navigation Training", "Headings, route checkpoints and the HUD.", false},
-        {5, "High-G Maneuvers", "Loops, barrel rolls and energy management.", false},
-        {6, "Stall Recovery", "Enter and recover from a documented stall (Simulation handling).", false},
-        {7, "First Intercept", "Locate and visually identify a simulated intruder.", false},
-        {8, "Dogfight Initiation", "Engage AI-controlled aircraft (playable via Dogfight Arena).", true},
-        {9, "Two-on-Two", "AI wingman versus two opponents.", false},
-        {10, "Mountain Pursuit", "Track an aircraft through high terrain.", false},
-        {11, "Coastal Patrol", "Patrol and classify contacts along the coastline.", false},
-        {12, "Night Interception", "Reduced visibility, instrument flying.", false},
-        {13, "Storm Flight", "Turbulence, crosswind and low visibility.", false},
-        {14, "Carrier Approach", "Moving-deck approach (advanced phase).", false},
-        {15, "Emergency Return", "Engine or flight-control malfunction recovery.", false},
-        {16, "Formation Flight", "Hold safe separation on a leader.", false},
-        {17, "Search and Track", "Evaluate the computer-vision pipeline against ground truth.", false},
-        {18, "Precision Navigation", "Terrain-aware waypoint navigation.", false},
-        {19, "Final Air Battle", "Multi-wave AI encounter (playable via Dogfight Arena waves).", true},
-        {20, "Graduation Challenge", "Takeoff, navigation, encounter, landing, scored.", false},
-    };
-    return k;
 }
 
 }  // namespace sky

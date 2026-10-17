@@ -9,6 +9,7 @@
 #include "rlgl.h"
 
 #include <algorithm>
+#include <cctype>
 #include <memory>
 #include <chrono>
 #include <cmath>
@@ -91,9 +92,7 @@ int Game::run(const Options& opt) {
     if (!opt.captureDir.empty()) { int r = runCapture(); shutdown(); return r; }
     if (opt.benchSeconds > 0) { int r = runBench(); shutdown(); return r; }
 
-    if (opt.startMode == "arena") startArena(false);
-    else if (opt.startMode == "m01") startMission01();
-    else startTitle();
+    if (!startModeFromString(opt.startMode)) startTitle();
 
 #ifdef __EMSCRIPTEN__
     webLast_ = std::chrono::steady_clock::now();
@@ -134,6 +133,40 @@ void Game::webTick() {
     stats_.push(dt * 1000.0);
 }
 #endif
+
+void Game::updateDynamicResolution(double dt) {
+    // Holds ~60 fps by lowering the 3D scene resolution in 10 % steps (HUD stays native).
+    // Down quickly when frames are slow; up only after sustained headroom, and not again soon
+    // after an up-step that had to be undone (prevents oscillation and its stutter).
+    if (!settings_.dynamicResolution || capturing_) { dynScale_ = 1.0; return; }
+    if (screen_ != Screen::Playing || replayActive_) { dynTimer_ = dynAccum_ = 0; dynFrames_ = 0; return; }
+    dynAccum_ += dt; ++dynFrames_; dynTimer_ += dt;
+    if (dynTimer_ < 1.0) return;
+    double meanMs = dynAccum_ / std::max(1, dynFrames_) * 1000.0;
+    dynTimer_ = dynAccum_ = 0; dynFrames_ = 0;
+    if (meanMs > 19.0 && dynScale_ > 0.55) {
+        dynScale_ = std::max(0.5, dynScale_ - 0.1);
+        dynUpBlockedUntil_ = time_ + ((time_ - dynLastUp_) < 6.0 ? 60.0 : 8.0);
+    } else if (meanMs < 17.5 && dynScale_ < 1.0 && time_ > dynUpBlockedUntil_) {
+        dynScale_ = std::min(1.0, dynScale_ + 0.1);
+        dynLastUp_ = time_;
+        dynUpBlockedUntil_ = time_ + 4.0;
+    }
+}
+
+bool Game::startModeFromString(const std::string& m) {
+    // "arena", "m01".."m03" or "c04".."c40" (any mission number with either prefix)
+    if (m == "arena") { startArena(false); return true; }
+    if (m.size() >= 2 && (m[0] == 'm' || m[0] == 'c')) {
+        int n = std::atoi(m.c_str() + 1);
+        if (n >= 1 && n <= kCampaignMissions) { startMission(n); return true; }
+    }
+    return false;
+}
+
+MissionContext Game::missionContext() {
+    return MissionContext{&battle_.player().fm->state(), &battle_.player().fm->profile(), &terrain_, 0, &battle_};
+}
 
 void Game::shutdown() {
     audio_.shutdown();
@@ -181,18 +214,28 @@ void Game::startMission(int n) {
     screen_ = Screen::Playing;
     mode_ = GameMode::Mission01;   // "guided mission" mode
     missionNo_ = n;
+    campaignDef_ = n >= 4 ? campaignMission(n) : nullptr;
+    director_ = CampaignDirector{};
     tod_ = n == 3 ? TimeOfDay::Noon : TimeOfDay::Morning;
+    if (campaignDef_) tod_ = campaignDef_->timeOfDay == 1 ? TimeOfDay::GoldenHour : campaignDef_->timeOfDay == 2 ? TimeOfDay::Noon : TimeOfDay::Morning;
     lighting_ = Lighting::preset(tod_);
     Jet& p = battle_.createPlayer(static_cast<AircraftId>(settings_.aircraft));
     battle_.setAiEnabled(true);
     const RunwayInfo& rw = terrain_.runway();
-    if (n == 2) {
+    if (campaignDef_) {
+        const CampaignMissionDef& d = *campaignDef_;
+        p.fm->resetAirborne({d.startX, d.startAlt, d.startZ}, campaignStartHeading(d), d.startSpeed, 0.85);
+        mission_ = buildCampaignMission(d);
+        camMode_ = CameraMode::Chase;
+        director_.begin(d, battle_);           // targets, allies (player must already be placed)
+        director_.update(*mission_, battle_);  // waves owned by the first objective
+    } else if (n == 2) {
         p.fm->resetAirborne({rw.center.x + 2000.0, 1250.0, rw.center.z}, 0.0, 200.0, 0.62);
         mission_ = makeMission02();
         camMode_ = CameraMode::Chase;
     } else if (n == 3) {
         Vec3 th = rw.threshold();
-        double d = 7000.0;
+        double d = 4800.0;   // stays inside the 32 km map (threshold is 5.5 km from the west edge)
         p.fm->resetAirborne({th.x - d, rw.center.y + glidePathHeight(d), th.z}, 0.0, 95.0, 0.45);
         p.fm->mutableState().q = Quat::fromEuler(0.0, 2.0 * kDeg, 0.0);
         p.fm->mutableState().vel = Quat::fromEuler(0.0, -3.0 * kDeg, 0.0).forward() * 95.0;
@@ -219,7 +262,8 @@ void Game::startMission(int n) {
     killerName_.clear();
 
     applySettings();
-    if (n == 1) hud_.radio("TOWER", "Skyfall One, runway 09, wind calm. Start-up approved.", 7);
+    if (campaignDef_) hud_.radio("AWACS", campaignDef_->briefing, 9);
+    else if (n == 1) hud_.radio("TOWER", "Skyfall One, runway 09, wind calm. Start-up approved.", 7);
     else if (n == 2) hud_.radio("INSTRUCTOR", "Your aircraft. Let's see some clean flying, Skyfall One.", 6);
     else hud_.radio("TOWER", "Skyfall One, cleared to land runway 09, wind calm.", 7);
     audio_.play(Sfx::Radio);
@@ -237,6 +281,7 @@ void Game::startArena(bool keepPlayerState) {
         renderer_.effects().clear();
     }
     mission_.reset();
+    campaignDef_ = nullptr;
     missionDone_ = false;
     battle_.setAiEnabled(true);
     recorder_.clear();
@@ -311,7 +356,9 @@ void Game::frame(double dt, bool render) {
     {
         // 3D scene resolution follows the window size in points (not Retina pixels) times a
         // quality scale; the HUD is still drawn at native resolution.
+        updateDynamicResolution(dt);
         double scale = settings_.quality == GraphicsQuality::Low ? 0.7 : (settings_.quality == GraphicsQuality::Medium ? 0.85 : 1.0);
+        scale *= dynScale_;
         int rw = std::min(1920, static_cast<int>(GetScreenWidth() * scale)), rh = static_cast<int>(GetScreenHeight() * scale * std::min(1.0, 1920.0 / std::max(1.0, GetScreenWidth() * scale)));
         if (rw != renderer_.width() || rh != renderer_.height()) renderer_.resize(rw, rh);
     }
@@ -400,8 +447,8 @@ void Game::simulate(double dt, bool withPlayerInput) {
             else ci.roll = rollDir_;
         }
         if (mission_) {
-            MissionContext ctx{&battle_.player().fm->state(), &battle_.player().fm->profile(), &terrain_, 0};
-            mission_->update(ctx, FlightModel::kDt);
+            mission_->update(missionContext(), FlightModel::kDt);
+            if (campaignDef_) director_.update(*mission_, battle_);
         }
     }
     if (n > 0) pendingCmd_ = PlayerCommands{};
@@ -446,18 +493,20 @@ void Game::updatePlaying(double dt) {
         if (in.barrelRoll != 0 && rollDir_ == 0 && !fm.state().onGround) { rollDir_ = in.barrelRoll; rollDone_ = 0; }
     }
     if (mode_ == GameMode::Mission01 && missionDone_ && in.confirm) {
-        if (missionNo_ == 1) {
-            startArena(true);
-            hud_.radio("AWACS", "Bandits inbound from the east. Skyfall One, engage!", 6);
-        } else if (missionNo_ == 2) {
-            startMission(3);
+        if (missionNo_ < kCampaignMissions) {
+            startMission(missionNo_ + 1);
         } else {
+            startTitle();
             screen_ = Screen::Campaign;
             nav_.focus = 0;
         }
         return;
     }
-    simulate(dt, !playerDead_);
+    {
+        auto t0 = std::chrono::steady_clock::now();
+        simulate(dt, !playerDead_);
+        simMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    }
     processEvents();
 
     // mission narration / completion
@@ -469,9 +518,12 @@ void Game::updatePlaying(double dt) {
         if (radioStage_ == 2 && idx >= 6) { hud_.radio("TOWER", "Positive climb. Gear up, contact AWACS.", 5); audio_.play(Sfx::Radio); radioStage_ = 3; }
         if (mission_->status() == MissionStatus::Complete && !missionDone_) {
             missionDone_ = true;
-            if (missionNo_ == 1) hud_.radio("AWACS", "Skyfall One, picture: bandits inbound from the east. Press ENTER to engage.", 9);
+            settings_.markCompleted(missionNo_);
+            settings_.save(settingsPath_);
+            if (campaignDef_) hud_.radio("AWACS", campaignDef_->debrief, 9);
+            else if (missionNo_ == 1) hud_.radio("TOWER", "Good climb-out, Skyfall One. Press ENTER for your first solo flight.", 9);
             else if (missionNo_ == 2) hud_.radio("INSTRUCTOR", "Nicely flown. Press ENTER for the landing lesson.", 8);
-            else hud_.radio("TOWER", "Skyfall One, welcome home. Taxi to the apron.", 8);
+            else hud_.radio("TOWER", "Skyfall One, welcome home. Press ENTER for navigation training.", 8);
             audio_.play(Sfx::Radio);
         }
         if (mission_->status() == MissionStatus::Failed && !playerDead_) {
@@ -546,7 +598,17 @@ void Game::processEvents() {
             case EventType::GroundKilled:
                 audio_.play(Sfx::Explosion, 0.6f + 1.2f * att, pan);
                 if (e.a == p.id) { lastKillTime_ = time_; lastKillPos_ = e.pos; }
-                if (e.a == p.id) { hud_.popup("+50   GROUND TARGET DESTROYED", Color{255, 225, 120, 255}); hud_.hitMarker(true); }
+                if (e.a == p.id) {
+                    std::string what = "GROUND TARGET";
+                    bool objective = false;
+                    if (e.b >= 0 && e.b < static_cast<int>(battle_.ground().size())) {
+                        const GroundTarget& g = battle_.ground()[e.b];
+                        what = g.label.empty() ? groundKindName(g.kind) : g.label;
+                        objective = g.group > 0;
+                    }
+                    hud_.popup(std::string(objective ? "+100   " : "+50   ") + what + " DESTROYED", Color{255, 225, 120, 255});
+                    hud_.hitMarker(true);
+                }
                 break;
             case EventType::SmallExplosion: if (dist < 1500) audio_.play(Sfx::Impact, 0.6f * att, pan); break;
             case EventType::Splash: audio_.play(Sfx::Explosion, 0.5f * att, pan); break;
@@ -800,6 +862,8 @@ void Game::renderFrame() {
         hc.time = time_;
         hc.frame = stats_.compute();
         hc.worldMs = renderer_.lastWorldMs();
+        hc.simMs = simMs_;
+        hc.hudMs = hudMs_;
         hc.drawCalls = renderer_.drawCalls();
         hc.particles = renderer_.effects().particleCount();
         hc.showDebug = showDebug_;
@@ -808,12 +872,27 @@ void Game::renderFrame() {
         hc.timeOfDay = lighting_.name;
         hc.combiner = combiner;
         hc.minimap = renderer_.world().minimap;
+        hc.minimapHalf = WorldMeshes::kMinimapHalf;
         hc.gpws = gpws_;
         hc.dead = playerDead_;
         hc.deathReason = deathReason_;
         hc.respawnTimer = respawnTimer_;
         hc.missionDone = missionDone_;
-        hc.missionNext = missionNo_ == 1 ? "PRESS ENTER TO ENGAGE INBOUND BANDITS" : missionNo_ == 2 ? "PRESS ENTER FOR MISSION 03: RUNWAY LANDING" : "PRESS ENTER FOR THE CAMPAIGN MENU";
+        if (missionNo_ < kCampaignMissions) {
+            const auto& cat = campaignCatalogue();
+            std::string nextTitle = cat[missionNo_].title;
+            for (char& ch : nextTitle) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            char nb[160];
+            std::snprintf(nb, sizeof nb, "PRESS ENTER FOR MISSION %02d: %s", missionNo_ + 1, nextTitle.c_str());
+            hc.missionNext = nb;
+        } else {
+            hc.missionNext = "CAMPAIGN COMPLETE  -  PRESS ENTER";
+        }
+        hc.runway = terrain_.runway();
+        hc.campaign = campaignDef_;
+        hc.showGlidePath = (mission_ && mission_->id() == "M03") ||
+                           (campaignDef_ && mission_ && mission_->stepIndex() < campaignDef_->objectives.size() &&
+                            campaignDef_->objectives[mission_->stepIndex()].kind == ObjectiveKind::Touchdown);
         hc.droppedSteps = stepper_.droppedSteps;
         hc.pipActive = pipOn;
         hc.pip = &pip_;
@@ -823,11 +902,16 @@ void Game::renderFrame() {
         hc.replayT = replayT_; hc.replayFrom = replayFrom_; hc.replayTo = replayTo_; hc.deathTime = deathTime_;
         hc.loss = &lossReport_;
         hc.gamepad = input_.gamepadConnected();
+        auto th = std::chrono::steady_clock::now();
         hud_.draw(hc);
+        hudMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - th).count();
         if (settings_.showFps && !showDebug_) {
             Percentiles pc = stats_.compute();
             char b[64];
-            std::snprintf(b, sizeof b, "%.0f FPS  %.1f ms", pc.mean > 0 ? 1000.0 / pc.mean : 0.0, pc.mean);
+            if (dynScale_ < 0.999)
+                std::snprintf(b, sizeof b, "%.0f FPS  %.1f ms  RES %d%%", pc.mean > 0 ? 1000.0 / pc.mean : 0.0, pc.mean, static_cast<int>(std::lround(dynScale_ * 100)));
+            else
+                std::snprintf(b, sizeof b, "%.0f FPS  %.1f ms", pc.mean > 0 ? 1000.0 / pc.mean : 0.0, pc.mean);
             ui::text(b, GetScreenWidth() - 12.0f, GetScreenHeight() - 156.0f * GetScreenHeight() / 720.0f, 13, Color{255, 255, 255, 140}, Align::Right);
         }
     }
@@ -864,7 +948,7 @@ void Game::drawTitle() {
     ui::logo(70 * s, 70 * s, s, titleTime_);
     nav_.begin(5, in.up, in.down, in.confirm, in.left, in.right);
     float x = 70 * s, y = 250 * s, bw = 430 * s, bh = 52 * s, gap = 10 * s;
-    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "Training missions 01-03 playable, 20 planned")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; nav_.focus = 0; return; }
+    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "40 missions: training, strikes, dogfights")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; nav_.focus = 0; return; }
     y += bh + gap;
     if (ui::button(nav_, 1, {x, y, bw, bh}, "DOGFIGHT ARENA", "Waves of fictional bandits, SAM sites and ground targets")) { audio_.play(Sfx::Click); startArena(false); return; }
     y += bh + gap;
@@ -873,7 +957,7 @@ void Game::drawTitle() {
     if (ui::button(nav_, 3, {x, y, bw, bh}, "SETTINGS", "Audio, graphics, controls")) { audio_.play(Sfx::Click); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 0; return; }
     y += bh + gap;
     if (ui::button(nav_, 4, {x, y, bw, bh}, "QUIT")) { quit_ = true; return; }
-    ui::text("v0.4  -  C++20 / raylib  -  fictional simulation, illustrative aircraft data", 70 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Left, false);
+    ui::text("v0.5  -  C++20 / raylib  -  fictional simulation, illustrative aircraft data", 70 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Left, false);
     ui::text("ENTER select   ARROWS navigate", w - 30 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Right, false);
 }
 
@@ -881,26 +965,49 @@ void Game::drawCampaign() {
     const InputState& in = input_.state();
     float w = static_cast<float>(GetScreenWidth()), h = static_cast<float>(GetScreenHeight());
     float s = h / 720.0f;
-    DrawRectangleGradientH(0, 0, static_cast<int>(w * 0.62f), static_cast<int>(h), Color{0, 0, 0, 200}, Color{0, 0, 0, 0});
-    ui::title("CAMPAIGN", 60 * s, 34 * s, 38 * s);
+    DrawRectangleGradientH(0, 0, static_cast<int>(w), static_cast<int>(h), Color{0, 0, 0, 215}, Color{0, 0, 0, 120});
+    ui::title("CAMPAIGN", 50 * s, 26 * s, 34 * s);
     const auto& cat = campaignCatalogue();
-    nav_.begin(static_cast<int>(cat.size()) + 1, in.up, in.down, in.confirm, in.left, in.right);
-    // two columns of ten
-    for (size_t i = 0; i < cat.size(); ++i) {
+    const int n = static_cast<int>(cat.size());
+    int done = 0;
+    for (int i = 1; i <= n; ++i) if (settings_.missionCompleted(i)) ++done;
+    char prog[64];
+    std::snprintf(prog, sizeof prog, "%d / %d COMPLETE", done, n);
+    ui::text(prog, w - 50 * s, 40 * s, 15 * s, Color{150, 255, 205, 230}, Align::Right);
+    nav_.begin(n + 1, in.up, in.down, in.confirm, in.left, in.right);
+    if (in.left && nav_.focus < n) nav_.focus = (nav_.focus + n - 10) % n;      // columns of ten
+    if (in.right && nav_.focus < n) nav_.focus = (nav_.focus + 10) % n;
+    // four columns of ten
+    const float colW = std::min(300.0f * s, (w - 100 * s) / 4.0f - 10 * s);
+    const float rowH = 41 * s;
+    static const char* chapters[] = {"TRAINING", "OPERATIONS", "OFFENSIVE", "ENDGAME"};
+    for (int c = 0; c < 4; ++c)
+        ui::text(chapters[c], 50 * s + c * (colW + 10 * s), 78 * s, 12 * s, Color{255, 176, 60, 220});
+    for (int i = 0; i < n; ++i) {
         const MissionInfo& m = cat[i];
         float col = static_cast<float>(i / 10), row = static_cast<float>(i % 10);
-        Rectangle r = {60 * s + col * 360 * s, 100 * s + row * 52 * s, 345 * s, 46 * s};
+        Rectangle r = {50 * s + col * (colW + 10 * s), 96 * s + row * (rowH + 4 * s), colW, rowH};
         char label[96];
-        std::snprintf(label, sizeof label, "%02d  %s", m.number, m.title);
-        bool playable = m.playable && (m.number <= 3);
-        if (ui::button(nav_, static_cast<int>(i), r, label, playable ? m.summary : "Planned", playable)) {
+        std::snprintf(label, sizeof label, "%02d  %s", m.number, m.title.c_str());
+        if (ui::button(nav_, i, r, label, "", true)) {
             audio_.play(Sfx::Click);
-            if (m.number <= 3) startMission(m.number);
-            else startArena(false);   // 08 / 19 map onto the Dogfight Arena
+            startMission(m.number);
             return;
         }
+        if (settings_.missionCompleted(m.number))
+            ui::text("+", r.x + r.width - 10 * s, r.y + r.height / 2 - 9 * s, 18 * s, Color{120, 240, 160, 255}, Align::Right);
     }
-    if (ui::button(nav_, static_cast<int>(cat.size()), {60 * s, h - 76 * s, 200 * s, 46 * s}, "BACK") || in.back) {
+    // briefing for the focused mission
+    if (nav_.focus < n) {
+        const MissionInfo& m = cat[nav_.focus];
+        Rectangle b = {50 * s, h - 118 * s, w - 100 * s - 230 * s, 64 * s};
+        ui::panel(b, Color{0, 0, 0, 150}, Color{255, 255, 255, 40});
+        char head[96];
+        std::snprintf(head, sizeof head, "MISSION %02d", m.number);
+        ui::text(head, b.x + 14 * s, b.y + 9 * s, 12 * s, Color{255, 176, 60, 230});
+        ui::text(m.summary, b.x + 14 * s, b.y + 29 * s, 17 * s, WHITE, Align::Left, false);
+    }
+    if (ui::button(nav_, n, {w - 50 * s - 210 * s, h - 118 * s, 210 * s, 64 * s}, "BACK") || in.back) {
         if (mode_ == GameMode::None) screen_ = Screen::Title; else startTitle();
         nav_.focus = 0;
     }
@@ -959,7 +1066,7 @@ void Game::drawSettings() {
     float s = h / 720.0f;
     DrawRectangle(0, 0, static_cast<int>(w), static_cast<int>(h), Color{0, 0, 0, 170});
     ui::title("SETTINGS", 60 * s, 34 * s, 38 * s);
-    nav_.begin(19, in.up, in.down, in.confirm, in.left, in.right);
+    nav_.begin(20, in.up, in.down, in.confirm, in.left, in.right);
     float cw = 420 * s, rh = 42 * s, g = 6 * s;
     float x1 = 60 * s, x2 = 60 * s + cw + 40 * s;
     float y = 110 * s;
@@ -989,6 +1096,7 @@ void Game::drawSettings() {
     if (ui::cycle(nav_, 14, {x2, y2, cw, rh}, "Handling", settings_.handling, {"ARCADE", "ASSISTED", "SIMULATION"})) changed = true;
     y2 += rh + g;
     changed |= ui::slider(nav_, 15, {x2, y2, cw, rh}, "Control sensitivity", settings_.sensitivity, 0.3, 2.0); y2 += rh + g;
+    changed |= ui::toggle(nav_, 19, {x2, y2, cw, rh}, "Dynamic resolution (hold 60 fps)", settings_.dynamicResolution); y2 += rh + g;
     changed |= ui::toggle(nav_, 16, {x1, y + 22 * s, cw, rh}, "Missile / target camera", settings_.missileCam);
     changed |= ui::toggle(nav_, 17, {x1, y + 22 * s + rh + g, cw, rh}, "Crash replay + analysis", settings_.crashReplay);
     if (ui::button(nav_, 18, {x1, h - 64 * s, 200 * s, 46 * s}, "BACK") || in.back) {
@@ -1039,8 +1147,8 @@ void Game::scriptedStep(double seconds, const std::function<void(double)>& pilot
             battle_.update(FlightModel::kDt, ci, pendingCmd_);
             pendingCmd_ = PlayerCommands{};
             if (mission_) {
-                MissionContext ctx{&battle_.player().fm->state(), &battle_.player().fm->profile(), &terrain_, 0};
-                mission_->update(ctx, FlightModel::kDt);
+                mission_->update(missionContext(), FlightModel::kDt);
+                if (campaignDef_) director_.update(*mission_, battle_);
             }
         }
         time_ += chunk;
@@ -1202,6 +1310,48 @@ int Game::runCapture() {
             scriptedStep(0.1, [&](double) { setInput(0, 0, 0, 0); });
             snap(sh.name, 3);
         }
+        return 0;
+    }
+    if (set == "campaign") {
+        // new ground targets and campaign HUD, framed from a jet approaching each site
+        auto approach = [&](int mission, double tx, double tz, double dist, double agl, const char* name, double side = 0.0) {
+            startMission(mission);
+            battle_.setAiEnabled(false);
+            double ang = std::atan2(tz - (tz - 1), 0.0) + side;   // approach from the west by default
+            ang = side;
+            Vec3 from{tx - std::cos(ang) * dist, 0, tz - std::sin(ang) * dist};
+            from.y = std::max(terrain_.surfaceHeight(from.x, from.z), terrain_.surfaceHeight(tx, tz)) + agl;
+            double pitch = -std::atan2(agl * 0.8, dist);
+            battle_.player().fm->resetAirborne(from, ang, 200, 0.6);
+            battle_.player().fm->mutableState().q = Quat::fromEuler(ang, pitch, 0.0);
+            battle_.player().fm->mutableState().vel = Quat::fromEuler(ang, pitch, 0.0).forward() * 200.0;
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            scriptedStep(0.25, [&](double) { setInput(0, 0, 0, 0); });
+            snap(name, 4);
+        };
+        startTitle(); screen_ = Screen::Campaign; nav_.focus = 12;
+        snap("campaign_menu", 1);
+        approach(12, 3900, -5673, 1500, 220, "c12_gun_line");
+        approach(13, 11500, -6000, 1400, 260, "c13_oil_rig", 0.5);
+        approach(17, -5500, -6500, 1300, 260, "c17_fuel_depot");
+        approach(25, 5500, -12000, 1300, 250, "c25_hangars", 1.2);
+        approach(21, -3200, -9000, 1200, 230, "c21_command_post");
+        approach(19, 11000, -1500, 1500, 250, "c19_patrol_boats", 0.3);
+        approach(22, 500, 3200, 1100, 200, "c22_artillery");
+        startMission(4);
+        battle_.setAiEnabled(false);
+        scriptedStep(1.0, [&](double) { setInput(0, 0, 0, 0); });
+        snap("c04_waypoint_hud", 3);
+        startMission(3);
+        scriptedStep(0.5, [&](double) { setInput(0, 0, 0, 0); });
+        camMode_ = CameraMode::Chase; chaseInit_ = false;
+        snap("m03_start_minimap", 4);
+        // close-up beauty shots with the HUD hidden
+        hideHud_ = true;
+        approach(13, 11500, -6000, 420, 70, "c13_oil_rig_close", 0.5);
+        approach(12, 3900, -5673, 380, 60, "c12_guns_close", 0.4);
+        approach(25, 5500, -12000, 420, 70, "c25_hangars_close", 1.6);
+        approach(19, 11000, -1500, 900, 80, "c19_boats_close", 0.3);
         return 0;
     }
     if (set == "missions") {
@@ -1402,8 +1552,15 @@ int Game::runCapture() {
 }
 
 int Game::runBench() {
-    startArena(false);
-    battle_.player().fm->resetAirborne({-4000, 2000, 2000}, 0.0, 230, 0.85);
+    bool arena = opt_.startMode.empty() || opt_.startMode == "arena";
+    if (arena) {
+        startArena(false);
+        battle_.player().fm->resetAirborne({-4000, 2000, 2000}, 0.0, 230, 0.85);
+    } else if (!startModeFromString(opt_.startMode)) {
+        std::printf("unknown --mode %s\n", opt_.startMode.c_str());
+        return 1;
+    }
+    benchSim_.clear(); benchHud_.clear();
     camMode_ = CameraMode::Chase;
     stats_.keepAll(true);
     auto last = std::chrono::steady_clock::now();
@@ -1415,13 +1572,22 @@ int Game::runBench() {
         // gentle scripted turn so the view changes
         battle_.player().lastInput.roll = std::sin(elapsed * 0.3) * 0.4;
         frame(std::min(dt, 0.25));
-        if (elapsed > 1.0) stats_.push(dt * 1000.0);  // skip warm-up
+        if (elapsed > 1.0) { stats_.push(dt * 1000.0); benchSim_.push_back(simMs_); benchHud_.push_back(hudMs_); }  // skip warm-up
         elapsed += dt;
     }
+    auto meanMax = [](const std::vector<double>& v, double& mean, double& mx) {
+        mean = 0; mx = 0;
+        for (double x : v) { mean += x; mx = std::max(mx, x); }
+        if (!v.empty()) mean /= v.size();
+    };
+    double sm, sx, hm, hx;
+    meanMax(benchSim_, sm, sx);
+    meanMax(benchHud_, hm, hx);
+    std::printf("cpu: simulation mean %.3f ms max %.3f ms | hud mean %.3f ms max %.3f ms\n", sm, sx, hm, hx);
     std::filesystem::create_directories("benchmarks");
     std::string renderer = std::string(reinterpret_cast<const char*>(rlGetVersion() == RL_OPENGL_33 ? "OpenGL 3.3" : "OpenGL"));
     stats_.writeCsv("benchmarks/frame_times.csv");
-    stats_.writeJson("benchmarks/benchmark.json", "arena_chase", GetRenderWidth(), GetRenderHeight(), renderer);
+    stats_.writeJson("benchmarks/benchmark.json", arena ? "arena_chase" : opt_.startMode.c_str(), GetRenderWidth(), GetRenderHeight(), renderer);
     Percentiles p = FrameStats::computeFrom(stats_.all());
     std::printf("benchmark: %zu frames, mean %.2f ms (%.0f fps), p50 %.2f, p95 %.2f, p99 %.2f ms\n", p.samples, p.mean,
                 p.mean > 0 ? 1000.0 / p.mean : 0, p.p50, p.p95, p.p99);

@@ -7,6 +7,7 @@
 #include "../telemetry/Replay.hpp"
 #include "../app/Settings.hpp"
 #include "../combat/Combat.hpp"
+#include "../mission/Campaign.hpp"
 #include "../mission/Mission.hpp"
 #include "../telemetry/FrameStats.hpp"
 #include "raylib.h"
@@ -30,6 +31,7 @@ struct HudContext {
     double time = 0;
     Percentiles frame{};
     double worldMs = 0;
+    double simMs = 0, hudMs = 0;
     int drawCalls = 0;
     size_t particles = 0;
     bool showDebug = false;
@@ -38,6 +40,7 @@ struct HudContext {
     const char* timeOfDay = "";
     Rectangle combiner{0, 0, 0, 0};   // cockpit HUD glass in screen space
     Texture2D minimap{};
+    double minimapHalf = 20000.0;   // metres from the map centre to the texture edge
     bool gpws = false;
     double respawnTimer = -1;
     bool dead = false;
@@ -56,6 +59,10 @@ struct HudContext {
     bool replay = false;
     double replayT = 0, replayFrom = 0, replayTo = 0, deathTime = 0;
     const LossReport* loss = nullptr;
+    // missions
+    RunwayInfo runway{};
+    const CampaignMissionDef* campaign = nullptr;
+    bool showGlidePath = false;
 };
 
 class Hud {
@@ -77,6 +84,7 @@ private:
     void warnings(const HudContext& c);
     void missionPanel(const HudContext& c);
     void glidePath(const HudContext& c);
+    void objectiveMarkers(const HudContext& c);
     void minimalSymbology(const HudContext& c);
     void hintsBar(const HudContext& c);
     void pipPanel(const HudContext& c);

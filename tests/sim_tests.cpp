@@ -3,12 +3,14 @@
 #include "app/CameraMode.hpp"
 #include "app/Settings.hpp"
 #include "combat/Combat.hpp"
+#include "mission/Campaign.hpp"
 #include "mission/Mission.hpp"
 #include "sim/Atmosphere.hpp"
 #include "sim/FlightModel.hpp"
 #include "telemetry/FrameStats.hpp"
 #include "telemetry/Replay.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -570,6 +572,251 @@ TEST(all_eight_aircraft_profiles_are_defined) {
     }
     CHECK(allProfiles().size() == 8);
     CHECK(playable == 8);
+}
+
+// ------------------------------------------------------------------------------------------
+// Campaign 04-40
+// ------------------------------------------------------------------------------------------
+TEST(campaign_has_forty_playable_missions) {
+    const auto& cat = campaignCatalogue();
+    CHECK(cat.size() == 40);
+    for (size_t i = 0; i < cat.size(); ++i) {
+        CHECK(cat[i].number == static_cast<int>(i) + 1);
+        CHECK(cat[i].playable);
+        CHECK(!cat[i].title.empty());
+    }
+    for (int n = 4; n <= 40; ++n) {
+        const CampaignMissionDef* d = campaignMission(n);
+        CHECK(d != nullptr);
+        if (d) CHECK(!d->objectives.empty());
+    }
+    CHECK(campaignMission(3) == nullptr);
+    CHECK(campaignMission(41) == nullptr);
+}
+
+TEST(campaign_layouts_are_valid) {
+    const Terrain& t = terrain();
+    int bad = 0;
+    auto fail = [&](const CampaignMissionDef& m, const std::string& what) {
+        if (bad++ < 25) std::printf("    mission %02d: %s\n", m.number, what.c_str());
+    };
+    for (const CampaignMissionDef& m : campaignMissions()) {
+        if (std::fabs(m.startX) > 14500 || std::fabs(m.startZ) > 14500) fail(m, "start outside the map");
+        if (m.startAlt < t.surfaceHeight(m.startX, m.startZ) + 300) fail(m, "start too close to the ground");
+        for (const TargetDef& g : m.targets) {
+            auto checkPoint = [&](double x, double z) {
+                if (std::fabs(x) > 15000 || std::fabs(z) > 15000) { fail(m, g.label + " outside the map"); return; }
+                double h = t.height(x, z);
+                if (groundIsNaval(g.kind)) {
+                    if (h > -6.0) fail(m, g.label + " (naval) not in water, h=" + std::to_string(h));
+                } else {
+                    if (h < 3.0) fail(m, g.label + " (land) in water, h=" + std::to_string(h));
+                    if (t.normal(x, z, 8.0).y < 0.88) fail(m, g.label + " on a steep slope");
+                    if (t.onRunway(x, z, 60.0)) fail(m, g.label + " on the runway");
+                }
+            };
+            if (g.pathRadius > 0)
+                for (int k = 0; k < 36; ++k) checkPoint(g.x + std::cos(k * kPi / 18) * g.pathRadius, g.z + std::sin(k * kPi / 18) * g.pathRadius);
+            else checkPoint(g.x, g.z);
+        }
+        // static targets must not overlap each other
+        for (size_t a = 0; a < m.targets.size(); ++a)
+            for (size_t b = a + 1; b < m.targets.size(); ++b) {
+                const TargetDef &A = m.targets[a], &B = m.targets[b];
+                if (A.pathRadius > 0 || B.pathRadius > 0) continue;
+                if (std::hypot(A.x - B.x, A.z - B.z) < 25.0) fail(m, A.label + " overlaps " + B.label);
+            }
+        for (const ObjectiveDef& o : m.objectives) {
+            if (o.kind == ObjectiveKind::DestroyGroup) {
+                int n = 0;
+                for (const TargetDef& g : m.targets) if (g.group == o.group) ++n;
+                if (n == 0) fail(m, "objective '" + o.title + "' has no targets");
+            }
+            if (o.kind == ObjectiveKind::Waypoint && (std::fabs(o.x) > 15000 || std::fabs(o.z) > 15000)) fail(m, "waypoint outside the map");
+            for (int w : o.wavesOnStart) if (w < 0 || w >= static_cast<int>(m.waves.size())) fail(m, "bad wave index");
+        }
+        // every wave is released by some objective
+        for (size_t w = 0; w < m.waves.size(); ++w) {
+            bool used = false;
+            for (const ObjectiveDef& o : m.objectives) for (int i : o.wavesOnStart) if (i == static_cast<int>(w)) used = true;
+            if (!used) fail(m, "wave " + std::to_string(w) + " is never spawned");
+        }
+        if (m.protectGroup > 0) {
+            int n = 0;
+            for (const TargetDef& g : m.targets) if (g.group == m.protectGroup && g.team == Team::Blue) ++n;
+            if (n == 0) fail(m, "protect group has no friendly assets");
+        }
+    }
+    CHECK(bad == 0);
+}
+
+namespace {
+/// Plays a campaign mission with an objective-aware "cheat" pilot: teleports to waypoints, destroys
+/// targets and bandits through the test hooks, but flies the manoeuvre objectives for real.
+struct CampaignPlaythrough {
+    const CampaignMissionDef& def;
+    Battle battle{terrain()};
+    Mission mission;
+    CampaignDirector director;
+    explicit CampaignPlaythrough(const CampaignMissionDef& d) : def(d), mission(buildCampaignMission(d)) {
+        Jet& p = battle.createPlayer(AircraftId::F22);
+        p.fm->resetAirborne({d.startX, d.startAlt, d.startZ}, campaignStartHeading(d), d.startSpeed, 0.8);
+        director.begin(d, battle);
+        battle.setAiEnabled(false);
+        director.update(mission, battle);
+    }
+    void step(const ControlInputs& in) {
+        battle.update(FlightModel::kDt, in, PlayerCommands{});
+        MissionContext ctx{&battle.player().fm->state(), &battle.player().fm->profile(), &terrain(), 0, &battle};
+        mission.update(ctx, FlightModel::kDt);
+        director.update(mission, battle);
+    }
+    bool run(double maxSeconds) {
+        const int maxSteps = static_cast<int>(maxSeconds * 120);
+        for (int i = 0; i < maxSteps && mission.status() == MissionStatus::Running; ++i) {
+            const ObjectiveDef& o = def.objectives[mission.stepIndex()];
+            FlightModel& fm = *battle.player().fm;
+            ControlInputs in;
+            in.throttleRate = fm.state().throttle < 0.95 ? 1.0 : 0.0;
+            switch (o.kind) {
+                case ObjectiveKind::Waypoint: {
+                    double y = terrain().surfaceHeight(o.x, o.z) + (o.maxAgl > 0 ? o.maxAgl * 0.5 : 800.0);
+                    if (std::hypot(fm.state().pos.x - o.x, fm.state().pos.z - o.z) > o.radius * 0.5)
+                        fm.resetAirborne({o.x, y, o.z}, 0.0, 220, 0.8);
+                    break;
+                }
+                case ObjectiveKind::DestroyGroup:
+                    for (int gi = 0; gi < static_cast<int>(battle.ground().size()); ++gi)
+                        if (battle.ground()[gi].group == o.group && battle.ground()[gi].alive) { battle.debugDestroyGround(gi); break; }
+                    break;
+                case ObjectiveKind::DestroyAir:
+                    for (auto& j : battle.jets())
+                        if (j->team == Team::Red && j->alive) { battle.debugKillJet(j->id); break; }
+                    break;
+                case ObjectiveKind::PullG: in.roll = toEuler(fm.state().q).bank < 75 * kDeg ? 1.0 : 0.0; in.pitch = 1.0; break;
+                case ObjectiveKind::Loop: in.pitch = 1.0; break;
+                case ObjectiveKind::AileronRoll: in.roll = 1.0; in.pitch = 0.1; break;
+                case ObjectiveKind::Touchdown:
+                    if (!fm.state().onGround) fm.resetOnRunway(false);
+                    break;
+                case ObjectiveKind::Stop: in.throttleRate = -1.0; in.brake = 1.0; break;
+            }
+            step(in);
+            if (fm.state().crashed) return false;
+        }
+        return mission.status() == MissionStatus::Complete;
+    }
+};
+}  // namespace
+
+TEST(campaign_missions_do_not_complete_without_action) {
+    for (const CampaignMissionDef& d : campaignMissions()) {
+        CampaignPlaythrough pt(d);
+        ControlInputs in;
+        for (int i = 0; i < 240; ++i) pt.step(in);   // 2 s of straight flight
+        if (pt.mission.stepIndex() != 0 || pt.mission.status() != MissionStatus::Running)
+            std::printf("    mission %02d advanced without action\n", d.number);
+        CHECK(pt.mission.stepIndex() == 0);
+        CHECK(pt.mission.status() == MissionStatus::Running);
+    }
+}
+
+TEST(campaign_missions_complete_when_objectives_are_met) {
+    for (const CampaignMissionDef& d : campaignMissions()) {
+        CampaignPlaythrough pt(d);
+        bool ok = pt.run(240.0);
+        if (!ok)
+            std::printf("    mission %02d stuck at objective %zu/%zu (%s) status %d %s\n", d.number, pt.mission.stepIndex() + 1,
+                        pt.mission.stepCount(), pt.mission.current() ? pt.mission.current()->title.c_str() : "-",
+                        static_cast<int>(pt.mission.status()), pt.mission.failure().c_str());
+        CHECK(ok);
+        // every scripted wave was released
+        int waves = 0;
+        for (const ObjectiveDef& o : d.objectives) waves += static_cast<int>(o.wavesOnStart.size());
+        CHECK(pt.battle.wave() == waves);
+    }
+}
+
+TEST(protecting_a_friendly_rig_fails_mission_36_when_it_is_destroyed) {
+    const CampaignMissionDef* d = campaignMission(36);
+    CHECK(d != nullptr);
+    if (!d) return;
+    CampaignPlaythrough pt(*d);
+    for (int gi = 0; gi < static_cast<int>(pt.battle.ground().size()); ++gi)
+        if (pt.battle.ground()[gi].team == Team::Blue) { pt.battle.debugDestroyGround(gi); break; }
+    pt.step(ControlInputs{});
+    CHECK(pt.mission.status() == MissionStatus::Failed);
+}
+
+TEST(ground_targets_sit_on_terrain_or_sea_and_boats_stay_afloat) {
+    Battle b(terrain());
+    Jet& p = b.createPlayer(AircraftId::F22);
+    p.fm->resetAirborne({0, 2000, 0}, 0, 220, 0.8);
+    GroundTarget rig; rig.kind = GroundKind::OilRig; rig.pos = {11500, 0, -6000};
+    int r = b.addGround(rig);
+    GroundTarget boat; boat.kind = GroundKind::Ship; boat.pos = {11800, 0, -4600}; boat.pathCenter = boat.pos; boat.pathRadius = 500;
+    int s = b.addGround(boat);
+    CHECK_NEAR(b.ground()[r].pos.y, 0.0, 1e-9);
+    CHECK_NEAR(b.ground()[r].health, groundMaxHealth(GroundKind::OilRig), 1e-9);
+    BattleConfig cfg; cfg.enemyJets = 0; cfg.allyJets = 0; cfg.groundTargets = false; cfg.endlessWaves = false;
+    // run without start(): ground update requires an active battle, so start then re-add
+    b.start(cfg);
+    r = b.addGround(rig); s = b.addGround(boat);
+    Vec3 before = b.ground()[s].pos;
+    for (int i = 0; i < 600; ++i) b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+    CHECK(length(b.ground()[s].pos - before) > 10.0);      // the boat moved
+    CHECK_NEAR(b.ground()[s].pos.y, 0.0, 1e-9);            // on the sea surface
+    CHECK(b.enemiesAlive() == 0);                           // no endless waves in scripted battles
+}
+
+TEST(two_ats_hits_destroy_an_oil_rig) {
+    Battle b(terrain());
+    Jet& p = b.createPlayer(AircraftId::F22);
+    p.fm->resetAirborne({8000, 900, -6000}, 0.0, 230, 0.8);
+    BattleConfig cfg; cfg.enemyJets = 0; cfg.allyJets = 0; cfg.groundTargets = false; cfg.endlessWaves = false;
+    b.start(cfg);
+    GroundTarget rig; rig.kind = GroundKind::OilRig; rig.pos = {11500, 0, -6000}; rig.label = "OIL RIG A"; rig.group = 1;
+    int r = b.addGround(rig);
+    int hits = 0;
+    for (int shot = 0; shot < 3 && b.ground()[r].alive; ++shot) {
+        Missile m;
+        m.team = Team::Blue; m.owner = 0; m.airToSurface = true; m.targetGround = r;
+        m.pos = {10200, 300, -6000};
+        m.vel = normalize(Vec3{11500, 24, -6000} - m.pos) * 300.0;
+        b.debugAddMissile(m);
+        for (int i = 0; i < 1200 && !b.missiles().empty(); ++i) b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+        ++hits;
+    }
+    CHECK(!b.ground()[r].alive);
+    CHECK(hits == 2);
+}
+
+TEST(campaign_battle_step_fits_the_frame_budget) {
+    // Worst case: the biggest missions with every wave airborne at once and AI enabled.
+    for (int n : {38, 40, 24, 31}) {
+        const CampaignMissionDef* d = campaignMission(n);
+        CHECK(d != nullptr);
+        if (!d) continue;
+        Battle b(terrain());
+        Jet& p = b.createPlayer(AircraftId::F22);
+        p.fm->resetAirborne({d->startX, d->startAlt, d->startZ}, campaignStartHeading(*d), d->startSpeed, 0.8);
+        CampaignDirector dir;
+        dir.begin(*d, b);
+        for (const WaveDef& w : d->waves) b.spawnEnemies(w.count, w.skill, {w.x, 0, w.z}, w.radius, w.altitude);
+        const int steps = 120 * 20;
+        auto t0 = std::chrono::steady_clock::now();
+        double worst = 0;
+        for (int i = 0; i < steps; ++i) {
+            auto a = std::chrono::steady_clock::now();
+            b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+            worst = std::max(worst, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count());
+        }
+        double mean = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / steps;
+        std::printf("    mission %02d: %zu jets, %zu ground targets, sim step mean %.3f ms, worst %.3f ms\n", n, b.jets().size(),
+                    b.ground().size(), mean, worst);
+        // 120 Hz physics leaves 8.3 ms per step on a 1:1 frame; a step must cost a small fraction of it
+        CHECK(mean < 1.0);
+    }
 }
 
 int main(int argc, char** argv) {

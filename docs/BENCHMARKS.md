@@ -11,6 +11,20 @@ open benchmarks/frame_times.csv       # every frame, for plotting
 Repeat with `--quality 0`, `--quality 1`, `--quality 2` and with `--size 1280x720`. In-game,
 press `F3` for live p50/p95/p99, world-pass CPU time, draw calls and particle count.
 
+Any mode can be benchmarked: `--bench 20 --mode m03` (missions `m01`-`m03`, `c04`-`c40`, `arena`).
+The run also prints the CPU time of the simulation and of the HUD per frame.
+
+### Mission 03 slowdown (fixed in v0.5)
+
+The landing guidance (glide slope / localiser) built a temporary `Terrain` object every frame to
+read the runway position. Since v0.4 a `Terrain` runs the full hydraulic-erosion world build
+(~0.5 s on the MacBook Air), so Mission 03 dropped to 1-2 fps and the simulation, limited to 0.25 s
+per frame, ran in slow motion. The HUD now receives the runway from the game. Measured in the
+container after the fix (CPU only, software GL): HUD 1.03 ms per frame in Mission 03 vs 1.13 ms in
+the arena; simulation 0.03-0.14 ms per frame. The unit test `campaign_battle_step_fits_the_frame_budget`
+keeps the busiest campaign battles (19 jets, or 15 ground targets) under 1 ms per physics step
+(measured 0.002-0.04 ms).
+
 ## Recorded results
 
 | Machine | Renderer | Res | Quality | mean | p50 | p95 | p99 |

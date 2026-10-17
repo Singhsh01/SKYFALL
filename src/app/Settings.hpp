@@ -24,7 +24,8 @@ struct Settings {
     bool highContrastHud = false;
     int hudStyle = 0;
     bool missileCam = true;     // picture-in-picture target / missile / hit camera
-    bool crashReplay = true;    // replay + analysis after the aircraft is lost           // 0 Minimal (Battlefield-like), 1 Full flight symbology
+    bool crashReplay = true;    // replay + analysis after the aircraft is lost
+    bool dynamicResolution = true;  // lower the 3D resolution automatically to hold the frame rate           // 0 Minimal (Battlefield-like), 1 Full flight symbology
     // Input
     bool invertPitch = false;
     double sensitivity = 1.0;
@@ -35,6 +36,10 @@ struct Settings {
     double master = 0.8, music = 0.5, engine = 0.85, radio = 0.65, effects = 0.9;
     bool musicEnabled = false;  // background music OFF by default (listen to your own)
     bool captions = true;
+    // Progress: one character per campaign mission ('1' = completed)
+    std::string campaignDone = std::string(40, '0');
+    bool missionCompleted(int n) const { return n >= 1 && n <= static_cast<int>(campaignDone.size()) && campaignDone[n - 1] == '1'; }
+    void markCompleted(int n) { if (n >= 1 && n <= static_cast<int>(campaignDone.size())) campaignDone[n - 1] = '1'; }
 
     /// Returns false if the file did not exist or could not be parsed (defaults are kept).
     bool load(const std::string& path);

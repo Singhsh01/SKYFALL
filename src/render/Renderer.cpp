@@ -254,6 +254,7 @@ void Renderer::shutdown() {
     for (auto& j : jets_) unloadJetModel(j);
     UnloadMesh(flame_); UnloadMesh(missile_);
     UnloadMesh(tank_); UnloadMesh(truck_); UnloadMesh(aaa_); UnloadMesh(sam_); UnloadMesh(bunker_); UnloadMesh(radar_);
+    for (Mesh* m : {&gun_, &artillery_, &oilRig_, &fuelTank_, &hangar_, &command_, &ship_}) UnloadMesh(*m);
     for (Prog* p : {&sky_, &terrain_p_, &water_, &lit_, &jet_, &flameP_, &cloud_, &runway_, &particle_, &bright_, &blur_, &composite_})
         UnloadShader(p->sh);
     freeTarget(scene_); freeTarget(bloomA_); freeTarget(bloomB_); freeTarget(bloomC_); freeTarget(bloomD_);
@@ -305,6 +306,110 @@ void Renderer::buildGroundModels() {
         m.cylinder({0, 2.0f, 0}, 0.25f, 3.0f, 6, dark);
         m.box({0, 5.5f, 0}, {0.3f, 3.0f, 6.0f}, grey);
         radar_ = m.build();
+    }
+    const Color sandbag = {176, 160, 122, 255}, concrete = {150, 146, 136, 255}, steel = {96, 98, 100, 255};
+    const Color rigYellow = {196, 160, 60, 255}, white = {220, 220, 214, 255}, red = {170, 52, 40, 255}, navy = {104, 112, 120, 255};
+    {
+        MeshBuilder m;  // anti-aircraft gun emplacement: sandbag ring, turntable, twin cannon
+        const int seg = 12;
+        for (int i = 0; i < seg; ++i) {
+            if (i == 3) continue;  // entrance gap
+            float a0 = 2 * PI * i / seg, a1 = 2 * PI * (i + 1) / seg, am = 0.5f * (a0 + a1);
+            m.box({cosf(am) * 4.6f, 0.6f, sinf(am) * 4.6f}, {1.1f, 1.2f, 2.5f}, sandbag, MatrixRotateY(-am));
+        }
+        m.cylinder({0, 0, 0}, 2.2f, 0.7f, 10, steel);
+        m.box({0, 1.25f, 0}, {2.4f, 0.9f, 2.0f}, olive);
+        m.box({-0.6f, 1.5f, 0}, {0.6f, 1.2f, 2.2f}, dark);   // shield
+        for (float zz : {-0.35f, 0.35f}) m.box({1.9f, 2.4f, zz}, {3.8f, 0.14f, 0.14f}, dark, MatrixRotateZ(0.7f));
+        m.box({-2.5f, 0.35f, 2.6f}, {1.0f, 0.7f, 0.6f}, olive);  // ammo boxes
+        m.box({-2.9f, 0.35f, 1.8f}, {1.0f, 0.7f, 0.6f}, olive);
+        gun_ = m.build();
+    }
+    {
+        MeshBuilder m;  // towed field gun: split trails, wheels, shield, long barrel
+        m.box({-2.6f, 0.35f, 0.7f}, {4.2f, 0.3f, 0.3f}, dark, MatrixRotateY(0.25f));
+        m.box({-2.6f, 0.35f, -0.7f}, {4.2f, 0.3f, 0.3f}, dark, MatrixRotateY(-0.25f));
+        for (float zz : {-1.15f, 1.15f}) m.cylinder({0, zz, 0}, 0.65f, 0.35f, 10, {40, 40, 38, 255}, MatrixMultiply(MatrixRotateX(PI / 2), MatrixTranslate(0, 0.65f, 0)));
+        m.box({0.2f, 1.1f, 0}, {0.25f, 1.6f, 2.6f}, olive);   // shield
+        m.box({0, 1.0f, 0}, {1.4f, 0.6f, 0.8f}, olive);       // cradle
+        m.cylinder({0, 0, 0}, 0.13f, 6.5f, 8, dark, MatrixMultiply(MatrixRotateZ(-PI / 2 + 0.26f), MatrixTranslate(0.2f, 1.2f, 0)));
+        artillery_ = m.build();
+    }
+    {
+        MeshBuilder m;  // offshore oil platform (origin at sea level)
+        for (int i = 0; i < 4; ++i) {
+            float x = (i & 1) ? 13.0f : -13.0f, z = (i & 2) ? 13.0f : -13.0f;
+            m.cylinder({x, -25.0f, z}, 1.7f, 44.0f, 10, steel);
+            m.box({x * 0.5f, 6.0f, z}, {26.0f, 0.6f, 0.6f}, steel);   // bracing
+            m.box({x, 6.0f, z * 0.5f}, {0.6f, 0.6f, 26.0f}, steel);
+        }
+        m.box({0, 18.5f, 0}, {34.0f, 3.0f, 34.0f}, rigYellow);        // cellar deck
+        m.box({0, 23.0f, 0}, {32.0f, 2.2f, 30.0f}, {150, 150, 140, 255});  // main deck
+        m.box({-9.0f, 28.0f, -8.0f}, {12.0f, 8.0f, 11.0f}, white);   // living quarters
+        m.box({-9.0f, 32.6f, -8.0f}, {12.6f, 1.2f, 11.6f}, red);
+        m.cylinder({-9.0f, 33.2f, -8.0f}, 6.2f, 0.4f, 16, {70, 120, 70, 255});   // helideck
+        m.cylinder({7.0f, 24.0f, 6.0f}, 5.0f, 30.0f, 4, rigYellow, MatrixIdentity(), 1.2f);   // derrick
+        m.box({7.0f, 26.0f, 6.0f}, {11.0f, 3.0f, 11.0f}, {120, 120, 112, 255});  // drill floor
+        m.box({16.0f, 30.0f, -10.0f}, {22.0f, 0.8f, 0.8f}, steel, MatrixRotateZ(0.5f));   // flare boom
+        m.cylinder({25.5f, 35.6f, -10.0f}, 0.9f, 1.6f, 8, {60, 60, 60, 255});
+        m.box({4.0f, 27.0f, -11.0f}, {1.2f, 6.0f, 1.2f}, steel);    // crane
+        m.box({10.0f, 30.5f, -11.0f}, {14.0f, 0.6f, 0.6f}, rigYellow, MatrixRotateZ(0.25f));
+        for (int k = 0; k < 3; ++k) m.cylinder({-6.0f + k * 5.0f, 24.1f, 11.0f}, 1.8f, 4.0f, 10, white);   // separators
+        oilRig_ = m.build();
+    }
+    {
+        MeshBuilder m;  // fuel storage tank with containment berm
+        m.cylinder({0, 0, 0}, 9.0f, 11.0f, 20, white);
+        m.cylinder({0, 11.0f, 0}, 9.0f, 1.6f, 20, {200, 200, 196, 255}, MatrixIdentity(), 5.0f);
+        m.box({9.2f, 5.5f, 0}, {0.4f, 11.0f, 0.8f}, steel);   // ladder
+        for (int i = 0; i < 4; ++i)
+            m.box({cosf(i * PI / 2) * 13.0f, 0.5f, sinf(i * PI / 2) * 13.0f}, {1.5f, 1.0f, 26.0f}, sandbag, MatrixRotateY(-i * PI / 2 + PI / 2));
+        fuelTank_ = m.build();
+    }
+    {
+        MeshBuilder m;  // arched aircraft shelter (quonset), door facing +X
+        const int seg = 10;
+        const float R = 11.0f, L = 30.0f;
+        Color camo = {150, 136, 104, 255};
+        for (int i = 0; i < seg; ++i) {
+            float a0 = PI * i / seg, a1 = PI * (i + 1) / seg;
+            Vector3 p0 = {-L / 2, sinf(a0) * R, cosf(a0) * R}, p1 = {-L / 2, sinf(a1) * R, cosf(a1) * R};
+            Vector3 q0 = {L / 2, sinf(a0) * R, cosf(a0) * R}, q1 = {L / 2, sinf(a1) * R, cosf(a1) * R};
+            m.quad(p0, q0, q1, p1, camo);
+            m.tri({-L / 2, 0, 0}, p0, p1, {128, 116, 90, 255});          // back wall
+            m.tri({L / 2 - 0.2f, 0, 0}, q1, q0, {44, 44, 42, 255});      // dark door
+        }
+        m.box({L / 2 + 6.0f, 0.1f, 0}, {12.0f, 0.2f, 16.0f}, concrete);  // apron
+        hangar_ = m.build();
+    }
+    {
+        MeshBuilder m;  // command post: concrete block, roof room, masts, dish, sandbags
+        m.box({0, 3.0f, 0}, {16.0f, 6.0f, 12.0f}, concrete);
+        m.box({-2.0f, 7.0f, -1.0f}, {7.0f, 2.0f, 6.0f}, {136, 132, 124, 255});
+        m.cylinder({5.5f, 6.0f, 4.0f}, 0.15f, 14.0f, 6, steel);
+        m.cylinder({-6.0f, 6.0f, -4.0f}, 0.12f, 10.0f, 6, steel);
+        m.cylinder({4.0f, 6.0f, -3.5f}, 2.0f, 1.2f, 12, white, MatrixIdentity(), 0.3f);
+        for (int i = 0; i < 5; ++i) m.box({-6.0f + i * 3.0f, 0.5f, 7.6f}, {2.6f, 1.0f, 1.0f}, sandbag);
+        m.box({0, 1.2f, 6.05f}, {3.0f, 2.4f, 0.2f}, {40, 40, 40, 255});   // door
+        command_ = m.build();
+    }
+    {
+        MeshBuilder m;  // patrol boat (origin at the waterline), bow towards +X
+        const float hl = 15.0f, hw = 3.2f, hd = 2.4f, fb = 1.6f;
+        Vector3 sb = {-hl, -hd * 0.3f, hw}, pb = {-hl, -hd * 0.3f, -hw}, sm = {hl * 0.45f, -hd, hw}, pm = {hl * 0.45f, -hd, -hw};
+        Vector3 bow = {hl, fb, 0}, keel = {hl * 0.7f, -hd, 0};
+        Vector3 sTop = {-hl, fb, hw}, pTop = {-hl, fb, -hw}, smTop = {hl * 0.45f, fb, hw}, pmTop = {hl * 0.45f, fb, -hw};
+        m.quad(sb, sm, smTop, sTop, navy); m.quad(pm, pb, pTop, pmTop, navy);           // sides
+        m.tri(sm, keel, bow, navy); m.tri(smTop, sm, bow, navy);                       // bow starboard
+        m.tri(keel, pm, bow, navy); m.tri(pm, pmTop, bow, navy);                       // bow port
+        m.quad(sTop, smTop, pmTop, pTop, {132, 136, 136, 255}); m.tri(smTop, bow, pmTop, {132, 136, 136, 255});  // deck
+        m.quad(pb, sb, sTop, pTop, navy);                                              // transom
+        m.box({-3.0f, fb + 1.6f, 0}, {8.0f, 3.2f, 4.6f}, {170, 174, 174, 255});       // superstructure
+        m.box({-2.0f, fb + 3.6f, 0}, {4.0f, 0.9f, 3.6f}, {60, 66, 70, 255});           // bridge windows
+        m.cylinder({-4.0f, fb + 3.2f, 0}, 0.12f, 6.0f, 6, steel);                      // mast
+        m.cylinder({7.5f, fb, 0}, 0.9f, 0.9f, 10, steel);                              // deck gun
+        m.box({8.6f, fb + 1.1f, 0}, {2.6f, 0.18f, 0.18f}, dark, MatrixRotateZ(0.35f));
+        ship_ = m.build();
     }
 }
 
@@ -454,8 +559,17 @@ void Renderer::drawGroundTargets(const FrameParams& f) {
             case GroundKind::SAM: m = &sam_; break;
             case GroundKind::Bunker: m = &bunker_; break;
             case GroundKind::Radar: m = &radar_; break;
+            case GroundKind::Gun: m = &gun_; break;
+            case GroundKind::Artillery: m = &artillery_; break;
+            case GroundKind::OilRig: m = &oilRig_; break;
+            case GroundKind::FuelTank: m = &fuelTank_; break;
+            case GroundKind::Hangar: m = &hangar_; break;
+            case GroundKind::Command: m = &command_; break;
+            case GroundKind::Ship: m = &ship_; break;
+            default: break;
         }
-        if (Vector3Distance(toRl(g.pos), f.cam.position) > 9000) continue;
+        bool big = g.kind == GroundKind::OilRig || g.kind == GroundKind::Hangar || g.kind == GroundKind::FuelTank || g.kind == GroundKind::Command;
+        if (Vector3Distance(toRl(g.pos), f.cam.position) > (big ? 16000.0f : 9000.0f)) continue;
         Matrix M = MatrixMultiply(MatrixRotateY(static_cast<float>(-g.heading)), MatrixTranslate(static_cast<float>(g.pos.x), static_cast<float>(g.pos.y), static_cast<float>(g.pos.z)));
         litMat_.maps[MATERIAL_MAP_DIFFUSE].color = g.alive ? WHITE : Color{40, 36, 32, 255};
         DrawMesh(*m, litMat_, M);

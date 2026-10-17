@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SKYFALL VERSION 0.4.0 LANGUAGES C CXX)
+project(SKYFALL VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,6 +22,7 @@ add_library(skyfall_core STATIC
   src/aircraft/AircraftProfile.cpp
   src/combat/Combat.cpp
   src/mission/Mission.cpp
+  src/mission/Campaign.cpp
   src/telemetry/FrameStats.cpp
   src/telemetry/Replay.cpp
   src/app/Settings.cpp

@@ -45,6 +45,8 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 | Sun shadow map (aircraft), baked terrain shadows + AO, cumulus sprites | ✅ |
 | Hydraulic-erosion terrain, desert material, 3-level terrain LOD | ✅ |
 | Missile / target / hit picture-in-picture camera | ✅ |
+| Dynamic resolution to hold ~60 fps | ✅ |
+| Ground target models: gun emplacement, artillery, oil rig, fuel tank, hangar, command post, patrol boat | ✅ |
 | Crash & shoot-down replay with telemetry analysis | ✅ |
 | SSAO, true volumetric clouds | ⬜ |
 | Draw-call/LOD instrumentation | 🟡 | draw calls + world pass time in `F3` |
@@ -53,11 +55,19 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 
 ## Campaign (G)
 
-| # | Mission | Status |
+| # | Missions | Status |
 |---|---|---|
-| 01 | Cold Start & Takeoff | ✅ |
-| 08/19 | Dogfight / multi-wave battle | ✅ via Dogfight Arena |
-| 02–07, 09–18, 20 | | ⬜ catalogue defined in `Mission.cpp`, FSM ready |
+| 01–03 | Cold start & takeoff, first solo flight, runway landing | ✅ hand-written telemetry FSMs |
+| 04–09 | Navigation, high-g (6 g, loop, aileron roll), low-level, gunnery / ATS / ATA ranges | ✅ |
+| 10–20 | Intercepts, gun line, oil rigs, convoy, SEAD, fuel depot, mountain ace, coastal patrol, airbase defence | ✅ |
+| 21–30 | Dusk strike, artillery, radar network, offshore complex, hangars, tank column, combined arms, ace duel, fortress | ✅ |
+| 31–40 | Supply lines, mountain SAM belt, harbour raid, interceptor waves, oil-field recapture (protect friendly rigs), final assault + landing | ✅ |
+
+Missions 04–40 are data (`CampaignMissionDef`): start state, ground targets with labels and
+objective groups, enemy waves released by objectives, and ordered objectives (waypoint, destroy
+group, destroy air, pull g, loop, aileron roll, touchdown, stop). Tests validate every layout
+against the terrain (land targets on gentle slopes, naval targets and boat routes in deep water,
+nothing on the runway) and play every mission through to completion.
 
 ## Vision laboratory (H) — ⬜ next major milestone
 
