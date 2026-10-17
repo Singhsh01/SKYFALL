@@ -31,13 +31,18 @@ struct Settings {
     double sensitivity = 1.0;
     double deadzone = 0.12;
     int handling = 0;
-    int aircraft = 0;  // AircraftId of the player's jet (hangar selection)  // 0 Arcade (default), 1 Assisted, 2 Simulation
+    int aircraft = 0;
+    std::string location = "desert";   // world location (see sim/Locations.hpp)
+    std::string skins = std::string(8, '0');   // camouflage per aircraft (digit = skin index)
+    int skinFor(int aircraftId) const { return aircraftId >= 0 && aircraftId < static_cast<int>(skins.size()) ? skins[aircraftId] - '0' : 0; }
+    void setSkin(int aircraftId, int skin) { if (aircraftId >= 0 && aircraftId < static_cast<int>(skins.size())) skins[aircraftId] = static_cast<char>('0' + skin); }  // AircraftId of the player's jet (hangar selection)  // 0 Arcade (default), 1 Assisted, 2 Simulation
     // Audio (0..1)
     double master = 0.8, music = 0.5, engine = 0.85, radio = 0.65, effects = 0.9;
     bool musicEnabled = false;  // background music OFF by default (listen to your own)
     bool captions = true;
+    bool voiceBriefings = true;   // spoken mission briefings (system text-to-speech)
     // Progress: one character per campaign mission ('1' = completed)
-    std::string campaignDone = std::string(40, '0');
+    std::string campaignDone = std::string(51, '0');
     bool missionCompleted(int n) const { return n >= 1 && n <= static_cast<int>(campaignDone.size()) && campaignDone[n - 1] == '1'; }
     void markCompleted(int n) { if (n >= 1 && n <= static_cast<int>(campaignDone.size())) campaignDone[n - 1] = '1'; }
 

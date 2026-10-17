@@ -34,6 +34,8 @@ jobs:
           cp build/skyfall dist/SKYFALL/
           cp packaging/Play-SKYFALL.command dist/SKYFALL/
           cp packaging/README-macOS.txt LICENSE dist/SKYFALL/
+          if ls assets/terrain/*.skt >/dev/null 2>&1; then mkdir -p dist/SKYFALL/assets/terrain && cp assets/terrain/*.skt assets/terrain/ATTRIBUTION.md dist/SKYFALL/assets/terrain/; fi
+          mkdir -p dist/SKYFALL/tools && cp tools/fetch_real_terrain.py dist/SKYFALL/tools/
           chmod +x dist/SKYFALL/skyfall dist/SKYFALL/Play-SKYFALL.command
           (cd dist && ditto -c -k --keepParent SKYFALL SKYFALL-macOS.zip)
 

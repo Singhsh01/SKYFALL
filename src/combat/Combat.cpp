@@ -8,9 +8,16 @@ namespace sky {
 
 namespace {
 constexpr double kJetHitRadius = 9.0;
-constexpr double kGroundHitRadius = 8.0;
+constexpr double kGroundHitRadius = 10.0;
 constexpr double kLockRange = 5200.0;
 constexpr double kLockCone = 26.0 * kDeg;
+// Air-to-surface: generous lock so ground targets are practical in arcade play
+constexpr double kAgLockRange = 7500.0;
+constexpr double kAgLockCone = 34.0 * kDeg;
+constexpr double kAgLockTime = 0.8;
+constexpr double kGunAssistCone = 4.0 * kDeg;     // cannon rounds bend towards a target inside this cone
+constexpr double kGunAssistRange = 2600.0;
+constexpr double kGunGroundDamage = 14.0;
 constexpr double kMissileMaxLife = 16.0;
 constexpr double kGunRate = 30.0;       // rounds per second (visual rounds, each one a tracer-capable slug)
 constexpr double kMuzzleSpeed = 1050.0;
@@ -41,6 +48,17 @@ const char* groundKindName(GroundKind k) {
         case GroundKind::Hangar: return "HANGAR";
         case GroundKind::Command: return "COMMAND POST";
         case GroundKind::Ship: return "PATROL BOAT";
+        case GroundKind::PowerPlant: return "POWER PLANT";
+        case GroundKind::Refinery: return "REFINERY";
+        case GroundKind::Bridge: return "BRIDGE";
+        case GroundKind::CommTower: return "COMMS TOWER";
+        case GroundKind::Factory: return "FACTORY";
+        case GroundKind::Locomotive: return "LOCOMOTIVE";
+        case GroundKind::Wagon: return "WAGON";
+        case GroundKind::Launcher: return "MISSILE LAUNCHER";
+        case GroundKind::ParkedJet: return "PARKED JET";
+        case GroundKind::Ammo: return "AMMO BUNKER";
+        case GroundKind::Substation: return "SUBSTATION";
         default: return "TARGET";
     }
 }
@@ -54,6 +72,15 @@ double groundAimHeight(GroundKind k) {
         case GroundKind::Radar: return 3.0;
         case GroundKind::Ship: return 3.0;
         case GroundKind::Bunker: return 2.0;
+        case GroundKind::PowerPlant: return 14.0;
+        case GroundKind::Refinery: return 12.0;
+        case GroundKind::Bridge: return 0.0;      // bridge pos is the deck
+        case GroundKind::CommTower: return 25.0;
+        case GroundKind::Factory: return 7.0;
+        case GroundKind::Locomotive: case GroundKind::Wagon: return 2.5;
+        case GroundKind::ParkedJet: return 2.0;
+        case GroundKind::Ammo: return 2.5;
+        case GroundKind::Substation: return 3.0;
         default: return 1.5;
     }
 }
@@ -64,6 +91,13 @@ double groundHitRadius(GroundKind k) {
         case GroundKind::Hangar: return 24.0;
         case GroundKind::Ship: return 18.0;
         case GroundKind::Command: case GroundKind::FuelTank: case GroundKind::Bunker: return 15.0;
+        case GroundKind::PowerPlant: return 45.0;
+        case GroundKind::Refinery: return 35.0;
+        case GroundKind::Bridge: return 30.0;
+        case GroundKind::CommTower: return 28.0;
+        case GroundKind::Factory: return 30.0;
+        case GroundKind::Substation: return 20.0;
+        case GroundKind::Ammo: return 16.0;
         default: return 14.0;
     }
 }
@@ -78,6 +112,17 @@ double groundMaxHealth(GroundKind k) {
         case GroundKind::Hangar: return 300;
         case GroundKind::Command: return 260;
         case GroundKind::Ship: return 220;
+        case GroundKind::PowerPlant: return 560;   // three ATS hits
+        case GroundKind::Refinery: return 380;
+        case GroundKind::Bridge: return 380;
+        case GroundKind::CommTower: return 180;
+        case GroundKind::Factory: return 360;
+        case GroundKind::Locomotive: return 180;
+        case GroundKind::Wagon: return 110;
+        case GroundKind::Launcher: return 90;
+        case GroundKind::ParkedJet: return 70;
+        case GroundKind::Ammo: return 180;
+        case GroundKind::Substation: return 160;
         default: return 100;
     }
 }
@@ -86,7 +131,14 @@ Battle::Battle(const Terrain& terrain) : terrain_(&terrain), rng_(1234) {}
 
 int Battle::addGround(GroundTarget g) {
     if (g.pathRadius > 0 && g.pathCenter.x == 0 && g.pathCenter.z == 0) g.pathCenter = g.pos;
-    if (groundIsNaval(g.kind)) g.pos.y = std::max(Terrain::kSeaLevel, terrain_->height(g.pos.x, g.pos.z));
+    if (groundOnRail(g.kind) && g.railS >= 0 && layout_ && !layout_->railway.pts.empty()) {
+        Vec3 tan;
+        g.pos = layout_->railway.at(g.railS, &tan);
+        g.pos.y = std::max(g.pos.y, terrain_->surfaceHeight(g.pos.x, g.pos.z));   // cuttings: the track bed is on the ground
+        g.heading = std::atan2(tan.z, tan.x);
+    } else if (g.kind == GroundKind::Bridge && g.pos.y > 0) {
+        // bridge deck height comes from the layout (already in pos.y)
+    } else if (groundIsNaval(g.kind)) g.pos.y = std::max(Terrain::kSeaLevel, terrain_->height(g.pos.x, g.pos.z));
     else g.pos.y = terrain_->height(g.pos.x, g.pos.z);
     g.maxHealth = groundMaxHealth(g.kind);
     g.health = g.maxHealth;
@@ -121,6 +173,92 @@ int Battle::groundAlive(int group) const {
     return n;
 }
 
+Vec3 Battle::groundVelocity(int idx) const {
+    const GroundTarget& g = ground_[idx];
+    if (g.railS >= 0 && g.railSpeed != 0 && layout_ && g.alive) {
+        if (g.railS <= 0 || g.railS >= layout_->railway.length()) return {};
+        Vec3 tan;
+        layout_->railway.at(g.railS, &tan);
+        return tan * g.railSpeed;
+    }
+    if (g.pathRadius <= 0 || !g.alive) return {};
+    double speed = g.kind == GroundKind::Truck ? 9.0 : (g.kind == GroundKind::Ship ? 8.0 : 4.5);
+    return Vec3{-std::sin(g.pathAngle), 0, std::cos(g.pathAngle)} * speed;
+}
+
+int Battle::bestGroundTarget(const Vec3& from, const Vec3& dir, double coneRad, double range, Team shooter) const {
+    int best = -1;
+    double bestScore = 1e18;
+    for (int gi = 0; gi < static_cast<int>(ground_.size()); ++gi) {
+        const GroundTarget& g = ground_[gi];
+        if (!g.alive || g.team == shooter) continue;
+        Vec3 d = groundAimPoint(gi) - from;
+        double dist = length(d);
+        if (dist > range || dist < 1.0) continue;
+        double ang = std::acos(clampd(dot(d * (1.0 / dist), dir), -1.0, 1.0));
+        if (ang > coneRad) continue;
+        // prefer objective targets, then the one closest to the boresight
+        double score = ang + dist / 30000.0 - (g.group > 0 ? 0.15 : 0.0);
+        if (score < bestScore && lineOfSight(from, groundAimPoint(gi))) { bestScore = score; best = gi; }
+    }
+    return best;
+}
+
+Vec3 Tanker::basket() const {
+    // drogue 46 m behind the tail and 9 m below, on the centreline
+    Vec3 f{std::cos(heading), 0, std::sin(heading)};
+    return pos - f * 46.0 - Vec3{0, 9.0, 0};
+}
+
+void Battle::startTanker(const Vec3& center, double radius, double speed, double startAngle) {
+    tanker_ = Tanker{};
+    tanker_.active = true;
+    tanker_.center = center;
+    tanker_.radius = radius;
+    tanker_.speed = speed;
+    tanker_.angle = startAngle;
+    updateTanker(0.0);
+}
+
+void Battle::updateTanker(double dt) {
+    Tanker& tk = tanker_;
+    if (!tk.active) return;
+    // counter-clockwise circle seen from above: heading is the tangent
+    tk.angle += tk.speed / tk.radius * dt;
+    tk.pos = {tk.center.x + std::cos(tk.angle) * tk.radius, tk.center.y, tk.center.z + std::sin(tk.angle) * tk.radius};
+    tk.heading = tk.angle + kPi / 2;
+    tk.vel = Vec3{std::cos(tk.heading), 0, std::sin(tk.heading)} * tk.speed;
+    Jet& p = player();
+    if (!p.alive) { tk.contact = false; return; }
+    FlightState& ps = p.fm->mutableState();
+    Vec3 probe = ps.pos + ps.q.forward() * 8.0 + ps.q.up() * 1.0;
+    Vec3 rel = probe - tk.basket();
+    double relSpeed = length(ps.vel - tk.vel);
+    // body collision with the tanker (fuselage + wings, generous box)
+    Vec3 d = ps.pos - tk.pos;
+    Vec3 fwd{std::cos(tk.heading), 0, std::sin(tk.heading)}, right{-fwd.z, 0, fwd.x};
+    double along = dot(d, fwd), side = dot(d, right);
+    if (std::fabs(along) < 26.0 && std::fabs(side) < 22.0 && std::fabs(d.y) < 7.0) {
+        damageJet(p, 1000.0, -1, "COLLISION");
+        tk.contact = false;
+        return;
+    }
+    bool inBasket = length(rel) < (tk.contact ? 12.0 : 9.0) && relSpeed < (tk.contact ? 18.0 : 13.0);
+    if (inBasket) {
+        if (!tk.contact) events_.push_back({EventType::LockAcquired, tk.basket(), 1.0, p.id, -2, "CONTACT"});
+        tk.contact = true;
+        tk.contactTime += dt;
+        // arcade station-keeping: the hose drags the jet onto the tanker's speed and the basket
+        double k = std::min(1.0, 2.5 * dt);
+        ps.vel = ps.vel + (tk.vel - ps.vel) * k;
+        ps.pos = ps.pos - rel * std::min(1.0, 1.2 * dt);
+        double maxFuel = p.fm->profile().fuelMassKg;
+        ps.fuelKg = std::min(maxFuel, ps.fuelKg + maxFuel * 0.045 * dt);   // ~20 s from empty to full
+    } else {
+        tk.contact = false;
+    }
+}
+
 int Battle::groundTotal(int group) const {
     int n = 0;
     for (const GroundTarget& g : ground_) if (g.group == group) ++n;
@@ -145,6 +283,8 @@ Jet& Battle::createPlayer(AircraftId id) {
     active_ = false;
     score_ = 0;
     groundKills_ = 0;
+    stats_ = PlayerStats{};
+    tanker_ = Tanker{};
     wave_ = 0;
     return *jets_[0];
 }
@@ -298,9 +438,15 @@ void Battle::fireMissile(Jet& j) {
         else if (j.lockTarget <= -1000) m.targetGround = -1000 - j.lockTarget;
     }
     m.airToSurface = ag;
-    if (ag) { m.targetJet = -1; m.motor = 6.0; }
+    if (ag) {
+        m.targetJet = -1;
+        m.motor = 6.0;
+        if (m.targetGround < 0)   // not locked yet: the seeker takes the best target near the nose
+            m.targetGround = bestGroundTarget(s.pos, s.q.forward(), 22.0 * kDeg, kAgLockRange, j.team);
+    }
     missiles_.push_back(m);
     if (ag) j.agms--; else j.missiles--;
+    if (j.isPlayer) ++stats_.missilesFired;
     j.missileCooldown = j.isPlayer ? 0.7 : (j.skill == AiSkill::Ace ? 5.0 : 8.0);
     events_.push_back({EventType::MissileLaunch, m.pos, 1.0, j.id, ag ? -1000 - m.targetGround : m.targetJet, ag ? "ATS" : "ATA", m.id});
     if (j.isPlayer) {
@@ -343,7 +489,37 @@ void Battle::fireGunRound(Jet& j) {
     const FlightState& s = j.fm->state();
     Bullet b;
     double spread = j.isPlayer ? 0.0025 : (j.skill == AiSkill::Ace ? 0.004 : 0.008);
-    Vec3 dir = normalize(s.q.forward() + s.q.up() * rng_.range(-spread, spread) + s.q.right() * rng_.range(-spread, spread));
+    Vec3 aimDir = s.q.forward();
+    if (j.isPlayer) {
+        // Arcade gun assist: if a target sits within a few degrees of the nose, bend the stream
+        // onto its lead point (time of flight, target motion and gravity drop).
+        Vec3 muzzle = s.pos + s.q.rotate(Vec3{6.0, 0.6, 1.0});
+        Vec3 tp, tv;
+        bool have = false;
+        double bestAng = kGunAssistCone;
+        for (auto& jp : jets_) {
+            if (!jp->alive || jp->team == j.team) continue;
+            Vec3 d = jp->fm->state().pos - muzzle;
+            double dist = length(d);
+            if (dist > kGunAssistRange) continue;
+            double a = std::acos(clampd(dot(d * (1.0 / dist), aimDir), -1.0, 1.0));
+            if (a < bestAng) { bestAng = a; tp = jp->fm->state().pos; tv = jp->fm->state().vel; have = true; }
+        }
+        int gi = bestGroundTarget(muzzle, aimDir, kGunAssistCone, kGunAssistRange, j.team);
+        if (!have && gi >= 0) { tp = groundAimPoint(gi); tv = groundVelocity(gi); have = true; }
+        if (have) {
+            Vec3 rel = tp - muzzle;
+            double tof = length(rel) / kMuzzleSpeed;
+            for (int it = 0; it < 2; ++it) {
+                Vec3 lead = tp + tv * tof - s.vel * tof + Vec3{0, 0.5 * kG * tof * tof, 0};
+                tof = length(lead - muzzle) / kMuzzleSpeed;
+                rel = lead - muzzle;
+            }
+            aimDir = normalize(rel);
+        }
+        ++stats_.roundsFired;
+    }
+    Vec3 dir = normalize(aimDir + s.q.up() * rng_.range(-spread, spread) + s.q.right() * rng_.range(-spread, spread));
     b.pos = s.pos + s.q.rotate(Vec3{6.0, 0.6, 1.0});
     b.vel = s.vel + dir * kMuzzleSpeed;
     b.owner = j.id;
@@ -359,6 +535,7 @@ void Battle::damageJet(Jet& victim, double dmg, int attacker, const char* weapon
     if (victim.isPlayer && cfg_.playerInvulnerable) dmg = 0;
     victim.health -= dmg;
     victim.hitFlash = 0.35;
+    if (victim.isPlayer) stats_.damageTaken += static_cast<int>(std::lround(dmg));
     const Jet* att = jetById(attacker);
     if (victim.isPlayer) events_.push_back({EventType::PlayerHit, victim.fm->state().pos, dmg, attacker, victim.id, ""});
     else if (att && att->isPlayer) events_.push_back({EventType::Hit, victim.fm->state().pos, dmg, attacker, victim.id, ""});
@@ -412,9 +589,11 @@ void Battle::updateLock(Jet& j, double dt, bool cycle) {
         Vec3 d = tp - s.pos;
         distOut = length(d);
         angleOut = std::acos(clampd(dot(normalize(d), fwd), -1.0, 1.0));
-        double cone = tid <= -1000 ? kLockCone * 0.8 : kLockCone;
-        if (j.isPlayer && (tid <= -1000) != j.weaponAG) return false;  // lock follows the selected missile type
-        return distOut < kLockRange && angleOut < cone && lineOfSight(s.pos, tp);
+        bool ag = tid <= -1000;
+        double cone = ag ? (j.isPlayer ? kAgLockCone : kLockCone * 0.8) : kLockCone;
+        double range = ag && j.isPlayer ? kAgLockRange : kLockRange;
+        if (j.isPlayer && ag != j.weaponAG) return false;  // lock follows the selected missile type
+        return distOut < range && angleOut < cone && lineOfSight(s.pos, tp);
     };
     double ang = 0, dist = 0;
     bool currentValid = valid(j.lockTarget, ang, dist);
@@ -430,7 +609,7 @@ void Battle::updateLock(Jet& j, double dt, bool cycle) {
         if (j.isPlayer && j.weaponAG) {
             for (int gi = 0; gi < static_cast<int>(ground_.size()); ++gi) {
                 double a, d;
-                if (valid(-1000 - gi, a, d)) cands.push_back({a + d / 20000.0, -1000 - gi});
+                if (valid(-1000 - gi, a, d)) cands.push_back({a + d / 20000.0 - (ground_[gi].group > 0 ? 0.15 : 0.0), -1000 - gi});
             }
         }
         std::sort(cands.begin(), cands.end());
@@ -445,7 +624,7 @@ void Battle::updateLock(Jet& j, double dt, bool cycle) {
         if (newTarget != j.lockTarget) { j.lockTarget = newTarget; j.lockProgress = 0; }
         currentValid = newTarget != -1 && valid(newTarget, ang, dist);
     }
-    double lockTime = j.isPlayer ? 1.4 : (j.skill == AiSkill::Ace ? 1.6 : (j.skill == AiSkill::Veteran ? 2.1 : 2.8));
+    double lockTime = j.isPlayer ? (j.weaponAG ? kAgLockTime : 1.4) : (j.skill == AiSkill::Ace ? 1.6 : (j.skill == AiSkill::Veteran ? 2.1 : 2.8));
     double before = j.lockProgress;
     if (currentValid) j.lockProgress = std::min(1.0, j.lockProgress + dt / lockTime);
     else j.lockProgress = std::max(0.0, j.lockProgress - dt * 1.5);
@@ -656,14 +835,14 @@ void Battle::updateMissiles(double dt) {
             tj = jetById(m.targetJet);
             if (tj && tj->alive) { tPos = tj->fm->state().pos; tVel = tj->fm->state().vel; hasTarget = true; }
         } else if (m.targetGround >= 0 && m.targetGround < static_cast<int>(ground_.size()) && ground_[m.targetGround].alive) {
-            tPos = ground_[m.targetGround].pos + Vec3{0, groundAimHeight(ground_[m.targetGround].kind), 0}; hasTarget = true;
+            tPos = groundAimPoint(m.targetGround); tVel = groundVelocity(m.targetGround); hasTarget = true;
         }
         double speed = length(m.vel);
         Vec3 dir = normalize(m.vel);
         Vec3 acc{0, -kG * 0.25, 0};
         if (hasTarget && m.life > 0.25) {
             Vec3 los = normalize(tPos - m.pos);
-            if (dot(los, dir) < std::cos(65.0 * kDeg) && m.life > 1.0) {
+            if (dot(los, dir) < std::cos((m.airToSurface ? 85.0 : 65.0) * kDeg) && m.life > 1.0) {
                 // seeker gimbal limit exceeded: lose the target
                 if (tj && tj->isPlayer) events_.push_back({EventType::MissileMissed, m.pos, 1.0, m.owner, tj->id, ""});
                 m.targetJet = -1; m.targetGround = -1; m.decoyFlare = -3;
@@ -693,6 +872,7 @@ void Battle::updateMissiles(double dt) {
                 if (j.isPlayer) dmg = d < 8.0 ? 60.0 : 40.0;
                 m.active = false;
                 events_.push_back({EventType::Explosion, m.pos, 1.6, m.owner, j.id, ""});
+                if (m.owner == player().id) ++stats_.missileHits;
                 damageJet(j, dmg, m.owner, "MISSILE");
                 break;
             }
@@ -705,6 +885,7 @@ void Battle::updateMissiles(double dt) {
                 if (segmentPointDistance(prev, m.pos, gt.pos + Vec3{0, groundAimHeight(gt.kind), 0}) < groundHitRadius(gt.kind)) {
                     m.active = false;
                     events_.push_back({EventType::Explosion, m.pos, m.airToSurface ? 2.6 : 1.8, m.owner, -1, ""});
+                    if (m.owner == player().id) ++stats_.missileHits;
                     damageGround(gi, 200.0, m.owner);
                     if (m.airToSurface)  // blast radius against nearby vehicles
                         for (int gk = 0; gk < static_cast<int>(ground_.size()); ++gk)
@@ -751,6 +932,7 @@ void Battle::updateBullets(double dt) {
             if (!j.alive || j.team == b.team || j.id == b.owner) continue;
             if (segmentPointDistance(prev, b.pos, j.fm->state().pos) < kJetHitRadius) {
                 damageJet(j, b.owner < 0 ? 2.5 : 5.0, b.owner, "CANNON");
+                if (!jets_.empty() && b.owner == jets_[0]->id) ++stats_.roundHits;
                 hit = true;
                 break;
             }
@@ -762,7 +944,8 @@ void Battle::updateBullets(double dt) {
                 if (gt.team == b.team) continue;
                 double hr = std::max(kGroundHitRadius, groundHitRadius(gt.kind) * 0.7);
                 if (segmentPointDistance(prev, b.pos, gt.pos + Vec3{0, groundAimHeight(gt.kind), 0}) < hr) {
-                    damageGround(gi, 9.0, b.owner);
+                    damageGround(gi, kGunGroundDamage, b.owner);
+                    if (b.owner == player().id) ++stats_.roundHits;
                     hit = true;
                     break;
                 }
@@ -812,7 +995,13 @@ void Battle::updateGround(double dt) {
     for (int gi = 0; gi < static_cast<int>(ground_.size()); ++gi) {
         GroundTarget& g = ground_[gi];
         if (!g.alive) continue;
-        if (g.pathRadius > 0) {
+        if (g.railS >= 0 && g.railSpeed != 0 && layout_ && !layout_->railway.pts.empty()) {
+            g.railS = clampd(g.railS + g.railSpeed * dt, 0.0, layout_->railway.length());   // trains stop at the terminus
+            Vec3 tan;
+            g.pos = layout_->railway.at(g.railS, &tan);
+            g.pos.y = std::max(g.pos.y, terrain_->surfaceHeight(g.pos.x, g.pos.z));
+            g.heading = std::atan2(tan.z, tan.x) + (g.railSpeed < 0 ? kPi : 0.0);
+        } else if (g.pathRadius > 0) {
             double speed = g.kind == GroundKind::Truck ? 9.0 : (g.kind == GroundKind::Ship ? 8.0 : 4.5);
             g.pathAngle += speed / g.pathRadius * dt;
             g.pos = {g.pathCenter.x + std::cos(g.pathAngle) * g.pathRadius, 0,
@@ -870,6 +1059,7 @@ void Battle::update(double dt, const ControlInputs& playerInput, const PlayerCom
     updateBullets(dt);
     updateFlares(dt);
     if (active_) updateGround(dt);
+    updateTanker(dt);
 
     // Missile warning for the player
     missileWarning_ = false;

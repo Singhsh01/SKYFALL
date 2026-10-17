@@ -61,13 +61,24 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 | 04–09 | Navigation, high-g (6 g, loop, aileron roll), low-level, gunnery / ATS / ATA ranges | ✅ |
 | 10–20 | Intercepts, gun line, oil rigs, convoy, SEAD, fuel depot, mountain ace, coastal patrol, airbase defence | ✅ |
 | 21–30 | Dusk strike, artillery, radar network, offshore complex, hangars, tank column, combined arms, ace duel, fortress | ✅ |
-| 31–40 | Supply lines, mountain SAM belt, harbour raid, interceptor waves, oil-field recapture (protect friendly rigs), final assault + landing | ✅ |
+| 31–40 | Supply lines, mountain SAM belt, harbour raid, interceptor waves, oil-field recapture, final assault + landing | ✅ |
+| 41 | Air-to-air refuelling behind a tanker (probe-and-drogue, steering cues, collision) | ✅ |
+| 42–51 | Critical infrastructure: power station, refinery, rail viaduct + train, comms masts, armoured train, factories, airfield, mobile launchers (time limit), ammo dump, final strike + landing | ✅ |
 
-Missions 04–40 are data (`CampaignMissionDef`): start state, ground targets with labels and
-objective groups, enemy waves released by objectives, and ordered objectives (waypoint, destroy
-group, destroy air, pull g, loop, aileron roll, touchdown, stop). Tests validate every layout
-against the terrain (land targets on gentle slopes, naval targets and boat routes in deep water,
-nothing on the runway) and play every mission through to completion.
+Missions 04–51 are data (`CampaignMissionDef`); targets can be anchored to generated
+infrastructure (railway position, largest bridge, industrial zone). Tests validate every layout
+against the terrain and play every mission to completion; refuelling, trains, bridges, ATS
+hit-rates and the cannon assist have their own tests.
+
+## World (G2)
+
+| | Status |
+|---|---|
+| Generated scenery: towns, roads, railway with viaducts, bridges, wind farms, industry, train | ✅ deterministic from any terrain |
+| 13 real-world locations from open elevation data (fetch script + GitHub workflow) | ✅ data downloaded on demand |
+| Climate materials: desert / alpine / temperate / tropical | ✅ |
+| OpenStreetMap buildings and roads for real locations | ⬜ needs an OSM extract pipeline |
+| Lakes and rivers above sea level | ⬜ |
 
 ## Vision laboratory (H) — ⬜ next major milestone
 

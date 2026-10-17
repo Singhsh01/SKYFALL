@@ -88,6 +88,20 @@ ObjectiveDef simple(ObjectiveKind k, const std::string& title, const std::string
     return o;
 }
 
+TargetDef onRail(K k, double fraction, double speed, std::string label, int group) {
+    TargetDef t = tgt(k, 0, 0, std::move(label), group);
+    t.anchor = TargetDef::Anchor::Railway; t.railFraction = fraction; t.railSpeed = speed;
+    return t;
+}
+
+/// A train: locomotive first, wagons 18 m apart behind it (same direction of travel).
+void train(std::vector<TargetDef>& v, double fraction, double speed, int wagons, int group, double railLength = 24000) {
+    v.push_back(onRail(K::Locomotive, fraction, speed, "LOCOMOTIVE", group));
+    double dir = speed >= 0 ? -1.0 : 1.0;
+    for (int i = 0; i < wagons; ++i)
+        v.push_back(onRail(K::Wagon, fraction + dir * (21.0 + 18.0 * i) / railLength, speed, "WAGON " + std::to_string(i + 1), group));
+}
+
 // Home runway landing (approach gate, touchdown, stop) appended to a mission.
 void landAtHome(CampaignMissionDef& m) {
     m.objectives.push_back(waypoint("APPROACH GATE", -13500, 3000, 900, 0,
@@ -442,9 +456,9 @@ std::vector<CampaignMissionDef> buildAll() {
         m.startX = -9000; m.startZ = -8000; m.startAlt = 1500;
         m.briefing = "Three phases: air defences, command centre and fuel, then whatever comes up to meet you.";
         m.debrief = "Strategic targets destroyed. The war just got shorter.";
-        m.targets.push_back(tgt(K::Radar, -3500, -11500, "RADAR", 1));
-        m.targets.push_back(tgt(K::SAM, -4000, -11000, "SAM 1", 1));
-        m.targets.push_back(tgt(K::SAM, -2900, -11200, "SAM 2", 1));
+        m.targets.push_back(tgt(K::Radar, -4700, -11500, "RADAR", 1));
+        m.targets.push_back(tgt(K::SAM, -5200, -11000, "SAM 1", 1));
+        m.targets.push_back(tgt(K::SAM, -4100, -11200, "SAM 2", 1));
         m.targets.push_back(tgt(K::Command, -1000, -12500, "COMMAND POST", 2));
         ring(m.targets, K::FuelTank, "FUEL TANK", 3, -600, -12900, 55, 2);
         m.waves = {wave(3, S::Veteran, 3000, -10000, 2400), wave(1, S::Ace, 3000, -12000, 2800, 300)};
@@ -485,6 +499,138 @@ std::vector<CampaignMissionDef> buildAll() {
                         destroy(3, "DESTROY COMMAND POST AND BUNKERS"), air("DESTROY THE LAST FIGHTERS", {0, 1})};
         landAtHome(m);
     }
+    // ---------------- Refuelling and critical infrastructure ----------------
+    {
+        auto& m = add(41, "Tanker Rendezvous", "Low on fuel: join the tanker and refuel in the air.");
+        m.startX = -7000; m.startZ = -1500; m.startAlt = 2600; m.startSpeed = 200; m.startFuel = 0.12;
+        m.tanker = true; m.tankerX = -1500; m.tankerZ = -2500; m.tankerAlt = 3000; m.tankerRadius = 6500; m.tankerSpeed = 175;
+        m.briefing = "You're running on fumes after the night patrol. Texaco Two One is orbiting at three thousand metres. Join up behind the basket and take on fuel.";
+        m.debrief = "Tanks full. Thanks for the gas, Texaco. Nicely done, Captain.";
+        ObjectiveDef join; join.kind = ObjectiveKind::Rendezvous; join.title = "JOIN THE TANKER"; join.radius = 1200;
+        join.instruction = "Fly to the tanker (TANKER marker). Approach from behind and slightly below."; join.hint = "FOLLOW THE MARKER";
+        ObjectiveDef fill; fill.kind = ObjectiveKind::Refuel; fill.title = "REFUEL TO 90 %"; fill.value = 0.9;
+        fill.instruction = "Put your nose probe in the basket behind the tanker: match its speed (throttle), follow the arrows. Hold contact while fuel flows.";
+        fill.hint = "W / S = MATCH SPEED";
+        m.objectives = {join, fill, waypoint("RESUME PATROL", 6000, -6000, 900)};
+    }
+    {
+        auto& m = add(42, "Lights Out", "Knock out the power station and its substations.");
+        m.startX = -9500; m.startZ = -9500; m.startAlt = 1600;
+        m.briefing = "This power station feeds the enemy's air-defence network. Three hits will drop the main plant; then the substations.";
+        m.debrief = "The grid is down. Their radars are running on batteries now.";
+        m.targets.push_back(tgt(K::PowerPlant, -5000, -9200, "POWER PLANT", 1));
+        m.targets.push_back(tgt(K::Substation, -4600, -8600, "SUBSTATION 1", 1));
+        m.targets.push_back(tgt(K::Substation, -5500, -8700, "SUBSTATION 2", 1));
+        line(m.targets, K::Gun, "GUN", 2, -5000, -9200, 600, 0.6, 0);
+        m.targets.push_back(tgt(K::SAM, -4300, -9700, "SAM", 0));
+        m.objectives = {destroy(1, "DESTROY POWER PLANT AND SUBSTATIONS", "The plant needs three ATS hits: it re-arms one missile every 10 s, so line up passes.")};
+    }
+    {
+        auto& m = add(43, "Black Gold", "A coastal refinery fuels their jets. Burn it.");
+        m.startX = 0; m.startZ = -12000; m.startAlt = 1500;
+        m.briefing = "The coastal refinery produces all of their jet fuel. Columns first, then the storage tanks.";
+        m.debrief = "The refinery is burning. Their air force is grounded for weeks.";
+        m.targets.push_back(tgt(K::Refinery, 5393, -9748, "REFINERY", 1));
+        ring(m.targets, K::FuelTank, "FUEL TANK", 4, 5393, -9298, 70, 1, true, 0.4);
+        line(m.targets, K::Gun, "GUN", 3, 5393, -9548, 500, 1.4, 0);
+        m.targets.push_back(tgt(K::SAM, 4693, -10148, "SAM", 0));
+        m.objectives = {destroy(1, "DESTROY REFINERY AND 4 FUEL TANKS")};
+    }
+    {
+        auto& m = add(44, "Cut the Line", "Drop the railway viaduct, then stop the supply train.");
+        m.startX = 1000; m.startZ = 7000; m.startAlt = 2000; m.startHeading = -0.68;
+        m.briefing = "Their supply line crosses the coastal viaduct. Drop the span, then catch the train before it reaches the town.";
+        m.debrief = "Viaduct down and the train is scrap. That line is closed.";
+        TargetDef br = tgt(K::Bridge, 0, 0, "RAIL VIADUCT", 1);
+        br.anchor = TargetDef::Anchor::Bridge; m.targets.push_back(br);
+        train(m.targets, 0.55, 14.0, 4, 2);
+        m.objectives = {destroy(1, "DESTROY THE RAIL VIADUCT", "Bridges are tough: two ATS hits on the middle of the span."),
+                        destroy(2, "STOP THE SUPPLY TRAIN", "Hit the locomotive first; the cannon works well on wagons.")};
+    }
+    {
+        auto& m = add(45, "Silent Airwaves", "Three communications masts and a radar.");
+        m.startX = -11000; m.startZ = 0; m.startAlt = 1600;
+        m.briefing = "Three relay masts carry their command traffic. Drop all three and the radar, and they'll be deaf and blind.";
+        m.debrief = "Comms are dark. Nobody over there knows where we are.";
+        m.targets.push_back(tgt(K::CommTower, -7500, -6500, "COMMS TOWER 1", 1));
+        m.targets.push_back(tgt(K::CommTower, -2000, -8000, "COMMS TOWER 2", 1));
+        m.targets.push_back(tgt(K::CommTower, 3587, -6950, "COMMS TOWER 3", 1));
+        m.targets.push_back(tgt(K::Radar, 3987, -7250, "RADAR", 1));
+        m.targets.push_back(tgt(K::AAA, -2300, -8200, "", 0));
+        m.objectives = {destroy(1, "DESTROY 3 COMMS TOWERS AND RADAR")};
+    }
+    {
+        auto& m = add(46, "Iron Horse", "An armoured train is running ammunition to the front.");
+        m.startX = -13000; m.startZ = -2000; m.startAlt = 1500; m.startHeading = 1.4;
+        m.briefing = "An armoured train is heading east with ammunition. Locomotive and five wagons. Stop it before it reaches the city.";
+        m.debrief = "The ammunition train went up like fireworks. Outstanding.";
+        train(m.targets, 0.12, 16.0, 5, 1);
+        m.targets.push_back(tgt(K::AAA, -6000, 2600, "", 0));
+        m.objectives = {destroy(1, "DESTROY THE ARMOURED TRAIN")};
+    }
+    {
+        auto& m = add(47, "Factory Floor", "The arms factories in the industrial zone.");
+        m.startX = -11000; m.startZ = -1500; m.startAlt = 1500; m.startHeading = 0.68;
+        m.briefing = "The industrial zone is assembling missiles. Four production halls, defended by guns.";
+        m.debrief = "Production lines destroyed. That's months of output gone.";
+        for (int i = 0; i < 4; ++i) {
+            TargetDef f = tgt(K::Factory, 0, 0, "FACTORY " + std::to_string(i + 1), 1);
+            f.anchor = TargetDef::Anchor::Industrial; f.index = i; m.targets.push_back(f);
+        }
+        m.objectives = {destroy(1, "DESTROY FACTORY 1-4", "Big halls take two ATS hits each; follow up with the cannon.")};
+    }
+    {
+        auto& m = add(48, "Grounded", "Catch their fighters on the ground before they scramble.");
+        m.startX = -10000; m.startZ = -12000; m.startAlt = 1800;
+        m.briefing = "Six fighters are parked at a forward strip, fuelling up. Hit them on the ground. Whatever gets airborne, you deal with.";
+        m.debrief = "Six kills on the ground and the scramble failed. Clean sweep.";
+        line(m.targets, K::ParkedJet, "PARKED JET", 6, -4500, -12200, 60, 0.0, 1);
+        line(m.targets, K::Hangar, "HANGAR", 2, -4500, -11900, 120, 0.0, 1);
+        line(m.targets, K::Gun, "GUN", 2, -4500, -12050, 700, 0.0, 0);
+        m.waves = {wave(3, AiSkill::Veteran, -3000, -10000, 1800)};
+        m.objectives = {destroy(1, "DESTROY 6 PARKED JETS AND 2 HANGARS"), air("SHOOT DOWN THE SCRAMBLE", {0})};
+        m.objectives[0].wavesOnStart = {};
+        m.objectives[1].wavesOnStart = {0};
+    }
+    {
+        auto& m = add(49, "Launch Window", "Four mobile missile launchers. Five minutes.");
+        m.startX = -9000; m.startZ = 7000; m.startAlt = 1600; m.timeLimit = 300;
+        m.briefing = "Four mobile launchers are setting up to fire on our airbase. You have five minutes. They're moving, so lead them.";
+        m.debrief = "All launchers destroyed with time to spare. The base is safe.";
+        const double sites[4][2] = {{-4500, 5600}, {-3300, 4700}, {-2187, 5550}, {-900, 4700}};
+        for (int i = 0; i < 4; ++i) {
+            TargetDef l = tgt(K::Launcher, sites[i][0], sites[i][1], "LAUNCHER " + std::to_string(i + 1), 1);
+            l.pathRadius = 220; l.pathAngle = i * 1.4; m.targets.push_back(l);
+        }
+        m.targets.push_back(tgt(K::Radar, -2500, 5000, "RADAR", 0));
+        m.objectives = {destroy(1, "DESTROY 4 LAUNCHERS (5 MIN)", "Fire ATS a little ahead of the moving launchers; the seeker leads them.")};
+    }
+    {
+        auto& m = add(50, "Ammunition Dump", "Six earth-covered bunkers full of munitions.");
+        m.startX = 6000; m.startZ = 12000; m.startAlt = 1600;
+        m.briefing = "The main ammunition dump: six bunkers. Expect big secondary explosions, so don't fly through the fireballs.";
+        m.debrief = "The dump is gone. Felt that one from here.";
+        for (int i = 0; i < 6; ++i)
+            m.targets.push_back(tgt(K::Ammo, 4733 + (i % 3) * 110, 6350 + (i / 3) * 120, "AMMO BUNKER " + std::to_string(i + 1), 1, true, 0.0));
+        line(m.targets, K::Gun, "GUN", 3, 4833, 6410, 520, 1.2, 0);
+        m.objectives = {destroy(1, "DESTROY 6 AMMO BUNKERS")};
+    }
+    {
+        auto& m = add(51, "Critical Mass", "Power, communications, command, fighters, then home.");
+        m.startX = -11000; m.startZ = -5000; m.startAlt = 1700; m.allies = 2;
+        m.briefing = "This is it, Captain. Power plant, the relay masts, their command post, and whatever they launch. Then bring it home.";
+        m.debrief = "Critical infrastructure destroyed, and you landed it. Mission accomplished, Captain.";
+        m.targets.push_back(tgt(K::PowerPlant, -5000, -9200, "POWER PLANT", 1));
+        m.targets.push_back(tgt(K::CommTower, -2000, -8000, "COMMS TOWER 1", 2));
+        m.targets.push_back(tgt(K::CommTower, 3500, -7000, "COMMS TOWER 2", 2));
+        m.targets.push_back(tgt(K::Command, 1050, -1913, "COMMAND POST", 3));
+        ring(m.targets, K::Bunker, "BUNKER", 3, 1050, -1913, 170, 3, true, 0.3);
+        ring(m.targets, K::Gun, "GUN", 3, 1050, -1913, 450, 0, true, 1.0);
+        m.waves = {wave(4, AiSkill::Veteran, 3000, 0, 2400), wave(1, AiSkill::Ace, 4000, 1000, 2800, 300)};
+        m.objectives = {destroy(1, "DESTROY THE POWER PLANT"), destroy(2, "DESTROY COMMS TOWERS 1-2"),
+                        destroy(3, "DESTROY COMMAND POST AND BUNKERS"), air("DESTROY THE LAST FIGHTERS", {0, 1})};
+        landAtHome(m);
+    }
     for (auto& m : v) if (m.atsReload <= 0) m.atsReload = 10.0;
     return v;
 }
@@ -518,6 +664,10 @@ const CampaignMissionDef* campaignMission(int number) {
 bool objectivePoint(const CampaignMissionDef& def, const ObjectiveDef& o, const Battle* battle, Vec3& out) {
     if (o.kind == ObjectiveKind::Waypoint) { out = {o.x, 0, o.z}; return true; }
     if (o.kind == ObjectiveKind::Touchdown || o.kind == ObjectiveKind::Stop) { out = {-10500, 0, 3000}; return true; }
+    if ((o.kind == ObjectiveKind::Rendezvous || o.kind == ObjectiveKind::Refuel) && battle && battle->tanker().active) {
+        out = battle->tanker().pos;
+        return true;
+    }
     if (o.kind == ObjectiveKind::DestroyGroup && battle) {
         Vec3 sum; int n = 0;
         for (const GroundTarget& g : battle->ground())
@@ -619,6 +769,23 @@ Mission buildCampaignMission(const CampaignMissionDef& def) {
                 s.done = [](const MissionContext& c) { return c.flight->onGround && c.flight->airspeed < 2.0; };
                 s.progress = [](const MissionContext& c) { return clampd(1.0 - c.flight->airspeed / 80.0, 0.0, 1.0); };
                 break;
+            case ObjectiveKind::Rendezvous: {
+                double r = o.radius;
+                s.done = [r](const MissionContext& c) {
+                    return c.battle && c.battle->tanker().active && length(c.flight->pos - c.battle->tanker().pos) < r;
+                };
+                s.progress = [r](const MissionContext& c) {
+                    if (!c.battle || !c.battle->tanker().active) return 0.0;
+                    return clampd(1.0 - (length(c.flight->pos - c.battle->tanker().pos) - r) / 12000.0, 0.0, 1.0);
+                };
+                break;
+            }
+            case ObjectiveKind::Refuel: {
+                double f = o.value;
+                s.done = [f](const MissionContext& c) { return c.flight->fuelKg >= f * c.aircraft->fuelMassKg - 1e-6; };
+                s.progress = [f](const MissionContext& c) { return clampd(c.flight->fuelKg / (f * c.aircraft->fuelMassKg), 0.0, 1.0); };
+                break;
+            }
         }
         steps.push_back(std::move(s));
     }
@@ -655,10 +822,33 @@ void CampaignDirector::begin(const CampaignMissionDef& def, Battle& battle) {
     cfg.seed = 1000u + static_cast<unsigned>(def.number);
     cfg.agReloadSeconds = def.atsReload;
     battle.start(cfg);
-    for (const TargetDef& t : def.targets) {
+    const WorldLayout* L = battle.layout();
+    if (def.tanker) battle.startTanker({def.tankerX, def.tankerAlt, def.tankerZ}, def.tankerRadius, def.tankerSpeed, 3.4);
+    for (const TargetDef& t0 : def.targets) {
+        TargetDef t = t0;
         GroundTarget g;
+        if (t.anchor == TargetDef::Anchor::Railway) {
+            if (!L || L->railway.pts.empty()) continue;   // no railway on this terrain
+            g.railS = clampd(t.railFraction, 0.0, 1.0) * L->railway.length();
+            g.railSpeed = t.railSpeed;
+            Vec3 p = L->railway.at(g.railS);
+            t.x = p.x; t.z = p.z;
+        } else if (t.anchor == TargetDef::Anchor::Bridge) {
+            int bi = L ? L->largestBridge(true) : -1;
+            if (bi < 0 && L) bi = L->largestBridge(false);
+            if (bi < 0) continue;
+            const Bridge& b = L->bridges[bi];
+            Vec3 mid = (b.a + b.b) * 0.5;
+            g.pos = mid;
+            g.length = std::hypot(b.b.x - b.a.x, b.b.z - b.a.z);
+            t.x = mid.x; t.z = mid.z;
+            t.heading = std::atan2(b.b.z - b.a.z, b.b.x - b.a.x);
+        } else if (t.anchor == TargetDef::Anchor::Industrial) {
+            if (!L || t.index >= static_cast<int>(L->factories.size())) continue;
+            t.x = L->factories[t.index].x; t.z = L->factories[t.index].z;
+        }
         g.kind = t.kind;
-        g.pos = {t.x, 0, t.z};
+        if (t.anchor != TargetDef::Anchor::Bridge) g.pos = {t.x, 0, t.z};
         g.heading = t.heading;
         g.label = t.label;
         g.group = t.group;

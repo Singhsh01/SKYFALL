@@ -74,7 +74,7 @@ Mission makeMission03();
 /// Ideal 3-degree glide-path height above the runway for a horizontal distance to the threshold.
 double glidePathHeight(double distanceToThreshold);
 
-/// Campaign catalogue: 40 missions, all playable (01-03 hand-written training, 04-40 from
+/// Campaign catalogue: 51 missions, all playable (01-03 hand-written training, 04-51 from
 /// data in Campaign.cpp).
 struct MissionInfo {
     int number;
@@ -83,7 +83,7 @@ struct MissionInfo {
     bool playable;
 };
 const std::vector<MissionInfo>& campaignCatalogue();
-constexpr int kCampaignMissions = 40;
+constexpr int kCampaignMissions = 51;
 
 /// Compass heading in degrees (0 = north = world -Z, 90 = east = world +X).
 double compassHeadingDeg(const Quat& q);

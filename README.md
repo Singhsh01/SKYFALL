@@ -29,27 +29,48 @@ copyrighted models, textures, sounds or code from commercial games.
 | ![Crash replay](docs/screenshots/crash_replay.jpg) | ![Canyon](docs/screenshots/canyon.jpg) |
 | ![Cockpit](docs/screenshots/cockpit_air.jpg) | ![Hangar](docs/screenshots/hangar.jpg) |
 | ![Campaign](docs/screenshots/campaign_menu.jpg) | ![Gun line](docs/screenshots/gun_line.jpg) |
+| ![Briefing](docs/screenshots/briefing.jpg) | ![Refuelling](docs/screenshots/refuelling.jpg) |
+| ![Town and railway](docs/screenshots/scenery_town.jpg) | ![Camouflage schemes](docs/screenshots/skins.jpg) |
 
 > Screenshots are captured from the running executable (`skyfall --capture`) on a Linux
 > container with Mesa's software rasteriser: they show the real renderer output, not macOS
 > performance. Measured on a MacBook Air (v0.3 build): 66 fps mean, p95 20 ms at 1680x1050 High.
 > See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
-## What you can do in this build (v0.5)
+## What you can do in this build (v0.6)
 
+* **World locations with real terrain** (title → WORLD LOCATIONS): Everest & Khumbu, Matterhorn,
+  Geirangerfjord, Glen Coe, Erg Chebbi (Sahara), Wadi Rum, Musandam fjords, Grand Canyon,
+  Aconcagua, Torres del Paine, Rio de Janeiro, Guilin karst and Mount Fuji, plus the procedural
+  Skyfall Desert. Real elevation comes from open data (AWS Terrain Tiles: SRTM, GMTED2010, ETOPO1,
+  NED...) via `tools/fetch_real_terrain.py` or the one-click *real terrain* GitHub workflow (see
+  [Real terrain](#real-terrain)). The runway is laid on the flattest ground; towns, roads, a railway
+  with viaducts, wind farms and forests are generated on top; materials follow the climate
+  (desert, alpine snow, green temperate, tropical). Fly the Dogfight Arena or Free Flight there.
+* **Living scenery everywhere** — towns with street grids and gardens, a road network with
+  embankments and bridges, a railway with viaducts and a freight train, an industrial zone with
+  smoking chimneys, wind farms with turning rotors.
 * **All eight aircraft are flyable** (Hangar → select → FLY): F-22, F-35, Rafale, Su-57, Su-35,
-  MiG-29, Su-30, F-16. Each has its own roll/pitch rates and missile load; the selection is used
-  by the Campaign and the Dogfight Arena and is saved.
+  MiG-29, Su-30, F-16, each with **eight camouflage schemes** (factory, desert, woodland, arctic,
+  naval, digital urban, night, tiger) — ← / → on an aircraft in the Hangar. Choices are saved.
+* **Spoken briefings** — before every campaign mission and the Dogfight Arena, Captain Avery
+  Langlois (Wing Operations) briefs you on the aim and objectives and signs off with
+  "Good luck, Captain." Uses the system voice: macOS `say` (an English (Canada) voice if
+  installed, otherwise a North-American female voice) or the browser's speech synthesis; captions
+  are always shown. Toggle in Settings.
 * **Arcade handling (default)** — Battlefield-style: the flight path follows the nose, hard turns
   bleed energy, every jet has enough afterburner thrust to climb out of a low dive.
   **Double-tap ← / →** for an aileron roll. Assisted and Simulation handling remain in Settings.
 * **ATA and ATS missiles** (`Q` swap, `1` / `2` select, `F` fire): air-to-air locks aircraft,
-  air-to-surface locks ground targets and has a larger blast.
+  air-to-surface locks ground targets and has a larger blast. Ground attack is arcade-friendly:
+  ATS locks in 0.8 s within 34° / 7.5 km, fires at the target nearest the nose even before the
+  lock completes, and leads moving vehicles; the cannon bends onto targets within 4° of the nose.
+  (Tested: 56 / 56 ATS hits on static and moving trucks from 2.5-6 km.)
 * **Missile / target camera** — a picture-in-picture sensor feed beside the weapons panel:
   `TGT CAM` / `TGT POD` while locking (zoomed, with a track box), `ATA CAM` / `ATS CAM` riding behind
   your missile with range and time-to-impact, then a 2.8 s `HIT CAM` hold on the impact with the
   result (`SPLASH`, `HIT`, `MISSED`) and the measured miss distance.
-* **Crash & shoot-down replay** — when you are lost, the last ~5 s are replayed from side and
+* **Crash & shoot-down replay** (Arena and campaign) — when you are lost, the last ~5 s are replayed from side and
   ground observers, in slow motion around the impact, with a *What went wrong* analysis built
   from recorded telemetry (bank, dive angle and pull-out height, PULL UP warning lead time,
   missile warning vs. flares, sink rate at touchdown…). `Enter` / `Space` skips.
@@ -57,17 +78,33 @@ copyrighted models, textures, sounds or code from commercial games.
   moving tapes, in both the minimal and the full HUD (`U`).
 * **Desert battlefield** — eroded arid mountains (procedural noise shaped by a deterministic
   hydraulic-erosion simulation), dry river bed with palms, desert town, coast to the east.
-* **40-mission campaign** (all unlocked, progress saved): training (takeoff, solo flight, landing,
-  navigation, high-g, low-level, gunnery / ATS / ATA ranges), then strikes and air battles across
-  the map: gun lines (GUN 1-4), offshore oil rigs, convoys, SAM sites and radars, fuel depots,
-  hangars, command posts, patrol boats, artillery batteries, escalating fighter waves and a final
-  assault that ends with a landing at home. Objective targets are marked in orange on the HUD and
-  minimap with live "targets left" counters; friendly assets you must protect are blue.
-  Missions 04-40 are data in `src/mission/Campaign.cpp`, and every one is played through by the tests.
+* **51-mission campaign** (all unlocked, progress saved): training (takeoff, solo flight, landing,
+  navigation, high-g, low-level, gunnery / ATS / ATA ranges), strikes and air battles (gun lines
+  GUN 1-4, offshore oil rigs, convoys, SAM sites, fuel depots, hangars, patrol boats, artillery),
+  **air-to-air refuelling** behind a tanker (mission 41), and ten **critical-infrastructure
+  strikes** (power station, refinery, rail viaduct and supply train, comms masts, armoured train,
+  arms factories, parked fighters, mobile launchers against the clock, ammunition dump, and a final
+  strike that ends with a landing). Objective targets are orange on the HUD and minimap with live
+  counters; a debrief card shows time, kills, accuracy and hull at the end.
 * **Dogfight Arena**: endless waves of AI bandits with wingmen, SAM sites, AAA flak and a town garrison.
 * **Steady frame rate**: dynamic resolution lowers the 3D resolution in 10 % steps when frames drop
   below ~55 fps and raises it again when there is headroom (Settings → Dynamic resolution; the HUD
   stays sharp). `F3` shows simulation and HUD CPU time per frame.
+
+## Real terrain
+
+The real-world locations need elevation data, which is downloaded once (about 2 MB per location,
+~27 MB for all 13) and stored in `assets/terrain/`:
+
+* **On GitHub (one click):** *Actions → real terrain → Run workflow*. It downloads, converts and
+  commits the files; the browser version and the next macOS release pick them up automatically.
+* **On your Mac:** `python3 tools/fetch_real_terrain.py` (or `--only everest,rio`). No installs needed.
+
+Data: [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen "terrarium"
+encoding) — derived from SRTM, GMTED2010, ETOPO1, NED and other open sources
+([attribution](https://github.com/tilezen/joerd/blob/master/docs/attribution.md)). Each location is
+a 32 × 32 km square at ~31 m resolution. Lakes above sea level are not rendered as water yet, and
+buildings/roads are generated (not OpenStreetMap), so they are plausible rather than exact.
 
 ## Browser version (WebAssembly)
 
@@ -115,6 +152,7 @@ Useful flags: `--mode arena` / `--mode m01` (skip the menu), `--size 1440x900`, 
 | `Q` / `1` / `2` | swap / select ATA (air-to-air) or ATS (air-to-surface) missiles | double-tap `←`/`→` | aileron roll |
 | `Enter` / `Space` | skip the crash replay | | |
 | `U` | HUD style (minimal / full) | `Cmd+Q` | quit immediately |
+| Hangar `←` / `→` | change camouflage | Briefing `Enter` / `Esc` | launch / back |
 | `C` | camera: cockpit → chase → external | right-drag, `I J K L` | look / orbit, wheel = zoom |
 | `R` | reset / respawn | `H` | help overlay |
 | `F3` | telemetry (p50/p95/p99 frame times, physics) | `F5` | time of day |

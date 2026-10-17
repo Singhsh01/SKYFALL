@@ -20,6 +20,11 @@ struct TargetDef {
     double pathRadius = 0;    // > 0: drives (or sails) a circle of this radius around (x, z)
     double pathAngle = 0;
     Team team = Team::Red;    // Team::Blue = friendly asset to protect
+    // Anchoring to generated infrastructure (the layout differs per terrain):
+    enum class Anchor { None, Railway, Bridge, Industrial } anchor = Anchor::None;
+    double railFraction = 0;  // Railway: position along the line (0..1); x/z ignored
+    double railSpeed = 0;     // Railway: m/s (trains move; wagons follow the locomotive)
+    int index = 0;            // Industrial: which factory slot
 };
 
 struct WaveDef {
@@ -40,6 +45,8 @@ enum class ObjectiveKind {
     AileronRoll,    // roll through 360 degrees
     Touchdown,      // land on the home runway
     Stop,           // stop on the runway
+    Rendezvous,     // fly within `radius` of the tanker
+    Refuel,         // take on fuel until the tank is at least `value` (0..1) full
 };
 
 struct ObjectiveDef {
@@ -68,6 +75,9 @@ struct CampaignMissionDef {
     std::vector<WaveDef> waves;
     std::vector<ObjectiveDef> objectives;
     int protectGroup = 0;        // fail if any friendly target in this group is destroyed
+    double startFuel = -1;       // fraction of internal fuel at the start (-1 = full)
+    bool tanker = false;         // refuelling tanker on a racetrack
+    double tankerX = 0, tankerZ = 0, tankerAlt = 3000, tankerRadius = 6500, tankerSpeed = 175;
     double timeLimit = 0;        // seconds, 0 = none
 };
 

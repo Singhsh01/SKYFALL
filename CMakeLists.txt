@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SKYFALL VERSION 0.5.0 LANGUAGES C CXX)
+project(SKYFALL VERSION 0.6.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -18,6 +18,8 @@ option(SKYFALL_FETCH_RAYLIB "Download raylib 5.5 if it is not installed" ON)
 # ---------------------------------------------------------------------------
 add_library(skyfall_core STATIC
   src/sim/Terrain.cpp
+  src/sim/WorldLayout.cpp
+  src/sim/Locations.cpp
   src/sim/FlightModel.cpp
   src/aircraft/AircraftProfile.cpp
   src/combat/Combat.cpp
@@ -79,11 +81,13 @@ if(SKYFALL_BUILD_GAME)
     src/render/JetMesh.cpp
     src/render/Effects.cpp
     src/render/WorldMeshes.cpp
+    src/render/Dressing.cpp
     src/ui/Hud.cpp
     src/ui/Cockpit.cpp
     src/ui/Menus.cpp
     src/ui/Font.cpp
     src/audio/Audio.cpp
+    src/audio/Speech.cpp
   )
   target_link_libraries(skyfall PRIVATE skyfall_core skyfall_raylib)
   if(EMSCRIPTEN)

@@ -2,6 +2,8 @@
 // bloom + ACES tone mapping post-process.
 #pragma once
 
+#include "Dressing.hpp"
+
 #include "../app/Settings.hpp"
 #include "../combat/Combat.hpp"
 #include "Effects.hpp"
@@ -37,6 +39,7 @@ struct ExtraJet {
     Team team = Team::Blue;
     AircraftId id = AircraftId::F22;
     float gear = 0, throttle = 0.6f, ab = 0;
+    int skin = 0;
 };
 struct ExtraMissile { Vec3 pos, dir; };
 
@@ -62,7 +65,11 @@ struct FrameParams {
 
 class Renderer {
 public:
-    bool init(const Terrain& t, int width, int height);
+    bool init(const Terrain& t, const WorldLayout& layout, int width, int height);
+    const Dressing& dressing() const { return dressing_; }
+    /// Swap to another terrain (location change): rebuilds terrain meshes, textures, scenery, clouds.
+    void rebuildWorld(const Terrain& t, const WorldLayout& layout);
+    void applyTerrainInfo();
     void shutdown();
     void resize(int width, int height);
 
@@ -120,6 +127,11 @@ private:
     Mesh flame_{}, missile_{};
     Mesh tank_{}, truck_{}, aaa_{}, sam_{}, bunker_{}, radar_{};
     Mesh gun_{}, artillery_{}, oilRig_{}, fuelTank_{}, hangar_{}, command_{}, ship_{};
+    Mesh powerPlant_{}, refinery_{}, bridgeDeck_{}, bridgePier_{}, commTower_{}, factory_{}, locomotive_{}, wagon_{},
+         launcher_{}, ammo_{}, substation_{}, tanker_{}, drogue_{};
+    void drawTanker(const FrameParams& f);
+    void drawDressing(const FrameParams& f);
+    Dressing dressing_;
     std::vector<CloudPuff> puffs_;
 
     Prog sky_, terrain_p_, water_, lit_, jet_, flameP_, cloud_, runway_, particle_, bright_, blur_, composite_;

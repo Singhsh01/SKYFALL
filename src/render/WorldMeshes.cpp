@@ -137,18 +137,29 @@ Color surfaceTint(const Terrain& t, double x, double z, double h, double forest,
     return {u8(forest), u8(town), u8(0.0), 255};
 }
 
-// Desert scrub: sparse, in low gentle ground and along the dry river bed.
+const TerrainInfo* g_info = nullptr;   // terrain being built (biome, tree line)
+
+// Desert: sparse scrub in low gentle ground; green climates: forests below the tree line.
 double forestMask(double x, double z, double h) {
+    if (g_info && g_info->biome != Biome::Desert) {
+        double f = smoothstep(0.40, 0.58, fbm2(x / 900.0, z / 900.0, 3, 99u)) * 0.95;
+        f *= 1.0 - smoothstep(g_info->treeLine - 180.0, g_info->treeLine + 60.0, h);
+        f *= smoothstep(2.0, 10.0, h);
+        return f;
+    }
+    double tl = g_info ? g_info->treeLine : 520.0;
     double f = smoothstep(0.50, 0.66, fbm2(x / 700.0, z / 700.0, 3, 99u)) * 0.55;
-    f *= 1.0 - smoothstep(250.0, 520.0, h);
+    f *= 1.0 - smoothstep(tl - 270.0, tl, h);
     f *= smoothstep(6.0, 18.0, h);
     return f;
 }
 double wadiMask(double x, double z) {
+    if (g_info && g_info->real) return 0.0;   // the dry river bed belongs to the desert map
     double wadiZ = 3700.0 + (fbm2(x / 3000.0, 4.2, 3, 71u) - 0.5) * 2200.0;
     return (1.0 - smoothstep(30.0, 200.0, std::fabs(z - wadiZ))) * smoothstep(-6000.0, -2000.0, x) * (1.0 - smoothstep(7500.0, 8500.0, x));
 }
 double townMask(const Terrain& t, double x, double z) {
+    if (t.info().real) return 0.0;   // real maps get their towns from the scenery generator
     Vec3 c = t.townCenter();
     double d = std::sqrt((x - c.x) * (x - c.x) + (z - c.z) * (z - c.z));
     return 1.0 - smoothstep(850.0, 1250.0, d);
@@ -268,6 +279,8 @@ void addTree(MeshBuilder& mb, Vector3 p, float height, float radius, Color c, in
 
 void WorldMeshes::build(const Terrain& t) {
     terrain = &t;
+    g_info = &t.info();
+    const bool green = t.info().biome != Biome::Desert;
     noise = makeNoiseTexture();
     puff = makeSprite(0);
     for (int i = 0; i < 4; ++i) cloud[i] = makeCloudSprite(100u + i * 17u);
@@ -290,7 +303,7 @@ void WorldMeshes::build(const Terrain& t) {
             // trees
             MeshBuilder tb;
             Rng rng(1000 + cz * 31 + cx * 7);
-            const double step = 46.0;
+            const double step = green ? 38.0 : 46.0;
             for (double z = z0; z < z0 + kChunkSize; z += step)
                 for (double x = x0; x < x0 + kChunkSize; x += step) {
                     double px = x + rng.range(0, step), pz = z + rng.range(0, step);
@@ -300,7 +313,17 @@ void WorldMeshes::build(const Terrain& t) {
                     if (rng.uniform() > f * 0.55 + wadi * 0.5) { rng.next(); continue; }
                     if (t.onRunway(px, pz, 450.0)) continue;
                     Vec3 n = t.normal(px, pz, 8.0);
-                    if (n.y < 0.85) continue;
+                    if (n.y < (green ? 0.80 : 0.85)) continue;
+                    if (green) {
+                        // conifers (alpine / temperate) or broadleaf canopy (tropical)
+                        bool tropical = t.info().biome == Biome::Tropical;
+                        float hgt = static_cast<float>(tropical ? rng.range(9, 17) : rng.range(8, 19));
+                        double v = rng.uniform();
+                        Color col = tropical ? Color{u8(0.07 + 0.04 * v), u8(0.15 + 0.06 * v), u8(0.05 + 0.02 * v), 255}
+                                             : Color{u8(0.05 + 0.03 * v), u8(0.10 + 0.04 * v), u8(0.06 + 0.02 * v), 255};
+                        addTree(tb, V3(px, h - 0.6, pz), hgt, tropical ? hgt * 0.45f : hgt * 0.28f, col, tropical ? 1 : 0);
+                        continue;
+                    }
                     // palms along the wadi, low acacia-like shrubs elsewhere
                     bool palm = wadi > 0.4 && rng.uniform() < 0.5;
                     float hgt = palm ? static_cast<float>(rng.range(9, 14)) : static_cast<float>(rng.range(2.5, 5.5));
@@ -467,8 +490,12 @@ void WorldMeshes::build(const Terrain& t) {
                       {cx + 200, 1.5708f, cz + 360}, {cx + 290, 1.5708f, cz + 360}};
     }
 
-    // ---- town (fictional) ----
-    {
+    // ---- town (fictional; real maps get their towns from the scenery generator) ----
+    if (t.info().real) {
+        MeshBuilder mb;
+        mb.box({0, -5000, 0}, {1, 1, 1}, BLACK);   // placeholder so the draw call stays valid
+        town = mb.build();
+    } else {
         MeshBuilder mb;
         Vec3 c = t.townCenter();
         Rng rng(4242);
@@ -569,8 +596,14 @@ void WorldMeshes::build(const Terrain& t) {
                 double r, g, b;
                 if (h < 0) { double d = std::clamp(-h / 60.0, 0.0, 1.0); r = 0.05; g = 0.18 - 0.08 * d; b = 0.28 - 0.06 * d; shade = 1; }
                 else if (h < 8) { r = 0.72; g = 0.66; b = 0.52; }
-                else if (h > 1500) { r = g = b = 0.80; }
-                else {
+                else if (h > t.info().snowLine) { r = g = b = 0.80; }
+                else if (green) {
+                    double veg = 1.0 - smoothstep(t.info().treeLine - 150.0, t.info().treeLine + 120.0, h);
+                    double f = forestMask(wx, wz, h);
+                    r = lerpd(0.48, 0.24 - 0.08 * f, veg); g = lerpd(0.47, 0.36 - 0.08 * f, veg); b = lerpd(0.46, 0.18 - 0.05 * f, veg);
+                    if (n.y < 0.8) { r = 0.42; g = 0.42; b = 0.43; }
+                    if (h > t.info().snowLine) { r = g = b = 0.86; }
+                } else {
                     double f = forestMask(wx, wz, h);
                     r = 0.64 - 0.2 * f; g = 0.56 - 0.12 * f; b = 0.43 - 0.14 * f;
                     if (n.y < 0.8) { r = 0.46; g = 0.42; b = 0.38; }

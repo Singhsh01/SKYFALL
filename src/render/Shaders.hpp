@@ -139,12 +139,17 @@ uniform sampler2D uTerrainData;   // RG normal.xz, B ambient occlusion, A baked 
 uniform float uCloudCover;
 uniform vec3 uFlashPos;
 uniform vec3 uFlashColor;
+uniform float uBiome;      // 0 desert, 1 alpine, 2 temperate, 3 tropical
+uniform float uSnowLine;
+uniform float uTreeLine;
+uniform float uHighRock;
+uniform float uCloudBase;
 out vec4 finalColor;
 
 float hash12(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
 float cloudShadow(vec3 p) {
-    float t = (2300.0 - p.y) / max(uSunDir.y, 0.05);
+    float t = (uCloudBase + 200.0 - p.y) / max(uSunDir.y, 0.05);
     vec2 q = (p.xz + uSunDir.xz * t) / 9000.0 + vec2(uTime * 0.0025, uTime * 0.001);
     float n = texture(uNoise, q).r * 0.65 + texture(uNoise, q * 3.1).g * 0.35;
     float c = smoothstep(1.0 - uCloudCover - 0.02, 1.0 - uCloudCover + 0.22, n);
@@ -218,8 +223,24 @@ void main() {
     albedo = mix(albedo, sandLight * 1.03, (1.0 - cav) * smoothstep(0.30, 0.10, slope) * 0.6);
     float rockW = smoothstep(0.05, 0.17, slope + (meso - 0.5) * 0.08 - (1.0 - cav) * 0.05);
     albedo = mix(albedo, rock, rockW);
-    albedo = mix(albedo, highRock, smoothstep(1050.0, 1500.0, h + meso * 200.0) * (0.6 + 0.4 * rockW));
-    float snowW = smoothstep(1650.0, 1900.0, h + meso * 180.0) * (1.0 - smoothstep(0.25, 0.5, slope));
+    // green climates: grey granite instead of red strata, soil instead of sand
+    float green = step(0.5, uBiome);
+    vec3 granite = mix(vec3(0.27, 0.27, 0.28), vec3(0.38, 0.38, 0.39), meso) * (0.82 + 0.3 * micro * grain);
+    vec3 soil = mix(vec3(0.24, 0.21, 0.16), vec3(0.30, 0.27, 0.21), micro);
+    albedo = mix(albedo, mix(soil, granite, rockW), green * 0.9);
+    albedo = mix(albedo, highRock, smoothstep(uHighRock, uHighRock + 450.0, h + meso * 200.0) * (0.6 + 0.4 * rockW));
+    // vegetation: meadows and forest on gentle ground below the tree line
+    if (uBiome > 0.5) {
+        vec3 grassA = uBiome > 2.5 ? vec3(0.10, 0.17, 0.05) : vec3(0.16, 0.20, 0.08);
+        vec3 grassB = uBiome > 2.5 ? vec3(0.06, 0.12, 0.04) : vec3(0.10, 0.14, 0.06);
+        if (uBiome < 1.5) { grassA = vec3(0.19, 0.20, 0.10); grassB = vec3(0.14, 0.15, 0.08); }   // alpine meadow
+        vec3 forest = uBiome > 2.5 ? vec3(0.035, 0.075, 0.03) : vec3(0.045, 0.07, 0.04);
+        float veg = (1.0 - smoothstep(0.14, 0.32, slope)) * (1.0 - smoothstep(uTreeLine - 150.0, uTreeLine + 120.0, h + meso * 150.0));
+        float forestMask = smoothstep(0.42, 0.58, macro * 0.6 + meso * 0.4) * (1.0 - smoothstep(0.1, 0.3, slope));
+        vec3 grass = mix(grassA, grassB, meso) * (0.82 + 0.3 * micro);
+        albedo = mix(albedo, mix(grass, forest, forestMask), veg * smoothstep(0.5, 4.0, h));
+    }
+    float snowW = smoothstep(uSnowLine, uSnowLine + 250.0, h + meso * 180.0) * (1.0 - smoothstep(0.25, 0.5, slope));
     albedo = mix(albedo, snow, snowW);
     // sparse scrub: dark dots where the vegetation mask allows it
     float dots = smoothstep(0.62, 0.70, texture(uNoise, vPos.xz / 23.0).r * 0.6 + texture(uNoise, vPos.xz / 9.0).g * 0.4);
@@ -238,7 +259,7 @@ void main() {
     float skyAO = mix(0.25, 1.0, ao * ao);
     vec3 amb = ambientLight(nd) * skyAO;
     // warm bounce light from sunlit sand fills the shadows (key to a desert look)
-    vec3 bounce = vec3(0.55, 0.45, 0.33) * uSunColor * 0.05 * (1.0 - nd.y * 0.5) * skyAO;
+    vec3 bounce = mix(vec3(0.55, 0.45, 0.33), vec3(0.30, 0.34, 0.28), step(0.5, uBiome)) * uSunColor * 0.05 * (1.0 - nd.y * 0.5) * skyAO;
     vec3 col = albedo * (uSunColor * ndl * sh * 1.05 + amb * 0.62 + bounce);
     // dusty specular sheen at grazing sun
     vec3 v = normalize(uCamPos - vPos);
@@ -387,7 +408,8 @@ in vec3 vNormal;
 in vec4 vColor;      // rgb = part tint x baked ambient occlusion, a = material id (1 paint, 0.5 metal, 0 glass)
 uniform vec3 uPaintA;
 uniform vec3 uPaintB;
-uniform float uCamo;        // 0 = two-tone grey, 1 = digital splinter camouflage
+uniform vec3 uPaintC;
+uniform float uCamo;        // pattern: 0 two-tone, 1 splinter, 2 woodland, 3 digital, 4 stripes
 uniform float uRoughness;
 uniform float uHitFlash;
 uniform float uDamage;
@@ -424,11 +446,30 @@ void main() {
     float metal, rough, coat;
     if (mat > 0.75) {
         vec3 paint = uPaintA;
-        if (uCamo > 0.5) {
+        if (uCamo > 3.5) {
+            // tiger stripes: wavy bands across the airframe
+            float w = vObj.x * 0.55 + 2.2 * texture(uNoise, vObj.xz / 23.0 + vObj.y * 0.1).r + vObj.y * 0.4;
+            float band = smoothstep(0.62, 0.70, abs(fract(w * 0.5) - 0.5) * 2.0);
+            paint = mix(mix(uPaintA, uPaintC, texture(uNoise, vObj.xz / 9.0).g * 0.6), uPaintB, band);
+        } else if (uCamo > 2.5) {
+            // digital: square pixels, three tones
+            vec2 c = floor(vObj.xz * 2.6 + floor(vObj.y * 2.6));
+            float r = texture(uNoise, c / 97.0).r;
+            float big = texture(uNoise, vObj.xz / 19.0).g;
+            float v2 = r * 0.55 + big * 0.6;
+            paint = v2 < 0.48 ? uPaintA : (v2 < 0.66 ? uPaintB : uPaintC);
+        } else if (uCamo > 1.5) {
+            // woodland: three-colour organic blotches
+            float m1 = texture(uNoise, vObj.xz / 13.0 + vObj.y * 0.07).r;
+            float m2 = texture(uNoise, vObj.zx / 9.0 + 0.37 - vObj.y * 0.05).g;
+            paint = mix(uPaintA, uPaintB, smoothstep(0.48, 0.53, m1));
+            paint = mix(paint, uPaintC, smoothstep(0.62, 0.67, m2));
+        } else if (uCamo > 0.5) {
             vec2 c = floor(vObj.xz * vec2(0.9, 1.4) + floor(vObj.y * 2.0));
             float r = texture(uNoise, c / 61.0).r;
             float r2 = texture(uNoise, vObj.xz / 17.0).g;
             paint = mix(uPaintA, uPaintB, step(0.5, r * 0.7 + r2 * 0.5));
+            if (dot(uPaintC, uPaintC) > 0.0) paint = mix(paint, uPaintC, step(0.78, texture(uNoise, c / 43.0 + 0.5).b) * 0.9);
         } else {
             // soft two-tone pattern with large, smooth blotches
             float m = texture(uNoise, vObj.xz / 11.0 + vObj.y * 0.05).r;

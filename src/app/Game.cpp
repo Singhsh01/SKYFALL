@@ -2,6 +2,8 @@
 #include <emscripten/emscripten.h>
 #endif
 #include "Game.hpp"
+#include "../sim/Locations.hpp"
+#include "../render/Skins.hpp"
 
 #include "../render/Convert.hpp"
 #include "../ui/Font.hpp"
@@ -69,6 +71,8 @@ void Game::initWindow() {
 
 int Game::run(const Options& opt) {
     opt_ = opt;
+    battle_.setLayout(&layout_);
+    replayStage_.setLayout(&layout_);
     capturing_ = !opt.captureDir.empty() || opt.benchSeconds > 0;
     settingsPath_ = defaultSettingsPath();
     settings_.load(settingsPath_);
@@ -80,7 +84,7 @@ int Game::run(const Options& opt) {
     ui::logo(GetScreenWidth() * 0.5f - 200, GetScreenHeight() * 0.42f, 1.0f, 0);
     ui::text("GENERATING TERRAIN, AIRBASE AND AIRCRAFT...", GetScreenWidth() * 0.5f, GetScreenHeight() * 0.62f, 16, Color{200, 210, 210, 200}, Align::Center);
     EndDrawing();
-    renderer_.init(terrain_, GetScreenWidth(), GetScreenHeight());
+    renderer_.init(terrain_, layout_, GetScreenWidth(), GetScreenHeight());
     replayStage_.createPlayer(AircraftId::F22);
     replayStage_.player().fm->resetAirborne({0, -5000, 0}, 0.0, 1.0, 0.0);
     replayStage_.player().alive = false;
@@ -89,6 +93,7 @@ int Game::run(const Options& opt) {
     applySettings();
     lighting_ = Lighting::preset(tod_);
 
+    if (settings_.location != "desert" && !capturing_) loadLocation(settings_.location, false);
     if (!opt.captureDir.empty()) { int r = runCapture(); shutdown(); return r; }
     if (opt.benchSeconds > 0) { int r = runBench(); shutdown(); return r; }
 
@@ -154,6 +159,346 @@ void Game::updateDynamicResolution(double dt) {
     }
 }
 
+namespace {
+// Objective titles are written in capitals for the HUD; read them aloud in sentence case.
+std::string spoken(const std::string& caps) {
+    std::string out;
+    std::string word;
+    auto flush = [&]() {
+        if (word.empty()) return;
+        static const char* keep[] = {"SAM", "ATS", "ATA", "SEAD", "AAA"};
+        bool k = false;
+        for (const char* w : keep) if (word == w) k = true;
+        if (!k) for (char& ch : word) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        out += word;
+        word.clear();
+    };
+    for (char ch : caps) {
+        if (std::isalnum(static_cast<unsigned char>(ch))) word += ch;
+        else { flush(); out += ch; }
+    }
+    flush();
+    if (!out.empty()) out[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(out[0])));
+    return out;
+}
+}  // namespace
+
+void Game::beginBriefing(int missionNo) {
+    briefT_ = 0;
+    briefObjectives_.clear();
+    std::string story, tip;
+    if (missionNo == 0) {
+        briefHeader_ = "DOGFIGHT ARENA";
+        briefTitle_ = "Hold the line";
+        story = "Waves of enemy fighters are inbound from the east, and the town below is ringed with flak guns and missile sites.";
+        tip = "Splash every bandit you can. Use flares the moment you hear the missile warning, and stay with your wingmen.";
+        briefObjectives_ = {"DESTROY INCOMING BANDIT WAVES", "SUPPRESS AAA AND SAM SITES (OPTIONAL)"};
+    } else {
+        char h[48];
+        std::snprintf(h, sizeof h, "MISSION %02d", missionNo);
+        briefHeader_ = h;
+        briefTitle_ = campaignCatalogue()[missionNo - 1].title;
+        if (campaignDef_) story = campaignDef_->briefing;
+        else if (missionNo == 1) story = "Today is your cold start and takeoff from runway zero nine. Start the engine, release the brakes, and climb out to three hundred metres heading east.";
+        else if (missionNo == 2) story = "Your first solo flight. Show me clean banks, a turn onto heading two seven zero, a climb to two thousand metres and a steady level-off.";
+        else story = "You're five kilometres out on final for runway zero nine. Gear down, fly the three degree glide path, touch down and bring it to a stop.";
+        if (mission_) for (const auto& st : mission_->steps()) briefObjectives_.push_back(st.title);
+        if (campaignDef_) {
+            bool ground = false, airObj = false;
+            for (const auto& o : campaignDef_->objectives) {
+                if (o.kind == ObjectiveKind::DestroyGroup) ground = true;
+                if (o.kind == ObjectiveKind::DestroyAir) airObj = true;
+            }
+            if (ground) tip = "For ground targets, select ATS with key two, keep the target near your nose until the lock tone, then fire. The cannon will also walk onto targets close to the nose.";
+            else if (airObj) tip = "Select ATA with key one, lock, and fire. Flares on X when they shoot back.";
+        }
+    }
+    briefText_ = story + (tip.empty() ? "" : " " + tip);
+    std::string say = "Captain, this is Captain Avery Langlois, Wing Operations. ";
+    say += missionNo == 0 ? std::string("Dogfight Arena. ") : (std::string("Mission ") + std::to_string(missionNo) + ", " + briefTitle_ + ". ");
+    say += story + " ";
+    if (!briefObjectives_.empty()) {
+        say += "Your objectives: ";
+        for (size_t i = 0; i < briefObjectives_.size(); ++i) {
+            say += spoken(briefObjectives_[i]);
+            say += i + 1 < briefObjectives_.size() ? "; " : ". ";
+        }
+    }
+    if (!tip.empty()) say += tip + " ";
+    say += "Good luck, Captain.";
+    briefText_ += " Good luck, Captain.";
+    briefCam_ = camMode_;
+    camMode_ = CameraMode::External;
+    orbitYaw_ = 2.4; orbitPitch_ = 0.20; zoom_ = 1.25;
+    screen_ = Screen::Briefing;
+    nav_.focus = 0;
+    speech_.setEnabled(settings_.voiceBriefings && !capturing_);
+    speech_.speak(say);
+}
+
+void Game::launchFromBriefing() {
+    speech_.stop();
+    screen_ = Screen::Playing;
+    camMode_ = briefCam_;
+    chaseInit_ = false;
+    audio_.play(Sfx::Radio);
+}
+
+void Game::updateBriefing(double dt) {
+    briefT_ += dt;
+    orbitYaw_ += dt * 0.12;   // slow fly-around of your aircraft while the captain talks
+    const InputState& in = input_.state();
+    if (briefT_ > 0.25 && (in.confirm || IsKeyPressed(KEY_SPACE))) { launchFromBriefing(); return; }
+    if (in.back || in.pause) {
+        speech_.stop();
+        startTitle();
+        if (mode_ == GameMode::None) screen_ = briefHeader_ == "DOGFIGHT ARENA" ? Screen::Title : Screen::Campaign;
+        nav_.focus = 0;
+    }
+}
+
+void Game::drawBriefing() {
+    float w = static_cast<float>(GetScreenWidth()), h = static_cast<float>(GetScreenHeight());
+    float s = h / 720.0f;
+    const Color accent = {150, 255, 205, 255}, amber = {255, 176, 60, 255};
+    DrawRectangleGradientH(0, 0, static_cast<int>(w * 0.5f), static_cast<int>(h), Color{0, 6, 10, 230}, Color{0, 6, 10, 170});
+    DrawRectangleGradientH(static_cast<int>(w * 0.5f), 0, static_cast<int>(w * 0.32f) + 1, static_cast<int>(h), Color{0, 6, 10, 170}, Color{0, 6, 10, 0});
+    float x = 56 * s, y = 46 * s;
+    ui::text("PRE-MISSION BRIEFING", x, y, 13 * s, amber);
+    ui::text(briefHeader_, x, y + 20 * s, 16 * s, accent);
+    ui::title(briefTitle_, x, y + 42 * s, 34 * s);
+    // the briefing officer: a stylised comms portrait (headset silhouette) with a live voice meter
+    float py = y + 104 * s;
+    Vector2 c = {x + 44 * s, py + 44 * s};
+    DrawCircleV(c, 44 * s, Color{18, 40, 44, 255});
+    DrawCircleLinesV(c, 44 * s, ui::withAlpha(accent, 0.6f));
+    BeginScissorMode(static_cast<int>(c.x - 44 * s), static_cast<int>(c.y - 44 * s), static_cast<int>(88 * s), static_cast<int>(88 * s));
+    Color sil = {120, 200, 180, 255};
+    DrawEllipse(static_cast<int>(c.x), static_cast<int>(c.y - 6 * s), 19 * s, 21 * s, Color{70, 130, 120, 255});      // hair
+    DrawEllipse(static_cast<int>(c.x + 13 * s), static_cast<int>(c.y + 6 * s), 7 * s, 15 * s, Color{70, 130, 120, 255}); // ponytail
+    DrawCircleV({c.x, c.y - 4 * s}, 15 * s, sil);                                                                    // face
+    DrawRectangleRounded({c.x - 30 * s, c.y + 18 * s, 60 * s, 40 * s}, 0.6f, 8, sil);                              // shoulders
+    DrawRing({c.x, c.y - 4 * s}, 16 * s, 19 * s, 180, 360, 24, Color{30, 60, 60, 255});                             // headset band
+    DrawRectangleRounded({c.x - 21 * s, c.y - 8 * s, 6 * s, 11 * s}, 0.5f, 4, Color{30, 60, 60, 255});             // ear cup
+    DrawLineEx({c.x - 17 * s, c.y + 2 * s}, {c.x - 6 * s, c.y + 8 * s}, 2 * s, Color{30, 60, 60, 255});           // mic boom
+    EndScissorMode();
+    float nx = x + 104 * s;
+    ui::text("CAPT. AVERY LANGLOIS", nx, py + 8 * s, 18 * s, WHITE);
+    ui::text("WING OPERATIONS  -  CALLSIGN NORTHSTAR", nx, py + 32 * s, 12 * s, ui::withAlpha(accent, 0.85f), Align::Left, false);
+    // voice meter
+    bool talking = speech_.speaking() || (!speech_.available() && briefT_ < briefText_.size() / 15.0);
+    for (int i = 0; i < 18; ++i) {
+        float a = talking ? 0.25f + 0.75f * std::fabs(std::sin(static_cast<float>(briefT_) * (7.0f + i * 1.3f) + i * 0.7f)) : 0.12f;
+        float bh = (4 + 18 * a) * s;
+        DrawRectangle(static_cast<int>(nx + i * 7 * s), static_cast<int>(py + 72 * s - bh), static_cast<int>(4 * s), static_cast<int>(bh), ui::withAlpha(accent, talking ? 0.9f : 0.35f));
+    }
+    if (!speech_.available() && settings_.voiceBriefings)
+        ui::text("(voice unavailable here - captions only)", nx + 140 * s, py + 58 * s, 11 * s, Color{170, 180, 180, 200}, Align::Left, false);
+    // typed-out briefing text, roughly at speaking pace
+    size_t shown = std::min(briefText_.size(), static_cast<size_t>(briefT_ * 17.0 + 1));
+    std::string partial = briefText_.substr(0, shown);
+    float ty = py + 108 * s;
+    float maxW = w * 0.52f;
+    std::string line, word;
+    auto emit = [&](bool force) {
+        if (!line.empty() && (force || ui::measure(line + " " + word, 17 * s, false) > maxW)) {
+            ui::text(line, x, ty, 17 * s, Color{230, 236, 236, 255}, Align::Left, false);
+            ty += 25 * s;
+            line.clear();
+        }
+    };
+    for (char ch : partial) {
+        if (ch == ' ') { emit(false); line += line.empty() ? word : " " + word; word.clear(); }
+        else word += ch;
+    }
+    emit(false);
+    line += line.empty() ? word : " " + word;
+    emit(true);
+    // objectives
+    ty += 14 * s;
+    ui::text("OBJECTIVES", x, ty, 13 * s, amber);
+    ty += 22 * s;
+    for (size_t i = 0; i < briefObjectives_.size() && i < 9; ++i) {
+        char b[16];
+        std::snprintf(b, sizeof b, "%zu", i + 1);
+        DrawRectangle(static_cast<int>(x), static_cast<int>(ty + 1 * s), static_cast<int>(18 * s), static_cast<int>(18 * s), ui::withAlpha(accent, 0.18f));
+        ui::text(b, x + 9 * s, ty + 3 * s, 12 * s, accent, Align::Center);
+        ui::text(briefObjectives_[i], x + 28 * s, ty + 2 * s, 15 * s, WHITE);
+        ty += 24 * s;
+    }
+    // footer
+    float pulse = 0.6f + 0.4f * std::sin(static_cast<float>(briefT_) * 3.0f);
+    ui::textShadow("ENTER  LAUNCH", x, h - 60 * s, 20 * s, ui::withAlpha(accent, pulse));
+    ui::text("ESC  BACK", x + 200 * s, h - 57 * s, 15 * s, Color{200, 210, 210, 200});
+    ui::text((std::string(battle_.player().fm->profile().name) + "  -  " + skin(battle_.player().skin).name), w - 40 * s, h - 57 * s, 14 * s, Color{200, 210, 210, 200}, Align::Right);
+}
+
+
+// ------------------------------------------------------------------------------------------
+// World locations
+// ------------------------------------------------------------------------------------------
+#ifdef __EMSCRIPTEN__
+EM_JS(void, sky_fetch_terrain, (const char* id), {
+    var name = UTF8ToString(id);
+    fetch('terrain/' + name + '.skt').then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.arrayBuffer();
+    }).then(function (buf) {
+        try { FS.mkdir('/terrain'); } catch (e) {}
+        FS.writeFile('/terrain/' + name + '.skt', new Uint8Array(buf));
+    }).catch(function (e) {
+        try { FS.mkdir('/terrain'); } catch (e2) {}
+        FS.writeFile('/terrain/' + name + '.missing', 'x');
+    });
+});
+#endif
+
+std::string Game::terrainPath(const std::string& id) {
+#ifdef __EMSCRIPTEN__
+    return "/terrain/" + id + ".skt";
+#else
+    std::string app = GetApplicationDirectory();
+    for (const std::string& p : {std::string("assets/terrain/") + id + ".skt", app + "assets/terrain/" + id + ".skt",
+                                 app + "../assets/terrain/" + id + ".skt", std::string("../assets/terrain/") + id + ".skt"})
+        if (FileExists(p.c_str())) return p;
+    return "assets/terrain/" + id + ".skt";
+#endif
+}
+
+bool Game::locationAvailable(const std::string& id) {
+    if (id == "desert") return true;
+    return FileExists(terrainPath(id).c_str());
+}
+
+double Game::safeAltitude(Vec3 a, Vec3 b, double margin) const {
+    double top = 0;
+    for (int k = 0; k <= 40; ++k) {
+        Vec3 p = a + (b - a) * (k / 40.0);
+        for (double dz : {-1500.0, 0.0, 1500.0}) top = std::max(top, terrain_.surfaceHeight(p.x, p.z + dz));
+    }
+    return std::max(2100.0, top + margin);
+}
+
+bool Game::loadLocation(const std::string& id, bool showProgress) {
+    if (terrain_.info().id == id) return true;
+    const LocationDef* loc = findLocation(id);
+    if (!loc) return false;
+    Heightmap hm;
+    if (id != "desert") {
+        std::string err;
+        if (!loadHeightmap(terrainPath(id), hm, err)) {
+            locStatus_ = loc->name + ": " + err + ". Run  python3 tools/fetch_real_terrain.py  (or the 'real terrain' GitHub action).";
+            return false;
+        }
+    }
+    if (showProgress && IsWindowReady()) {
+        BeginDrawing();
+        ClearBackground(Color{8, 12, 16, 255});
+        ui::text("LOADING  " + loc->name, GetScreenWidth() * 0.5f, GetScreenHeight() * 0.45f, 26, WHITE, Align::Center);
+        ui::text(loc->region, GetScreenWidth() * 0.5f, GetScreenHeight() * 0.45f + 36, 16, Color{150, 255, 205, 220}, Align::Center);
+        EndDrawing();
+    }
+    auto t0 = std::chrono::steady_clock::now();
+    if (id == "desert") terrain_ = Terrain();
+    else terrain_ = Terrain(hm, terrainInfoFor(*loc));
+    layout_ = WorldLayout::build(terrain_);
+    renderer_.rebuildWorld(terrain_, layout_);
+    battle_.setLayout(&layout_);
+    replayStage_.setLayout(&layout_);
+    settings_.location = id;
+    settings_.save(settingsPath_);
+    TraceLog(LOG_INFO, "SKYFALL: location %s loaded in %.0f ms (runway at %.0f m)", id.c_str(),
+             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(), terrain_.runway().center.y);
+    locStatus_.clear();
+    return true;
+}
+
+void Game::drawLocations() {
+    const InputState& in = input_.state();
+    float w = static_cast<float>(GetScreenWidth()), h = static_cast<float>(GetScreenHeight());
+    float s = h / 720.0f;
+    DrawRectangleGradientH(0, 0, static_cast<int>(w * 0.62f), static_cast<int>(h), Color{0, 0, 0, 200}, Color{0, 0, 0, 30});
+    ui::title("WORLD LOCATIONS", 50 * s, 26 * s, 32 * s);
+    const auto& L = locations();
+    const int n = static_cast<int>(L.size());
+    nav_.begin(n + 3, in.up, in.down, in.confirm, in.left, in.right);
+#ifdef __EMSCRIPTEN__
+    // finish a pending download
+    if (!locPending_.empty()) {
+        if (FileExists(terrainPath(locPending_).c_str())) { switchTo_ = locPending_; locPending_.clear(); }
+        else if (FileExists(("/terrain/" + locPending_ + ".missing").c_str())) {
+            locStatus_ = "This location's terrain has not been published with the web build yet.";
+            locPending_.clear();
+        }
+    }
+#endif
+    float x = 50 * s, y = 84 * s, bw = 420 * s, bh = 34 * s;
+    for (int i = 0; i < n; ++i) {
+        const LocationDef& l = L[i];
+        bool current = terrain_.info().id == l.id;
+        bool avail = locationAvailable(l.id);
+        std::string label = l.name + (current ? "   (CURRENT)" : "");
+        if (ui::button(nav_, i, {x, y, bw, bh}, label, "", true)) {
+            audio_.play(Sfx::Click);
+#ifdef __EMSCRIPTEN__
+            if (!avail) { locPending_ = l.id; locStatus_ = "Downloading " + l.name + " terrain..."; sky_fetch_terrain(l.id.c_str()); }
+            else
+#endif
+            if (!avail) {
+                Heightmap probe; std::string err;
+                loadHeightmap(terrainPath(l.id), probe, err);
+                locStatus_ = l.name + ": " + err + ". Run  python3 tools/fetch_real_terrain.py  (or the 'real terrain' GitHub action).";
+            } else if (l.id != terrain_.info().id) {
+                switchTo_ = l.id;
+            }
+            return;
+        }
+        ui::text(avail ? l.region : "NOT DOWNLOADED", x + bw - 10 * s, y + 10 * s, 12 * s,
+                 avail ? Color{150, 255, 205, 200} : Color{255, 150, 110, 220}, Align::Right, false);
+        y += bh + 3 * s;
+    }
+    // details of the focused location
+    if (nav_.focus < n) {
+        const LocationDef& l = L[nav_.focus];
+        Rectangle r = {x + bw + 30 * s, 84 * s, std::min(460.0f * s, w - (x + bw + 60 * s)), 150 * s};
+        ui::panel(r, Color{0, 0, 0, 150}, Color{150, 255, 205, 60});
+        ui::text(l.name, r.x + 14 * s, r.y + 12 * s, 22 * s, WHITE);
+        ui::text(l.region, r.x + 14 * s, r.y + 40 * s, 14 * s, Color{255, 176, 60, 230});
+        float ty = r.y + 64 * s;
+        std::string line, word;
+        for (char ch : l.blurb + " ") {
+            if (ch != ' ') { word += ch; continue; }
+            if (ui::measure(line + " " + word, 14 * s, false) > r.width - 28 * s) { ui::text(line, r.x + 14 * s, ty, 14 * s, Color{220, 230, 230, 230}, Align::Left, false); ty += 20 * s; line = word; }
+            else line = line.empty() ? word : line + " " + word;
+            word.clear();
+        }
+        if (!line.empty()) ui::text(line, r.x + 14 * s, ty, 14 * s, Color{220, 230, 230, 230}, Align::Left, false);
+    }
+    // actions at the current location
+    float ax = x + bw + 30 * s, ay = 260 * s, aw = std::min(460.0f * s, w - (x + bw + 60 * s));
+    if (ui::button(nav_, n, {ax, ay, aw, 46 * s}, "FLY DOGFIGHT ARENA HERE", terrain_.info().name)) { audio_.play(Sfx::Click); startArenaBriefed(); return; }
+    if (ui::button(nav_, n + 1, {ax, ay + 54 * s, aw, 46 * s}, "FREE FLIGHT HERE", "No enemies - explore the terrain")) {
+        audio_.play(Sfx::Click);
+        freeFlight_ = true;
+        startArena(false);
+        return;
+    }
+    if (ui::button(nav_, n + 2, {ax, ay + 108 * s, aw, 40 * s}, "BACK") || in.back) { startTitle(); nav_.focus = 2; return; }
+    if (!locStatus_.empty()) {
+        float ty = ay + 170 * s;
+        std::string line, word;
+        for (char ch : locStatus_ + " ") {
+            if (ch != ' ') { word += ch; continue; }
+            if (ui::measure(line + " " + word, 14 * s, false) > aw) { ui::text(line, ax, ty, 14 * s, Color{255, 170, 120, 240}, Align::Left, false); ty += 20 * s; line = word; }
+            else line = line.empty() ? word : line + " " + word;
+            word.clear();
+        }
+        if (!line.empty()) ui::text(line, ax, ty, 14 * s, Color{255, 170, 120, 240}, Align::Left, false);
+    }
+    if (terrain_.info().real)
+        ui::text(terrain_.info().attribution, 50 * s, h - 30 * s, 11 * s, Color{255, 255, 255, 120}, Align::Left, false);
+}
+
 bool Game::startModeFromString(const std::string& m) {
     // "arena", "m01".."m03" or "c04".."c40" (any mission number with either prefix)
     if (m == "arena") { startArena(false); return true; }
@@ -180,6 +525,8 @@ void Game::applySettings() {
     audio_.applySettings(settings_);
     battle_.player();  // ensure exists
     if (!battle_.jets().empty())
+        battle_.player().skin = settings_.skinFor(static_cast<int>(battle_.player().fm->profile().id));
+    if (!battle_.jets().empty())
         battle_.player().fm->setHandling(static_cast<HandlingMode>(settings_.handling));
 }
 
@@ -196,10 +543,11 @@ void Game::startTitle() {
     tod_ = TimeOfDay::GoldenHour;
     lighting_ = Lighting::preset(tod_);
     Jet& p = battle_.createPlayer(AircraftId::F22);
-    p.fm->resetAirborne({-2000, 2650, 6000}, -0.15, 210.0, 0.8);
+    double ta = safeAltitude({-8000, 0, 6000}, {14000, 0, 3000}, 450.0);
+    p.fm->resetAirborne({-2000, ta, 6000}, -0.15, 210.0, 0.8);
     // two wingmen for the cinematic formation (positions driven by the title scene)
-    battle_.debugAddJet(Team::Blue, AircraftId::F22, {-2100, 2660, 6040}, -0.15, 210);
-    battle_.debugAddJet(Team::Blue, AircraftId::F22, {-2100, 2640, 5960}, -0.15, 210);
+    battle_.debugAddJet(Team::Blue, AircraftId::F22, {-2100, ta + 10, 6040}, -0.15, 210);
+    battle_.debugAddJet(Team::Blue, AircraftId::F22, {-2100, ta - 10, 5960}, -0.15, 210);
     battle_.setAiEnabled(false);
     renderer_.effects().clear();
     hud_.clear();
@@ -211,6 +559,13 @@ void Game::startTitle() {
 }
 
 void Game::startMission(int n) {
+    if (terrain_.info().id != "desert") {
+        // the campaign is set in the Skyfall Desert: switch first (next frame), then start
+        switchTo_ = "desert";
+        switchMission_ = n;
+        return;
+    }
+    freeFlight_ = false;
     screen_ = Screen::Playing;
     mode_ = GameMode::Mission01;   // "guided mission" mode
     missionNo_ = n;
@@ -227,6 +582,7 @@ void Game::startMission(int n) {
         p.fm->resetAirborne({d.startX, d.startAlt, d.startZ}, campaignStartHeading(d), d.startSpeed, 0.85);
         mission_ = buildCampaignMission(d);
         camMode_ = CameraMode::Chase;
+        if (d.startFuel >= 0) p.fm->mutableState().fuelKg = d.startFuel * p.fm->profile().fuelMassKg;
         director_.begin(d, battle_);           // targets, allies (player must already be placed)
         director_.update(*mission_, battle_);  // waves owned by the first objective
     } else if (n == 2) {
@@ -276,7 +632,11 @@ void Game::startArena(bool keepPlayerState) {
         tod_ = TimeOfDay::Morning;
         lighting_ = Lighting::preset(tod_);
         Jet& p = battle_.createPlayer(static_cast<AircraftId>(settings_.aircraft));
-        p.fm->resetAirborne({-7500, 2100, 2600}, 0.0, 230.0, 0.8);
+        // start east of the runway, heading east, clear of the terrain ahead
+        const RunwayInfo& rw0 = terrain_.runway();
+        Vec3 sp{rw0.center.x + 1500, 0, rw0.center.z - 400};
+        sp.y = std::max(rw0.center.y + 1400.0, safeAltitude(sp, sp + Vec3{9000, 0, 0}, 500.0));
+        p.fm->resetAirborne(sp, 0.0, 230.0, 0.8);
         camMode_ = CameraMode::Chase;
         renderer_.effects().clear();
     }
@@ -294,12 +654,14 @@ void Game::startArena(bool keepPlayerState) {
     cfg.enemyJets = 3;
     cfg.allyJets = 2;
     cfg.seed = static_cast<unsigned>(GetRandomValue(1, 1000000));
+    if (freeFlight_) { cfg.enemyJets = 0; cfg.allyJets = 0; cfg.groundTargets = false; cfg.endlessWaves = false; }
     battle_.start(cfg);
     playerDead_ = false;
     respawnTimer_ = -1;
     chaseInit_ = false;
     applySettings();
-    hud_.radio("AWACS", "Skyfall One, multiple bandits bearing 090. Weapons free.", 6);
+    if (freeFlight_) hud_.radio("TOWER", "Skyfall One, free flight over " + terrain_.info().name + ". Enjoy the view.", 6);
+    else hud_.radio("AWACS", "Skyfall One, multiple bandits bearing 090. Weapons free.", 6);
     audio_.play(Sfx::Radio);
 }
 
@@ -317,6 +679,7 @@ void Game::startHangar() {
     camMode_ = CameraMode::External;
     orbitYaw_ = 2.2; orbitPitch_ = 0.18; zoom_ = 1.0;
     renderer_.effects().clear();
+    p.skin = settings_.skinFor(hangarSel_);
 }
 
 void Game::respawnPlayer() {
@@ -329,7 +692,12 @@ void Game::respawnPlayer() {
     Jet& p = battle_.player();
     const AircraftProfile& prof = p.fm->profile();
     p.fm = std::make_unique<FlightModel>(prof, terrain_);
-    p.fm->resetAirborne({-7000, 2200, 2400}, 0.0, 230.0, 0.8);
+    {
+        const RunwayInfo& rw0 = terrain_.runway();
+        Vec3 sp{rw0.center.x + 2000, 0, rw0.center.z - 600};
+        sp.y = std::max(rw0.center.y + 1500.0, safeAltitude(sp, sp + Vec3{9000, 0, 0}, 500.0));
+        p.fm->resetAirborne(sp, 0.0, 230.0, 0.8);
+    }
     p.fm->setHandling(static_cast<HandlingMode>(settings_.handling));
     p.alive = true;
     p.health = 100;
@@ -349,6 +717,16 @@ void Game::respawnPlayer() {
 // Frame
 // ------------------------------------------------------------------------------------------
 void Game::frame(double dt, bool render) {
+    if (!switchTo_.empty()) {
+        // menus request location changes; the world is rebuilt here, outside any drawing
+        std::string id = switchTo_;
+        int mission = switchMission_;
+        switchTo_.clear();
+        switchMission_ = 0;
+        bool ok = loadLocation(id, true);
+        if (mission > 0) { startMissionBriefed(mission); }
+        else if (ok) { startTitle(); screen_ = Screen::Locations; }
+    }
     time_ += dt;
     input_.update(dt, settings_);
     handleGlobalKeys();
@@ -368,9 +746,20 @@ void Game::frame(double dt, bool render) {
         case Screen::Title: titleTime_ += dt; updateTitleScene(dt); break;
         case Screen::Campaign: titleTime_ += dt; if (mode_ == GameMode::None) updateTitleScene(dt); break;
         case Screen::Hangar: updateTitleScene(dt); break;
+        case Screen::Briefing: updateBriefing(dt); break;
+        case Screen::Locations: titleTime_ += dt; updateTitleScene(dt); break;
         default: break;
     }
     updateCamera(dt);
+    if (screen_ == Screen::Briefing) {
+        // frame the aircraft on the right-hand side, clear of the briefing text
+        Vector3 fwd = Vector3Normalize(Vector3Subtract(cam_.target, cam_.position));
+        Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, cam_.up));
+        float d = Vector3Distance(cam_.target, cam_.position);
+        Vector3 shift = Vector3Scale(right, -0.42f * d);
+        cam_.position = Vector3Add(cam_.position, shift);
+        cam_.target = Vector3Add(cam_.target, shift);
+    }
     updateAudio();
     if (render) renderFrame();
 }
@@ -397,7 +786,7 @@ void Game::updateTitleScene(double dt) {
     // fly the lead aircraft straight and level; wingmen hold echelon positions
     int n = stepper_.advance(dt);
     for (int i = 0; i < n; ++i) battle_.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
-    if (screen_ == Screen::Title && battle_.jets().size() >= 3) {
+    if ((screen_ == Screen::Title || screen_ == Screen::Locations) && battle_.jets().size() >= 3) {
         const FlightState& lead = battle_.player().fm->state();
         const Vec3 offs[2] = {{-28, -4, 24}, {-56, -8, 48}};
         for (int k = 0; k < 2; ++k) {
@@ -414,7 +803,7 @@ void Game::updateTitleScene(double dt) {
             w.abLevel = lead.abLevel;
         }
         // keep the formation over the clouds
-        if (lead.pos.x > 12000) battle_.player().fm->resetAirborne({-6000, 2650, 6000}, -0.15, 210.0, 0.8);
+        if (lead.pos.x > 12000) battle_.player().fm->resetAirborne({-6000, safeAltitude({-8000, 0, 6000}, {14000, 0, 3000}, 450.0), 6000}, -0.15, 210.0, 0.8);
     }
     renderer_.effects().update(dt, battle_, lighting_, cam_.position, {});
     processEvents();
@@ -494,7 +883,7 @@ void Game::updatePlaying(double dt) {
     }
     if (mode_ == GameMode::Mission01 && missionDone_ && in.confirm) {
         if (missionNo_ < kCampaignMissions) {
-            startMission(missionNo_ + 1);
+            startMissionBriefed(missionNo_ + 1);
         } else {
             startTitle();
             screen_ = Screen::Campaign;
@@ -526,7 +915,9 @@ void Game::updatePlaying(double dt) {
             else hud_.radio("TOWER", "Skyfall One, welcome home. Press ENTER for navigation training.", 8);
             audio_.play(Sfx::Radio);
         }
-        if (mission_->status() == MissionStatus::Failed && !playerDead_) {
+        // A crash or shoot-down fails the mission too, but it takes the normal loss path below
+        // (live impact, then the side-observer replay with the "what went wrong" analysis).
+        if (mission_->status() == MissionStatus::Failed && !playerDead_ && p.alive && !fm.state().crashed) {
             playerDead_ = true;
             deathReason_ = "MISSION FAILED: " + mission_->failure();
             deathCamPos_ = cam_.position;
@@ -537,6 +928,7 @@ void Game::updatePlaying(double dt) {
     if (!p.alive && !playerDead_) {
         playerDead_ = true;
         deathReason_ = fm.state().crashReason == CrashReason::Destroyed ? "SHOT DOWN" : crashReasonText(fm.state().crashReason);
+        if (mode_ == GameMode::Mission01) deathReason_ = "MISSION FAILED: " + deathReason_;
         deathCamPos_ = cam_.position;
         deathTarget_ = toRl(fm.state().pos);
         deathTime_ = time_;
@@ -801,6 +1193,16 @@ void Game::renderFrame() {
     // effects need per-jet models for wingtips
     std::vector<const JetModel*> models;
     for (const auto& j : battle_.jets()) models.push_back(&renderer_.jetModel(j->fm->profile().style));
+    if (screen_ == Screen::Playing && !replayActive_) {
+        // factory chimneys smoke continuously (only near the camera)
+        chimneyTimer_ -= GetFrameTime() > 0 ? GetFrameTime() : 1.0 / 60.0;
+        if (chimneyTimer_ <= 0) {
+            chimneyTimer_ = 0.35;
+            for (const Vector3& c : renderer_.dressing().chimneyTops)
+                if (Vector3Distance(c, cam_.position) < 9000)
+                    renderer_.effects().spawnSmokePuff(c, {2.5f, 3.5f, 0.8f}, 5.0f, 34.0f, 16.0f, {0.62f, 0.62f, 0.64f}, 0.45f);
+        }
+    }
     if (screen_ == Screen::Playing && !capturing_ && !replayActive_)
         renderer_.effects().update(GetFrameTime() > 0 ? std::min(GetFrameTime(), 0.1f) : 1.0 / 60.0, battle_, lighting_, cam_.position, models);
 
@@ -868,7 +1270,7 @@ void Game::renderFrame() {
         hc.particles = renderer_.effects().particleCount();
         hc.showDebug = showDebug_;
         hc.showHelp = showHelp_;
-        hc.arena = mode_ == GameMode::Arena;
+        hc.arena = mode_ == GameMode::Arena && !freeFlight_;
         hc.timeOfDay = lighting_.name;
         hc.combiner = combiner;
         hc.minimap = renderer_.world().minimap;
@@ -935,6 +1337,8 @@ void Game::drawMenus() {
         case Screen::Hangar: drawHangar(); break;
         case Screen::Settings: drawSettings(); break;
         case Screen::Paused: drawPause(); break;
+        case Screen::Briefing: drawBriefing(); break;
+        case Screen::Locations: drawLocations(); break;
         default: break;
     }
 }
@@ -946,18 +1350,20 @@ void Game::drawTitle() {
     // left gradient for legibility
     DrawRectangleGradientH(0, 0, static_cast<int>(w * 0.55f), static_cast<int>(h), Color{0, 0, 0, 170}, Color{0, 0, 0, 0});
     ui::logo(70 * s, 70 * s, s, titleTime_);
-    nav_.begin(5, in.up, in.down, in.confirm, in.left, in.right);
-    float x = 70 * s, y = 250 * s, bw = 430 * s, bh = 52 * s, gap = 10 * s;
-    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "40 missions: training, strikes, dogfights")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; nav_.focus = 0; return; }
+    nav_.begin(6, in.up, in.down, in.confirm, in.left, in.right);
+    float x = 70 * s, y = 236 * s, bw = 430 * s, bh = 50 * s, gap = 9 * s;
+    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "51 missions: training, strikes, refuelling, dogfights")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; nav_.focus = 0; return; }
     y += bh + gap;
-    if (ui::button(nav_, 1, {x, y, bw, bh}, "DOGFIGHT ARENA", "Waves of fictional bandits, SAM sites and ground targets")) { audio_.play(Sfx::Click); startArena(false); return; }
+    if (ui::button(nav_, 1, {x, y, bw, bh}, "DOGFIGHT ARENA", "Bandit waves over " + terrain_.info().name)) { audio_.play(Sfx::Click); startArenaBriefed(); return; }
     y += bh + gap;
-    if (ui::button(nav_, 2, {x, y, bw, bh}, "HANGAR", "Choose from 8 aircraft")) { audio_.play(Sfx::Click); hangarSel_ = settings_.aircraft; startHangar(); nav_.focus = hangarSel_; return; }
+    if (ui::button(nav_, 2, {x, y, bw, bh}, "WORLD LOCATIONS", "Real terrain: Himalaya, Alps, Sahara, Andes, Rio...")) { audio_.play(Sfx::Click); screen_ = Screen::Locations; locStatus_.clear(); nav_.focus = 0; return; }
     y += bh + gap;
-    if (ui::button(nav_, 3, {x, y, bw, bh}, "SETTINGS", "Audio, graphics, controls")) { audio_.play(Sfx::Click); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 0; return; }
+    if (ui::button(nav_, 3, {x, y, bw, bh}, "HANGAR", "8 aircraft, 8 camouflage schemes")) { audio_.play(Sfx::Click); hangarSel_ = settings_.aircraft; startHangar(); nav_.focus = hangarSel_; return; }
     y += bh + gap;
-    if (ui::button(nav_, 4, {x, y, bw, bh}, "QUIT")) { quit_ = true; return; }
-    ui::text("v0.5  -  C++20 / raylib  -  fictional simulation, illustrative aircraft data", 70 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Left, false);
+    if (ui::button(nav_, 4, {x, y, bw, bh}, "SETTINGS", "Audio, graphics, controls")) { audio_.play(Sfx::Click); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 0; return; }
+    y += bh + gap;
+    if (ui::button(nav_, 5, {x, y, bw, bh}, "QUIT")) { quit_ = true; return; }
+    ui::text("v0.6  -  C++20 / raylib  -  fictional simulation, illustrative aircraft data", 70 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Left, false);
     ui::text("ENTER select   ARROWS navigate", w - 30 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Right, false);
 }
 
@@ -975,23 +1381,28 @@ void Game::drawCampaign() {
     std::snprintf(prog, sizeof prog, "%d / %d COMPLETE", done, n);
     ui::text(prog, w - 50 * s, 40 * s, 15 * s, Color{150, 255, 205, 230}, Align::Right);
     nav_.begin(n + 1, in.up, in.down, in.confirm, in.left, in.right);
-    if (in.left && nav_.focus < n) nav_.focus = (nav_.focus + n - 10) % n;      // columns of ten
-    if (in.right && nav_.focus < n) nav_.focus = (nav_.focus + 10) % n;
-    // four columns of ten
-    const float colW = std::min(300.0f * s, (w - 100 * s) / 4.0f - 10 * s);
-    const float rowH = 41 * s;
-    static const char* chapters[] = {"TRAINING", "OPERATIONS", "OFFENSIVE", "ENDGAME"};
-    for (int c = 0; c < 4; ++c)
-        ui::text(chapters[c], 50 * s + c * (colW + 10 * s), 78 * s, 12 * s, Color{255, 176, 60, 220});
+    // five chapters: 1-10, 11-20, 21-30, 31-40, 41-51
+    auto colOf = [](int i) { return std::min(4, i / 10); };
+    auto rowOf = [&](int i) { return i - colOf(i) * 10; };
+    if ((in.left || in.right) && nav_.focus < n) {
+        int c = colOf(nav_.focus) + (in.right ? 1 : 4);
+        c %= 5;
+        nav_.focus = std::min(c * 10 + std::min(rowOf(nav_.focus), c == 4 ? n - 41 : 9), n - 1);
+    }
+    const float colW = (w - 100 * s) / 5.0f - 8 * s;
+    const float rowH = 37 * s;
+    static const char* chapters[] = {"TRAINING", "OPERATIONS", "OFFENSIVE", "ENDGAME", "CRITICAL STRIKE"};
+    for (int c = 0; c < 5; ++c)
+        ui::text(chapters[c], 50 * s + c * (colW + 8 * s), 78 * s, 12 * s, Color{255, 176, 60, 220});
     for (int i = 0; i < n; ++i) {
         const MissionInfo& m = cat[i];
-        float col = static_cast<float>(i / 10), row = static_cast<float>(i % 10);
-        Rectangle r = {50 * s + col * (colW + 10 * s), 96 * s + row * (rowH + 4 * s), colW, rowH};
+        float col = static_cast<float>(colOf(i)), row = static_cast<float>(rowOf(i));
+        Rectangle r = {50 * s + col * (colW + 8 * s), 96 * s + row * (rowH + 3 * s), colW, rowH};
         char label[96];
         std::snprintf(label, sizeof label, "%02d  %s", m.number, m.title.c_str());
         if (ui::button(nav_, i, r, label, "", true)) {
             audio_.play(Sfx::Click);
-            startMission(m.number);
+            startMissionBriefed(m.number);
             return;
         }
         if (settings_.missionCompleted(m.number))
@@ -1020,7 +1431,16 @@ void Game::drawHangar() {
     DrawRectangleGradientH(0, 0, static_cast<int>(w * 0.45f), static_cast<int>(h), Color{0, 0, 0, 190}, Color{0, 0, 0, 0});
     ui::title("HANGAR", 60 * s, 40 * s, 38 * s);
     const auto& all = allProfiles();
-    nav_.begin(10, in.up, in.down, in.confirm, in.left, in.right);
+    nav_.begin(11, in.up, in.down, in.confirm, in.left, in.right);
+    // left / right on an aircraft row changes its camouflage directly
+    if (nav_.focus < 8 && (in.left || in.right)) {
+        int sk = settings_.skinFor(nav_.focus);
+        sk = (sk + (in.right ? 1 : kSkinCount - 1)) % kSkinCount;
+        settings_.setSkin(nav_.focus, sk);
+        settings_.save(settingsPath_);
+        if (!battle_.jets().empty()) battle_.player().skin = sk;
+        audio_.play(Sfx::Click, 0.5f);
+    }
     float y = 100 * s;
     for (int i = 0; i < 8; ++i) {
         const AircraftProfile& p = all[i];
@@ -1034,7 +1454,7 @@ void Game::drawHangar() {
         if (nav_.focus == i && hangarSel_ != i) { hangarSel_ = i; startHangar(); }
         y += 48 * s;
     }
-    if (ui::button(nav_, 8, {60 * s, y + 8 * s, 380 * s, 44 * s}, "FLY DOGFIGHT ARENA", all[settings_.aircraft].name)) { startArena(false); return; }
+    if (ui::button(nav_, 8, {60 * s, y + 8 * s, 380 * s, 44 * s}, "FLY DOGFIGHT ARENA", all[settings_.aircraft].name)) { startArenaBriefed(); return; }
     if (ui::button(nav_, 9, {60 * s, y + 58 * s, 380 * s, 40 * s}, "BACK") || in.back) { startTitle(); return; }
     // stats panel
     const AircraftProfile& p = all[hangarSel_];
@@ -1058,6 +1478,17 @@ void Game::drawHangar() {
     std::snprintf(b, sizeof b, "%.0f / %.0f deg/s", p.maxRollRate * 1.28 / kDeg, p.maxPitchRate * 2.05 / kDeg); row("Arcade roll / pitch", b);
     std::snprintf(b, sizeof b, "%d ATA + 4 ATS", p.missiles); row("Missiles", b);
     ui::text("Public, rounded figures; aero data tuned & illustrative.", r.x + 16 * s, r.y + r.height - 28 * s, 12 * s, Color{170, 190, 185, 200}, Align::Left, false);
+    // camouflage selector for the aircraft on display
+    int sk = settings_.skinFor(hangarSel_);
+    std::vector<std::string> names;
+    for (int i = 0; i < kSkinCount; ++i) names.push_back(skin(i).name);
+    if (ui::cycle(nav_, 10, {r.x, r.y + r.height + 14 * s, r.width, 44 * s}, "Camouflage", sk, names)) {
+        settings_.setSkin(hangarSel_, sk);
+        settings_.save(settingsPath_);
+        if (!battle_.jets().empty()) battle_.player().skin = sk;
+        audio_.play(Sfx::Click, 0.5f);
+    }
+    ui::text("LEFT / RIGHT on an aircraft also changes its camouflage", r.x, r.y + r.height + 66 * s, 12 * s, Color{170, 190, 185, 200}, Align::Left, false);
 }
 
 void Game::drawSettings() {
@@ -1066,7 +1497,7 @@ void Game::drawSettings() {
     float s = h / 720.0f;
     DrawRectangle(0, 0, static_cast<int>(w), static_cast<int>(h), Color{0, 0, 0, 170});
     ui::title("SETTINGS", 60 * s, 34 * s, 38 * s);
-    nav_.begin(20, in.up, in.down, in.confirm, in.left, in.right);
+    nav_.begin(21, in.up, in.down, in.confirm, in.left, in.right);
     float cw = 420 * s, rh = 42 * s, g = 6 * s;
     float x1 = 60 * s, x2 = 60 * s + cw + 40 * s;
     float y = 110 * s;
@@ -1079,6 +1510,7 @@ void Game::drawSettings() {
     changed |= ui::slider(nav_, 4, {x1, y, cw, rh}, "Radio / instructor", settings_.radio); y += rh + g;
     changed |= ui::slider(nav_, 5, {x1, y, cw, rh}, "Effects", settings_.effects); y += rh + g;
     changed |= ui::toggle(nav_, 6, {x1, y, cw, rh}, "Radio captions", settings_.captions); y += rh + g;
+    changed |= ui::toggle(nav_, 20, {x1, y, cw, rh}, "Spoken mission briefings", settings_.voiceBriefings); y += rh + g;
     ui::text("Music from other apps keeps playing; in-game music is off by default.", x1, y + 4 * s, 12 * s, Color{180, 190, 190, 200}, Align::Left, false);
     float y2 = 110 * s;
     ui::text("GRAPHICS & COMFORT", x2, y2 - 26 * s, 15 * s, kAccent);
@@ -1312,6 +1744,136 @@ int Game::runCapture() {
         }
         return 0;
     }
+    if (set == "skins") {
+        hideHud_ = true;
+        for (int ac : {0, 4}) {
+            hangarSel_ = ac;
+            for (int k = 0; k < kSkinCount; ++k) {
+                settings_.setSkin(ac, k);
+                startHangar();
+                screen_ = Screen::Playing;
+                orbitYaw_ = 2.5; orbitPitch_ = 0.35; zoom_ = 0.85;
+                scriptedStep(0.1, [&](double) {});
+                char nm[64];
+                std::snprintf(nm, sizeof nm, "skin_%d_%s", ac, skin(k).name);
+                for (char* q = nm; *q; ++q) if (*q == ' ') *q = '_';
+                snap(nm, 2);
+            }
+            settings_.setSkin(ac, 0);
+        }
+        return 0;
+    }
+    if (set == "locations") {
+        // every location whose data is present: title flyover + a free-flight view
+        for (const LocationDef& l : locations()) {
+            if (!locationAvailable(l.id)) continue;
+            loadLocation(l.id, false);
+            startTitle();
+            scriptedStep(0.2, [&](double) {});
+            snap((std::string("loc_") + l.id + "_title").c_str(), 3);
+            freeFlight_ = true;
+            startArena(false);
+            hideHud_ = false;
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            scriptedStep(0.3, [&](double) { setInput(0, 0, 0, 0); });
+            snap((std::string("loc_") + l.id + "_flight").c_str(), 4);
+            freeFlight_ = false;
+        }
+        loadLocation("desert", false);
+        return 0;
+    }
+    if (set == "world") {
+        hideHud_ = true;
+        auto look = [&](Vec3 target, double dist, double agl, double ang, const char* name) {
+            startArena(false);
+            battle_.clearCombatants();
+            battle_.setAiEnabled(false);
+            tod_ = TimeOfDay::Morning; lighting_ = Lighting::preset(tod_);
+            Vec3 from{target.x - std::cos(ang) * dist, 0, target.z - std::sin(ang) * dist};
+            from.y = std::max(terrain_.surfaceHeight(from.x, from.z), terrain_.surfaceHeight(target.x, target.z)) + agl;
+            double pitch = -std::atan2(from.y - terrain_.surfaceHeight(target.x, target.z), dist) * 0.85;
+            double hdg = ang + 0.32;   // keep the subject to the left of the jet in the chase view
+            battle_.player().fm->resetAirborne(from, hdg, 200, 0.6);
+            battle_.player().fm->mutableState().q = Quat::fromEuler(hdg, pitch, 0.0);
+            battle_.player().fm->mutableState().vel = Quat::fromEuler(hdg, pitch, 0.0).forward() * 200.0;
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            scriptedStep(0.2, [&](double) { setInput(0, 0, 0, 0); });
+            snap(name, 4);
+        };
+        const WorldLayout& L = layout_;
+        if (L.towns.size() > 1) look(L.towns[1].center, 900, 220, 0.4, "w_town");
+        if (L.towns.size() > 3) look(L.towns[3].center, 700, 160, 1.2, "w_village");
+        if (!L.factories.empty()) look(L.factories[0], 700, 180, 0.9, "w_industry");
+        int rb = L.largestBridge(true);
+        if (rb >= 0) { Vec3 m = (L.bridges[rb].a + L.bridges[rb].b) * 0.5; look(m, 500, 60, std::atan2(L.bridges[rb].b.z - L.bridges[rb].a.z, L.bridges[rb].b.x - L.bridges[rb].a.x) + 1.4, "w_rail_viaduct"); }
+        int best = -1; double bl = 0;
+        for (size_t i = 0; i < L.bridges.size(); ++i) if (!L.bridges[i].rail && L.bridges[i].maxClearance > bl) { bl = L.bridges[i].maxClearance; best = static_cast<int>(i); }
+        if (best >= 0) { Vec3 m = (L.bridges[best].a + L.bridges[best].b) * 0.5; look(m, 450, 50, std::atan2(L.bridges[best].b.z - L.bridges[best].a.z, L.bridges[best].b.x - L.bridges[best].a.x) + 1.5, "w_road_bridge"); }
+        if (!L.turbines.empty()) look(L.turbines[0].pos, 700, 120, 0.3, "w_wind_farm");
+        if (L.railway.length() > 0) {
+            double lead = std::fmod(time_ * 17.0, L.railway.length());
+            look(L.railway.at(lead), 300, 70, 2.2, "w_train");
+        }
+        look(Vec3{-6000, 0, 3600}, 2500, 500, 0.2, "w_overview");
+        hideHud_ = false;
+        return 0;
+    }
+    if (set == "infra") {
+        auto approachGroup = [&](int mission, int group, double dist, double agl, double ang, const char* name, bool hud) {
+            startMission(mission);
+            battle_.setAiEnabled(false);
+            hideHud_ = !hud;
+            Vec3 c; int n = 0;
+            for (const GroundTarget& g : battle_.ground()) if (g.group == group) { c += g.pos; ++n; }
+            if (n) c = c * (1.0 / n);
+            Vec3 from{c.x - std::cos(ang) * dist, 0, c.z - std::sin(ang) * dist};
+            from.y = std::max(terrain_.surfaceHeight(from.x, from.z), c.y) + agl;
+            double pitch = -std::atan2(from.y - c.y, dist) * 0.8;
+            battle_.player().fm->resetAirborne(from, ang, 200, 0.6);
+            battle_.player().fm->mutableState().q = Quat::fromEuler(ang, pitch, 0.0);
+            battle_.player().fm->mutableState().vel = Quat::fromEuler(ang, pitch, 0.0).forward() * 200.0;
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            scriptedStep(0.25, [&](double) { setInput(0, 0, 0, 0); });
+            snap(name, 4);
+        };
+        approachGroup(42, 1, 900, 160, 0.3, "i42_power_plant", false);
+        approachGroup(43, 1, 800, 150, 0.8, "i43_refinery", false);
+        approachGroup(44, 1, 900, 120, 1.9, "i44_viaduct", true);
+        approachGroup(45, 1, 600, 120, 0.5, "i45_comms_tower", false);
+        approachGroup(46, 1, 500, 90, 1.2, "i46_train", false);
+        approachGroup(47, 1, 900, 180, 0.6, "i47_factories", false);
+        approachGroup(48, 1, 600, 110, 0.4, "i48_parked_jets", false);
+        approachGroup(50, 1, 600, 120, 0.4, "i50_ammo", false);
+        approachGroup(42, 1, 2500, 300, 0.3, "i42_hud", true);
+        // tanker: rendezvous view and the refuelling position
+        startMission(41);
+        battle_.setAiEnabled(false);
+        hideHud_ = false;
+        {
+            const Tanker& tk = battle_.tanker();
+            Vec3 fwd{std::cos(tk.heading), 0, std::sin(tk.heading)};
+            battle_.player().fm->resetAirborne(tk.pos - fwd * 260.0 - Vec3{0, 25, 0}, tk.heading, tk.speed, 0.6);
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            scriptedStep(0.1, [&](double) { setInput(0, 0, 0, 0); });
+            snap("i41_tanker_approach", 3);
+            Quat q = Quat::fromEuler(battle_.tanker().heading, 0.0, 0.0);
+            FlightState& st = battle_.player().fm->mutableState();
+            st.q = q;
+            st.pos = battle_.tanker().basket() - q.forward() * 8.0 - q.up() * 1.0;
+            st.vel = battle_.tanker().vel;
+            scriptedStep(0.5, [&](double) {
+                const Tanker& t2 = battle_.tanker();
+                Quat q2 = Quat::fromEuler(t2.heading, 0.0, 0.0);
+                FlightState& s2 = battle_.player().fm->mutableState();
+                s2.q = q2; s2.vel = t2.vel;
+                s2.pos = t2.basket() - q2.forward() * 8.0 - q2.up() * 1.0;
+                setInput(0, 0, 0, 0);
+            });
+            snap("i41_refuelling", 3);
+        }
+        hideHud_ = false;
+        return 0;
+    }
     if (set == "campaign") {
         // new ground targets and campaign HUD, framed from a jet approaching each site
         auto approach = [&](int mission, double tx, double tz, double dist, double agl, const char* name, double side = 0.0) {
@@ -1331,6 +1893,12 @@ int Game::runCapture() {
         };
         startTitle(); screen_ = Screen::Campaign; nav_.focus = 12;
         snap("campaign_menu", 1);
+        startMissionBriefed(13);
+        for (int i = 0; i < 90; ++i) { briefT_ += 1.0 / 30.0; }
+        snap("briefing_m13", 2);
+        startArenaBriefed();
+        briefT_ = 30;
+        snap("briefing_arena", 2);
         approach(12, 3900, -5673, 1500, 220, "c12_gun_line");
         approach(13, 11500, -6000, 1400, 260, "c13_oil_rig", 0.5);
         approach(17, -5500, -6500, 1300, 260, "c17_fuel_depot");

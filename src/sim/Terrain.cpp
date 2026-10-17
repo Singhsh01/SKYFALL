@@ -243,9 +243,115 @@ double Terrain::rawHeight(double x, double z) const {
     return h;
 }
 
-double Terrain::analyticHeight(double x, double z) const { return applyModifiers(x, z, rawHeight(x, z)); }
+double Terrain::analyticHeight(double x, double z) const {
+    if (info_.real) {
+        // beyond a real map the edge simply continues
+        double cx = clampd(x, -kHalfSize, kHalfSize - 1e-6), cz = clampd(z, -kHalfSize, kHalfSize - 1e-6);
+        return height(cx, cz);
+    }
+    return applyModifiers(x, z, rawHeight(x, z));
+}
+
+Terrain::Terrain(const Heightmap& hm, const TerrainInfo& info) : info_(info) {
+    info_.real = true;
+    runway_.heading = 0.0;
+    runway_.length = 3000.0;
+    runway_.width = 45.0;
+    const int n = kGridCells + 1;
+    grid_.assign(static_cast<size_t>(n) * n, 0.0f);
+    // 1. resample the source grid (bilinear) onto the game grid, plus metre-scale relief detail
+    auto src = [&](double x, double z) {
+        double u = (x / hm.extent + 0.5) * (hm.n - 1), v = (z / hm.extent + 0.5) * (hm.n - 1);
+        u = clampd(u, 0.0, hm.n - 1.001);
+        v = clampd(v, 0.0, hm.n - 1.001);
+        int i = static_cast<int>(u), j = static_cast<int>(v);
+        double fu = u - i, fv = v - j;
+        double a = hm.at(i, j), b = hm.at(i + 1, j), c = hm.at(i, j + 1), d = hm.at(i + 1, j + 1);
+        return (a + (b - a) * fu) * (1.0 - fv) + (c + (d - c) * fu) * fv;
+    };
+    parallelRows(n, [&](int j) {
+        for (int i = 0; i < n; ++i) {
+            double x = -kHalfSize + i * kCell, z = -kHalfSize + j * kCell;
+            double h = src(x, z);
+            if (h > 2.0) h += (ridged2(x / 120.0, z / 120.0, 2, 91u) - 0.4) * 4.0 + (fbm2(x / 50.0, z / 50.0, 2, 93u) - 0.5) * 1.5;
+            grid_[static_cast<size_t>(j) * n + i] = static_cast<float>(h);
+        }
+    });
+    auto raw = [&](double x, double z) {
+        double gx = (x + kHalfSize) / kCell, gz = (z + kHalfSize) / kCell;
+        int i = std::clamp(static_cast<int>(gx), 0, kGridCells), j = std::clamp(static_cast<int>(gz), 0, kGridCells);
+        return static_cast<double>(gridAt(i, j));
+    };
+    // 2. runway: the flattest dry east-west strip, preferring the middle of the map
+    double best = 1e18;
+    Vec3 rc{0, 0, 0};
+    for (double cz = -11000; cz <= 11000; cz += 500)
+        for (double cx = -10000; cx <= 10000; cx += 500) {
+            double lo = 1e9, hi = -1e9;
+            bool wet = false;
+            for (double ax = -1800; ax <= 1800; ax += 300)
+                for (double az : {-350.0, 0.0, 350.0}) {
+                    double h = raw(cx + ax, cz + az);
+                    if (h < 2.0) wet = true;
+                    lo = std::min(lo, h);
+                    hi = std::max(hi, h);
+                }
+            if (wet) continue;
+            double score = (hi - lo) + std::hypot(cx, cz) * 0.004;
+            if (score < best) { best = score; rc = {cx, 0.5 * (lo + hi), cz}; }
+        }
+    if (best > 1e17) rc = {0, std::max(10.0, raw(0, 0)), 0};
+    runway_.center = rc;
+    // 3. battlefield town: the flattest dry spot at least 5 km from the runway
+    best = 1e18;
+    town_ = {rc.x + 6000, 0, rc.z};
+    for (double cz = -12000; cz <= 12000; cz += 500)
+        for (double cx = -12000; cx <= 12000; cx += 500) {
+            if (std::hypot(cx - rc.x, cz - rc.z) < 5000) continue;
+            double lo = 1e9, hi = -1e9;
+            bool wet = false;
+            for (int k = 0; k < 9; ++k) {
+                double a = k * kPi / 4, r = k == 8 ? 0.0 : 500.0;
+                double h = raw(cx + std::cos(a) * r, cz + std::sin(a) * r);
+                if (h < 2.0) wet = true;
+                lo = std::min(lo, h);
+                hi = std::max(hi, h);
+            }
+            if (wet) continue;
+            double score = (hi - lo) + std::hypot(cx - rc.x, cz - rc.z) * 0.001;
+            if (score < best) { best = score; town_ = {cx, 0.5 * (lo + hi), cz}; }
+        }
+    // cumulus layer ~1.4 km above the median ground (valleys stay clear, high peaks poke through)
+    {
+        std::vector<float> sample;
+        for (int j = 0; j < n; j += 32) for (int i = 0; i < n; i += 32) sample.push_back(grid_[static_cast<size_t>(j) * n + i]);
+        std::nth_element(sample.begin(), sample.begin() + sample.size() / 2, sample.end());
+        info_.cloudBase = std::max(1800.0, static_cast<double>(sample[sample.size() / 2]) + 1400.0);
+    }
+    // 4. flatten the airbase and the town square
+    parallelRows(n, [&](int j) {
+        for (int i = 0; i < n; ++i) {
+            double x = -kHalfSize + i * kCell, z = -kHalfSize + j * kCell;
+            float& g = grid_[static_cast<size_t>(j) * n + i];
+            g = static_cast<float>(applyModifiers(x, z, g));
+        }
+    });
+    town_.y = height(town_.x, town_.z);
+}
 
 double Terrain::applyModifiers(double x, double z, double h) const {
+    if (info_.real) {
+        // airbase plateau (narrower transition than the desert map: real valleys are tighter)
+        double dx = std::fabs(x - runway_.center.x) - (runway_.length * 0.5 + 400.0);
+        double dz = std::fabs(z - runway_.center.z) - 500.0;
+        double outside = std::sqrt(std::max(dx, 0.0) * std::max(dx, 0.0) + std::max(dz, 0.0) * std::max(dz, 0.0));
+        double w = 1.0 - smoothstep(0.0, 900.0, outside);
+        h = lerpd(h, runway_.center.y - 0.6, w);
+        double tdx = x - town_.x, tdz = z - town_.z;
+        double tw = 1.0 - smoothstep(450.0, 900.0, std::sqrt(tdx * tdx + tdz * tdz));
+        h = lerpd(h, town_.y, tw);
+        return h;
+    }
     // Airbase plateau: flatten a soft rectangle around the runway.
     {
         double dx = std::fabs(x - runway_.center.x) - (runway_.length * 0.5 + 600.0);
@@ -307,7 +413,7 @@ SurfaceKind Terrain::surface(double x, double z) const {
     if (h < kSeaLevel) return SurfaceKind::Water;
     if (h < 8.0) return SurfaceKind::Sand;
     Vec3 n = normal(x, z, 20.0);
-    if (h > 1500.0 && n.y > 0.75) return SurfaceKind::Snow;
+    if (h > info_.snowLine && n.y > 0.75) return SurfaceKind::Snow;
     if (n.y < 0.78) return SurfaceKind::Rock;
     double dx = x - town_.x, dz = z - town_.z;
     if (dx * dx + dz * dz < 1100.0 * 1100.0) return SurfaceKind::Town;

@@ -1,0 +1,41 @@
+name: real terrain
+
+# One click: Actions -> "real terrain" -> Run workflow.
+# Downloads open elevation data (AWS Terrain Tiles: SRTM, GMTED2010, ETOPO1, NED, ...) for every
+# real-world location and commits assets/terrain/*.skt to the repository. The game, the macOS
+# download and the browser version then offer those locations under WORLD LOCATIONS.
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Comma-separated location ids (empty = all)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download and convert elevation tiles
+        run: |
+          if [ -n "${{ github.event.inputs.only }}" ]; then
+            python3 tools/fetch_real_terrain.py --only "${{ github.event.inputs.only }}"
+          else
+            python3 tools/fetch_real_terrain.py
+          fi
+          ls -la assets/terrain
+      - name: Commit terrain data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/terrain
+          git diff --cached --quiet && echo "nothing new" && exit 0
+          git commit -m "Real terrain data for world locations"
+          git push

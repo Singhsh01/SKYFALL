@@ -1,6 +1,7 @@
 // Procedural, deterministic terrain shared by physics (collision) and rendering (meshes).
-// It is fictional: an arid, eroded mountain range around a desert valley, a coast to the east.
-// NOT a real-world map.
+// By default it is fictional: an arid, eroded mountain range around a desert valley, a coast to
+// the east. It can also be built from real elevation data (see sim/Locations.hpp): the runway and
+// the battlefield town are then placed on the flattest suitable ground.
 //
 // The analytic height function (domain-warped noise + ridges) is evaluated on a 1025^2 grid,
 // shaped by a deterministic particle-based hydraulic erosion pass (dendritic gullies, alluvial
@@ -10,6 +11,7 @@
 
 #include "Math.hpp"
 
+#include <string>
 #include <vector>
 
 namespace sky {
@@ -24,12 +26,38 @@ struct RunwayInfo {
 
 enum class SurfaceKind { Water, Sand, Grass, Forest, Rock, Snow, Runway, Town };
 
+enum class Biome { Desert = 0, Alpine = 1, Temperate = 2, Tropical = 3 };
+
+/// What the terrain represents and how it should be dressed (materials, vegetation, clouds).
+struct TerrainInfo {
+    std::string id = "desert";
+    std::string name = "Skyfall Desert";
+    std::string region = "Procedural";
+    Biome biome = Biome::Desert;
+    double snowLine = 1650;    // m: snow on gentle slopes above this
+    double treeLine = 520;     // m: vegetation below this
+    double highRock = 1050;    // m: bare grey rock above this
+    double cloudBase = 2100;   // m: cumulus layer height
+    bool real = false;         // built from real elevation data
+    std::string attribution;
+};
+
+/// A square elevation grid (row 0 = north edge, z increasing southwards) covering `extent` metres.
+struct Heightmap {
+    int n = 0;
+    double extent = 32000.0;
+    std::vector<float> h;
+    float at(int i, int j) const { return h[static_cast<size_t>(j) * n + i]; }
+};
+
 class Terrain {
 public:
     static constexpr double kHalfSize = 16000.0;  // map spans [-16 km, +16 km] on X and Z
     static constexpr double kSeaLevel = 0.0;
 
-    Terrain();
+    Terrain();                                                   // procedural desert (default)
+    Terrain(const Heightmap& hm, const TerrainInfo& info);       // real elevation data
+    const TerrainInfo& info() const { return info_; }
     /// Ground (or sea-floor) height at (x, z). Deterministic and cheap enough for physics.
     double height(double x, double z) const;
     /// Height of whatever the aircraft would collide with: max(ground, sea surface).
@@ -57,6 +85,7 @@ private:
     std::vector<float> grid_;
     RunwayInfo runway_;
     Vec3 town_;
+    TerrainInfo info_;
 };
 
 /// Deterministic value-noise helpers (also mirrored in the terrain shader for detail).

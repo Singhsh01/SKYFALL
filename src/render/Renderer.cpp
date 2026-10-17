@@ -4,6 +4,7 @@
 #include "Convert.hpp"
 #include "MeshBuilder.hpp"
 #include "Shaders.hpp"
+#include "Skins.hpp"
 #include "rlgl.h"
 
 #include <algorithm>
@@ -63,8 +64,20 @@ void main() { finalColor = vec4(1.0); }
 )GLSL";
 constexpr int kShadowSize = 2048;
 
+Vector3 g_paintC{0, 0, 0};   // third camouflage colour for the jet drawn next
+float g_paintRough = 0.42f;
+
 Vector3 paintFor(const Jet& j, Vector3& b, float& camo) {
     camo = 0;
+    g_paintRough = 0.42f;
+    if (j.skin > 0) {
+        const Skin& k = skin(j.skin);
+        b = k.b;
+        g_paintC = k.c;
+        camo = static_cast<float>(static_cast<int>(k.pattern));
+        g_paintRough = k.roughness;
+        return k.a;
+    }
     AirframeStyle st = j.fm->profile().style;
     if (j.team == Team::Blue) {
         switch (st) {   // linear-space greys close to the real-world schemes of each family
@@ -81,6 +94,7 @@ Vector3 paintFor(const Jet& j, Vector3& b, float& camo) {
     // hostile "aggressor" desert splinter scheme: reads clearly against sky and sand
     camo = 1;
     b = {0.16f, 0.12f, 0.08f};
+    g_paintC = {0.36f, 0.30f, 0.21f};
     return {0.36f, 0.30f, 0.21f};
 }
 }  // namespace
@@ -129,10 +143,11 @@ void Renderer::freeTarget(RenderTexture2D& rt) {
     rt = RenderTexture2D{};
 }
 
-bool Renderer::init(const Terrain& t, int width, int height) {
+bool Renderer::init(const Terrain& t, const WorldLayout& layout, int width, int height) {
     terrain_ = &t;
     auto t0 = std::chrono::steady_clock::now();
     world_.build(t);
+    dressing_.build(t, layout, BuildingStyle::Desert, true);
     for (int s = 0; s < 6; ++s) jets_[s] = buildJetModel(static_cast<AirframeStyle>(s));
     flame_ = buildFlameMesh();
     missile_ = buildMissileMesh();
@@ -232,8 +247,40 @@ bool Renderer::init(const Terrain& t, int width, int height) {
     bindShadow(lit_, litMat_);
     bindShadow(jet_, jetMat_);
     bindShadow(runway_, runwayMat_);
+    applyTerrainInfo();
     resize(width, height);
     return true;
+}
+
+void Renderer::applyTerrainInfo() {
+    const TerrainInfo& ti = terrain_->info();
+    terrain_p_.setF("uBiome", static_cast<float>(static_cast<int>(ti.biome)));
+    terrain_p_.setF("uSnowLine", static_cast<float>(ti.snowLine));
+    terrain_p_.setF("uTreeLine", static_cast<float>(ti.treeLine));
+    terrain_p_.setF("uHighRock", static_cast<float>(ti.highRock));
+    terrain_p_.setF("uCloudBase", static_cast<float>(ti.cloudBase));
+}
+
+void Renderer::rebuildWorld(const Terrain& t, const WorldLayout& layout) {
+    terrain_ = &t;
+    world_.unload();
+    world_.build(t);
+    BuildingStyle style = BuildingStyle::Desert;
+    switch (t.info().biome) {
+        case Biome::Alpine: style = BuildingStyle::Alpine; break;
+        case Biome::Temperate: style = BuildingStyle::Temperate; break;
+        case Biome::Tropical: style = BuildingStyle::Tropical; break;
+        default: break;
+    }
+    dressing_.build(t, layout, style, !t.info().real);
+    buildClouds(t);
+    effects_.clear();
+    effects_.init(world_.puff, world_.glow, world_.spark);
+    // re-point the materials at the new world textures
+    for (Material* m : {&terrainMat_, &waterMat_, &jetMat_, &flameMat_, &cloudMat_, &runwayMat_}) m->maps[MATERIAL_MAP_METALNESS].texture = world_.noise;
+    waterMat_.maps[MATERIAL_MAP_NORMAL].texture = world_.depthMap;
+    terrainMat_.maps[MATERIAL_MAP_EMISSION].texture = world_.terrainData;
+    applyTerrainInfo();
 }
 
 void Renderer::resize(int width, int height) {
@@ -251,10 +298,13 @@ void Renderer::resize(int width, int height) {
 
 void Renderer::shutdown() {
     world_.unload();
+    dressing_.unload();
     for (auto& j : jets_) unloadJetModel(j);
     UnloadMesh(flame_); UnloadMesh(missile_);
     UnloadMesh(tank_); UnloadMesh(truck_); UnloadMesh(aaa_); UnloadMesh(sam_); UnloadMesh(bunker_); UnloadMesh(radar_);
-    for (Mesh* m : {&gun_, &artillery_, &oilRig_, &fuelTank_, &hangar_, &command_, &ship_}) UnloadMesh(*m);
+    for (Mesh* m : {&gun_, &artillery_, &oilRig_, &fuelTank_, &hangar_, &command_, &ship_, &powerPlant_, &refinery_, &bridgeDeck_,
+                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_})
+        UnloadMesh(*m);
     for (Prog* p : {&sky_, &terrain_p_, &water_, &lit_, &jet_, &flameP_, &cloud_, &runway_, &particle_, &bright_, &blur_, &composite_})
         UnloadShader(p->sh);
     freeTarget(scene_); freeTarget(bloomA_); freeTarget(bloomB_); freeTarget(bloomC_); freeTarget(bloomD_);
@@ -411,13 +461,153 @@ void Renderer::buildGroundModels() {
         m.box({8.6f, fb + 1.1f, 0}, {2.6f, 0.18f, 0.18f}, dark, MatrixRotateZ(0.35f));
         ship_ = m.build();
     }
+    const Color brick = {150, 112, 88, 255}, cool = {196, 192, 184, 255}, rust = {132, 82, 52, 255}, darkSteel = {70, 72, 74, 255};
+    {
+        MeshBuilder m;  // power plant: turbine hall, two hyperboloid cooling towers, stack
+        m.box({0, 9.0f, 0}, {48.0f, 18.0f, 26.0f}, concrete);
+        m.box({0, 19.0f, 0}, {50.0f, 2.0f, 28.0f}, {120, 118, 112, 255});
+        m.box({-30.0f, 6.0f, 0}, {12.0f, 12.0f, 20.0f}, brick);
+        for (float cx : {38.0f, 78.0f}) {
+            // hourglass tower from stacked tapered rings
+            const float rs[] = {19.0f, 16.0f, 13.5f, 12.5f, 13.0f, 14.0f};
+            for (int k = 0; k < 5; ++k)
+                m.cylinder({cx, k * 11.0f, 18.0f}, rs[k], 11.0f, 24, cool, MatrixIdentity(), rs[k + 1]);
+        }
+        m.cylinder({-14.0f, 20.0f, -8.0f}, 2.6f, 60.0f, 12, {170, 160, 150, 255}, MatrixIdentity(), 1.9f);
+        for (int i = 0; i < 3; ++i) m.box({-16.0f + i * 16.0f, 2.0f, -24.0f}, {10.0f, 4.0f, 7.0f}, darkSteel);   // transformers
+        powerPlant_ = m.build();
+    }
+    {
+        MeshBuilder m;  // refinery: columns, furnaces, pipe racks, flare
+        for (int i = 0; i < 4; ++i) m.cylinder({-14.0f + i * 9.0f, 0, -6.0f}, 2.0f + (i % 2) * 0.8f, 26.0f + i * 5.0f, 12, white);
+        m.box({8.0f, 7.0f, -6.0f}, {14.0f, 14.0f, 10.0f}, rust);
+        m.box({0, 6.0f, 8.0f}, {44.0f, 0.8f, 3.0f}, darkSteel);   // pipe rack
+        for (int i = 0; i < 6; ++i) m.box({-20.0f + i * 8.0f, 3.0f, 8.0f}, {0.6f, 6.0f, 3.0f}, darkSteel);
+        for (int i = 0; i < 4; ++i) m.cylinder({-20.0f + i * 0.0f, 6.6f + i * 0.0f, 7.0f + i * 0.7f}, 0.35f, 44.0f, 6, {150, 150, 140, 255}, MatrixMultiply(MatrixRotateZ(-PI / 2), MatrixTranslate(-20.0f, 6.6f, 7.0f + i * 0.7f)));
+        m.cylinder({26.0f, 0, -14.0f}, 0.8f, 42.0f, 8, {150, 40, 30, 255});   // flare stack
+        m.box({0, 0.2f, 0}, {60.0f, 0.4f, 40.0f}, concrete);
+        refinery_ = m.build();
+    }
+    {
+        MeshBuilder m;  // bridge deck, unit length along +X (scaled per bridge), girders and parapets
+        m.box({0, -0.9f, 0}, {1.0f, 1.8f, 9.0f}, concrete);
+        m.box({0, -2.6f, -2.4f}, {1.0f, 1.8f, 1.2f}, {120, 116, 108, 255});
+        m.box({0, -2.6f, 2.4f}, {1.0f, 1.8f, 1.2f}, {120, 116, 108, 255});
+        m.box({0, 0.6f, -4.3f}, {1.0f, 1.2f, 0.4f}, {175, 172, 165, 255});
+        m.box({0, 0.6f, 4.3f}, {1.0f, 1.2f, 0.4f}, {175, 172, 165, 255});
+        m.box({0, 0.05f, 0}, {1.0f, 0.1f, 6.0f}, {70, 66, 60, 255});
+        bridgeDeck_ = m.build();
+    }
+    {
+        MeshBuilder m;  // bridge pier: 90 m tall (sinks into the ground where the valley is shallow)
+        m.box({0, -45.0f, 0}, {3.2f, 90.0f, 7.0f}, {160, 154, 142, 255});
+        m.box({0, -3.0f, 0}, {4.0f, 2.0f, 9.0f}, {150, 146, 136, 255});
+        bridgePier_ = m.build();
+    }
+    {
+        MeshBuilder m;  // lattice communications mast with dishes
+        m.cylinder({0, 0, 0}, 3.2f, 92.0f, 4, {200, 70, 60, 255}, MatrixIdentity(), 0.5f);
+        for (int k = 0; k < 6; ++k) m.box({0, 8.0f + k * 14.0f, 0}, {5.0f - k * 0.6f, 0.5f, 5.0f - k * 0.6f}, white);
+        for (int k = 0; k < 3; ++k) m.cylinder({1.8f, 30.0f + k * 18.0f, 0}, 1.6f, 0.6f, 12, white, MatrixMultiply(MatrixRotateZ(-PI / 2), MatrixTranslate(1.8f, 30.0f + k * 18.0f, 0)), 0.3f);
+        m.box({6.0f, 2.0f, 6.0f}, {6.0f, 4.0f, 4.0f}, concrete);
+        commTower_ = m.build();
+    }
+    {
+        MeshBuilder m;  // factory: saw-tooth roof hall + chimney
+        m.box({0, 6.0f, 0}, {60.0f, 12.0f, 32.0f}, brick);
+        for (int i = 0; i < 6; ++i) {
+            float x0 = -30.0f + i * 10.0f;
+            m.quad({x0, 12.0f, -16.0f}, {x0, 12.0f, 16.0f}, {x0 + 10.0f, 17.0f, 16.0f}, {x0 + 10.0f, 17.0f, -16.0f}, {120, 120, 116, 255});
+            m.quad({x0 + 10.0f, 17.0f, -16.0f}, {x0 + 10.0f, 17.0f, 16.0f}, {x0 + 10.0f, 12.0f, 16.0f}, {x0 + 10.0f, 12.0f, -16.0f}, {150, 170, 180, 255});
+        }
+        m.cylinder({-24.0f, 0, -20.0f}, 2.2f, 38.0f, 12, brick, MatrixIdentity(), 1.6f);
+        m.box({36.0f, 4.0f, 0}, {12.0f, 8.0f, 20.0f}, concrete);
+        factory_ = m.build();
+    }
+    {
+        MeshBuilder m;  // diesel locomotive (along +X)
+        m.box({0, 1.6f, 0}, {19.0f, 0.8f, 3.0f}, darkSteel);
+        m.box({-1.0f, 3.4f, 0}, {15.0f, 2.8f, 2.9f}, {150, 60, 40, 255});
+        m.box({7.6f, 3.6f, 0}, {3.4f, 3.2f, 3.0f}, {160, 66, 44, 255});
+        m.box({8.6f, 4.4f, 0}, {1.2f, 1.0f, 2.6f}, {40, 50, 60, 255});
+        for (float x : {-6.5f, 6.5f}) m.box({x, 0.6f, 0}, {4.0f, 1.2f, 2.6f}, {40, 40, 40, 255});
+        locomotive_ = m.build();
+    }
+    {
+        MeshBuilder m;  // armoured freight wagon
+        m.box({0, 1.3f, 0}, {16.0f, 0.6f, 2.9f}, darkSteel);
+        m.box({0, 3.0f, 0}, {15.0f, 2.8f, 2.9f}, {104, 98, 72, 255});
+        m.box({0, 4.5f, 0}, {14.0f, 0.3f, 2.6f}, {86, 82, 60, 255});
+        for (float x : {-5.5f, 5.5f}) m.box({x, 0.5f, 0}, {3.0f, 1.0f, 2.5f}, {40, 40, 40, 255});
+        wagon_ = m.build();
+    }
+    {
+        MeshBuilder m;  // mobile missile launcher: 8x8 truck with raised missile
+        m.box({0, 1.2f, 0}, {13.0f, 1.2f, 3.0f}, olive);
+        m.box({5.2f, 2.6f, 0}, {2.6f, 2.0f, 2.9f}, olive);
+        for (int i = 0; i < 4; ++i)
+            for (float z : {-1.4f, 1.4f}) m.cylinder({-4.5f + i * 2.6f, 0.6f, z}, 0.6f, 0.4f, 8, {30, 30, 30, 255}, MatrixMultiply(MatrixRotateX(PI / 2), MatrixTranslate(-4.5f + i * 2.6f, 0.6f, z)));
+        m.cylinder({0, 0, 0}, 0.55f, 11.5f, 10, white, MatrixMultiply(MatrixRotateZ(-PI / 2 + 0.6f), MatrixTranslate(-5.0f, 2.2f, 0)), 0.2f);
+        launcher_ = m.build();
+    }
+    {
+        MeshBuilder m;  // earth-covered ammunition bunker (igloo) with concrete face
+        const int seg = 8;
+        const float R = 7.0f, L = 22.0f;
+        Color earth = {150, 136, 100, 255};
+        for (int i = 0; i < seg; ++i) {
+            float a0 = PI * i / seg, a1 = PI * (i + 1) / seg;
+            m.quad({-L / 2, sinf(a0) * R, cosf(a0) * R * 1.3f}, {L / 2, sinf(a0) * R, cosf(a0) * R * 1.3f},
+                   {L / 2, sinf(a1) * R, cosf(a1) * R * 1.3f}, {-L / 2, sinf(a1) * R, cosf(a1) * R * 1.3f}, earth);
+        }
+        m.box({L / 2, 3.0f, 0}, {0.8f, 6.0f, 14.0f}, concrete);
+        m.box({L / 2 + 0.45f, 2.2f, 0}, {0.2f, 4.4f, 5.0f}, {70, 74, 70, 255});
+        ammo_ = m.build();
+    }
+    {
+        MeshBuilder m;  // transformer yard
+        m.box({0, 0.2f, 0}, {40.0f, 0.4f, 30.0f}, {120, 118, 110, 255});
+        for (int i = 0; i < 3; ++i) {
+            m.box({-12.0f + i * 12.0f, 2.5f, -4.0f}, {6.0f, 5.0f, 5.0f}, darkSteel);
+            for (int k = 0; k < 3; ++k) m.cylinder({-14.0f + i * 12.0f + k * 2.0f, 5.0f, -4.0f}, 0.3f, 2.2f, 6, {200, 190, 170, 255});
+        }
+        for (int i = 0; i < 4; ++i) m.box({-15.0f + i * 10.0f, 8.0f, 8.0f}, {0.6f, 16.0f, 0.6f}, darkSteel);
+        m.box({0, 15.5f, 8.0f}, {32.0f, 0.5f, 0.5f}, darkSteel);
+        substation_ = m.build();
+    }
+    {
+        MeshBuilder m;  // four-engine tanker / transport (original), nose towards +X
+        Color grey = {150, 154, 158, 255}, dgrey = {110, 114, 118, 255};
+        m.cylinder({0, 0, 0}, 3.0f, 44.0f, 16, grey, MatrixMultiply(MatrixRotateZ(-PI / 2), MatrixTranslate(-22.0f, 0, 0)));
+        m.cylinder({0, 0, 0}, 3.0f, 6.0f, 16, grey, MatrixMultiply(MatrixRotateZ(-PI / 2), MatrixTranslate(22.0f, 0, 0)), 0.6f);   // nose
+        m.cylinder({0, 0, 0}, 3.0f, 9.0f, 16, grey, MatrixMultiply(MatrixRotateZ(PI / 2), MatrixTranslate(-22.0f, 0, 0)), 0.8f);   // tail cone
+        // high wing with slight sweep
+        m.quad({4.0f, 2.6f, -1.0f}, {4.0f, 2.6f, 1.0f}, {-4.0f, 3.4f, 25.0f}, {-8.0f, 3.4f, 25.0f}, grey);
+        m.quad({4.0f, 2.6f, 1.0f}, {4.0f, 2.6f, -1.0f}, {-8.0f, 3.4f, -25.0f}, {-4.0f, 3.4f, -25.0f}, grey);
+        m.quad({-4.0f, 3.4f, 25.0f}, {4.0f, 2.6f, 1.0f}, {4.0f, 2.6f, -1.0f}, {-8.0f, 3.4f, 25.0f}, dgrey);
+        for (float z : {-15.0f, -8.0f, 8.0f, 15.0f})
+            m.cylinder({0, 0, 0}, 1.3f, 5.0f, 12, dgrey, MatrixMultiply(MatrixRotateZ(-PI / 2), MatrixTranslate(-2.0f + std::fabs(z) * -0.15f, 1.2f, z)));
+        m.quad({-22.0f, 2.0f, 0.3f}, {-27.0f, 11.0f, 0.3f}, {-31.0f, 11.0f, 0.3f}, {-30.0f, 2.0f, 0.3f}, grey);    // fin
+        m.quad({-30.0f, 2.0f, -0.3f}, {-31.0f, 11.0f, -0.3f}, {-27.0f, 11.0f, -0.3f}, {-22.0f, 2.0f, -0.3f}, grey);
+        m.quad({-27.0f, 11.0f, 0}, {-31.0f, 11.0f, 9.0f}, {-33.0f, 11.0f, 9.0f}, {-31.0f, 11.0f, 0}, grey);        // T-tail
+        m.quad({-27.0f, 11.0f, 0}, {-31.0f, 11.0f, 0}, {-33.0f, 11.0f, -9.0f}, {-31.0f, 11.0f, -9.0f}, grey);
+        m.box({-26.0f, -2.8f, 0}, {2.5f, 1.2f, 1.6f}, dgrey);   // hose drum fairing
+        tanker_ = m.build();
+    }
+    {
+        MeshBuilder m;  // drogue basket (cone opening towards -X)
+        m.cylinder({0, 0, 0}, 0.25f, 1.6f, 12, {60, 60, 60, 255}, MatrixMultiply(MatrixRotateZ(PI / 2), MatrixTranslate(0.6f, 0, 0)), 0.45f);
+        m.cylinder({0, 0, 0}, 0.45f, 0.4f, 16, {230, 230, 230, 255}, MatrixMultiply(MatrixRotateZ(PI / 2), MatrixTranslate(-1.0f, 0, 0)), 0.45f);
+        drogue_ = m.build();
+    }
 }
 
 void Renderer::buildClouds(const Terrain& t) {
     Rng rng(31337);
     puffs_.clear();
     for (int c = 0; c < 170; ++c) {
-        Vector3 center = V3(rng.range(-28000, 28000), rng.range(1900, 2500), rng.range(-28000, 28000));
+        double base = t.info().cloudBase;
+        Vector3 center = V3(rng.range(-28000, 28000), rng.range(base - 200, base + 400), rng.range(-28000, 28000));
         // keep the runway approach mostly clear
         if (std::fabs(center.x - t.runway().center.x) < 3000 && std::fabs(center.z - t.runway().center.z) < 2000) continue;
         // a cumulus is a cluster of large sprites on a common flat base
@@ -520,6 +710,7 @@ void Renderer::drawStatics(const FrameParams& f) {
     rlDisableBackfaceCulling();
     DrawMesh(world_.airbase, litMat_, MatrixIdentity());
     DrawMesh(world_.town, litMat_, MatrixIdentity());
+    drawDressing(f);
     lit_.setF("uSpecular", 0.0f);
     Vector3 cp = f.cam.position;
     Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
@@ -566,16 +757,146 @@ void Renderer::drawGroundTargets(const FrameParams& f) {
             case GroundKind::Hangar: m = &hangar_; break;
             case GroundKind::Command: m = &command_; break;
             case GroundKind::Ship: m = &ship_; break;
+            case GroundKind::PowerPlant: m = &powerPlant_; break;
+            case GroundKind::Refinery: m = &refinery_; break;
+            case GroundKind::CommTower: m = &commTower_; break;
+            case GroundKind::Factory: m = &factory_; break;
+            case GroundKind::Locomotive: m = &locomotive_; break;
+            case GroundKind::Wagon: m = &wagon_; break;
+            case GroundKind::Launcher: m = &launcher_; break;
+            case GroundKind::Ammo: m = &ammo_; break;
+            case GroundKind::Substation: m = &substation_; break;
+            case GroundKind::Bridge: m = &bridgeDeck_; break;
             default: break;
         }
-        bool big = g.kind == GroundKind::OilRig || g.kind == GroundKind::Hangar || g.kind == GroundKind::FuelTank || g.kind == GroundKind::Command;
+        bool big = g.kind == GroundKind::OilRig || g.kind == GroundKind::Hangar || g.kind == GroundKind::FuelTank || g.kind == GroundKind::Command ||
+                   g.kind == GroundKind::PowerPlant || g.kind == GroundKind::Refinery || g.kind == GroundKind::CommTower ||
+                   g.kind == GroundKind::Factory || g.kind == GroundKind::Bridge;
         if (Vector3Distance(toRl(g.pos), f.cam.position) > (big ? 16000.0f : 9000.0f)) continue;
-        Matrix M = MatrixMultiply(MatrixRotateY(static_cast<float>(-g.heading)), MatrixTranslate(static_cast<float>(g.pos.x), static_cast<float>(g.pos.y), static_cast<float>(g.pos.z)));
+        Matrix R = MatrixRotateY(static_cast<float>(-g.heading));
+        Matrix T = MatrixTranslate(static_cast<float>(g.pos.x), static_cast<float>(g.pos.y), static_cast<float>(g.pos.z));
         litMat_.maps[MATERIAL_MAP_DIFFUSE].color = g.alive ? WHITE : Color{40, 36, 32, 255};
-        DrawMesh(*m, litMat_, M);
+        if (g.kind == GroundKind::ParkedJet) {
+            Jet tmp;
+            tmp.team = Team::Red;
+            tmp.fm = std::make_unique<FlightModel>(profile(AircraftId::Su35), *terrain_);
+            Vector3 pb;
+            float camo;
+            Vector3 pa = paintFor(tmp, pb, camo);
+            setAtmosphere(jet_, f);
+            Matrix M = MatrixMultiply(R, MatrixTranslate(static_cast<float>(g.pos.x), static_cast<float>(g.pos.y + 2.35), static_cast<float>(g.pos.z)));
+            drawJetModel(AirframeStyle::FlankerFamily, M, pa, pb, camo, 1, 0, 0, 0, 0, g.alive ? 0.0f : 1.0f, f);
+            setAtmosphere(lit_, f);
+            continue;
+        }
+        if (g.kind == GroundKind::Bridge) {
+            float L = static_cast<float>(std::max(20.0, g.length));
+            if (g.alive) {
+                DrawMesh(bridgeDeck_, litMat_, MatrixMultiply(MatrixMultiply(MatrixScale(L, 1, 1), R), T));
+            } else {
+                // collapsed: the two halves hinge down from the abutments into the valley
+                for (int side = -1; side <= 1; side += 2) {
+                    // unit deck -> half span, outer end at the hinge, rotated so the broken end drops, then to the abutment
+                    Matrix half = MatrixMultiply(MatrixScale(L * 0.48f, 1, 1), MatrixTranslate(-side * 0.24f * L, 0, 0));
+                    half = MatrixMultiply(half, MatrixRotateZ(side * 0.42f));
+                    half = MatrixMultiply(half, MatrixTranslate(side * 0.5f * L, 0, 0));
+                    DrawMesh(bridgeDeck_, litMat_, MatrixMultiply(MatrixMultiply(half, R), T));
+                }
+            }
+            int piers = std::max(1, static_cast<int>(L / 36.0f));
+            for (int k = 1; k < piers; ++k) {
+                float x = -L / 2 + L * k / piers;
+                if (!g.alive && std::fabs(x) < L * 0.2f) continue;
+                DrawMesh(bridgePier_, litMat_, MatrixMultiply(MatrixMultiply(MatrixTranslate(x, 0, 0), R), T));
+            }
+            drawCalls_ += piers + 1;
+            continue;
+        }
+        DrawMesh(*m, litMat_, MatrixMultiply(R, T));
         ++drawCalls_;
     }
+    drawTanker(f);
     litMat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+}
+
+void Renderer::drawDressing(const FrameParams& f) {
+    Vector3 cp = f.cam.position;
+    Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
+    float maxDist = f.quality == GraphicsQuality::Low ? 9000.0f : (f.quality == GraphicsQuality::Medium ? 14000.0f : 20000.0f);
+    for (const Dressing::Piece& p : dressing_.statics) {
+        Vector3 d = Vector3Subtract(p.center, cp);
+        float dist = Vector3Length(d);
+        if (dist - p.radius > maxDist) continue;
+        if (dist > p.radius && Vector3DotProduct(d, fwd) < -p.radius) continue;
+        DrawMesh(p.mesh, litMat_, MatrixIdentity());
+        ++drawCalls_;
+    }
+    const WorldLayout* L = dressing_.layout;
+    if (!L) return;
+    const Battle* gb = f.groundFrom ? f.groundFrom : f.battle;
+    // factory halls (a mission may own them as targets, then they are drawn as ground targets)
+    for (const Vec3& fc : L->factories) {
+        bool owned = false;
+        if (gb) for (const GroundTarget& g : gb->ground()) if (g.kind == GroundKind::Factory && std::hypot(g.pos.x - fc.x, g.pos.z - fc.z) < 20) owned = true;
+        if (owned || Vector3Distance(toRl(fc), cp) > maxDist) continue;
+        DrawMesh(factory_, litMat_, MatrixTranslate(static_cast<float>(fc.x), static_cast<float>(fc.y), static_cast<float>(fc.z)));
+        ++drawCalls_;
+    }
+    // spinning wind-turbine rotors
+    if (dressing_.rotor.vertexCount)
+        for (size_t i = 0; i < dressing_.rotorHubs.size(); ++i) {
+            Vector3 h = dressing_.rotorHubs[i];
+            if (Vector3Distance(h, cp) > maxDist * 0.7f) continue;
+            Matrix M = MatrixMultiply(MatrixMultiply(MatrixRotateX(static_cast<float>(f.time * 1.3 + i * 0.7)), MatrixRotateY(-dressing_.rotorYaw[i])),
+                                      MatrixTranslate(h.x, h.y, h.z));
+            DrawMesh(dressing_.rotor, litMat_, M);
+            ++drawCalls_;
+        }
+    // ambient freight train (only when no mission train is on the line)
+    bool missionTrain = false;
+    if (gb) for (const GroundTarget& g : gb->ground()) if (groundOnRail(g.kind)) missionTrain = true;
+    double len = L->railway.length();
+    if (!missionTrain && len > 2000) {
+        double lead = std::fmod(f.time * 17.0, len);
+        for (int k = 0; k < 13; ++k) {
+            double sk = lead - (k == 0 ? 0.0 : 21.0 + 17.0 * (k - 1));
+            if (sk < 0) break;
+            Vec3 tan;
+            Vec3 p = L->railway.at(sk, &tan);
+            p.y = std::max(p.y, terrain_->surfaceHeight(p.x, p.z));
+            if (Vector3Distance(toRl(p), cp) > maxDist * 0.6f) continue;
+            float yaw = static_cast<float>(std::atan2(tan.z, tan.x));
+            Matrix M = MatrixMultiply(MatrixRotateY(-yaw), MatrixTranslate(static_cast<float>(p.x), static_cast<float>(p.y + 0.4), static_cast<float>(p.z)));
+            DrawMesh(k == 0 ? locomotive_ : wagon_, litMat_, M);
+            ++drawCalls_;
+        }
+    }
+}
+
+void Renderer::drawTanker(const FrameParams& f) {
+    const Battle* b = f.battle;
+    if (!b || !b->tanker().active) return;
+    const Tanker& tk = b->tanker();
+    if (Vector3Distance(toRl(tk.pos), f.cam.position) > 30000) return;
+    Matrix R = MatrixRotateY(static_cast<float>(-tk.heading));
+    litMat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    lit_.setF("uSpecular", 0.45f);
+    DrawMesh(tanker_, litMat_, MatrixMultiply(R, MatrixTranslate(static_cast<float>(tk.pos.x), static_cast<float>(tk.pos.y), static_cast<float>(tk.pos.z))));
+    Vec3 bk = tk.basket();
+    DrawMesh(drogue_, litMat_, MatrixMultiply(R, MatrixTranslate(static_cast<float>(bk.x), static_cast<float>(bk.y), static_cast<float>(bk.z))));
+    lit_.setF("uSpecular", 0.2f);
+    // hose: a sagging curve from the tail fairing to the basket
+    Vec3 fwd{std::cos(tk.heading), 0, std::sin(tk.heading)};
+    Vec3 a = tk.pos - fwd * 26.0 - Vec3{0, 2.8, 0};
+    Vector3 prev = toRl(a);
+    for (int i = 1; i <= 12; ++i) {
+        double u = i / 12.0;
+        Vec3 p = a + (bk - a) * u - Vec3{0, std::sin(u * kPi) * 2.0, 0};
+        Vector3 cur = toRl(p);
+        DrawLine3D(prev, cur, Color{40, 40, 40, 255});
+        prev = cur;
+    }
+    drawCalls_ += 3;
 }
 
 void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA, Vector3 paintB, float camo,
@@ -584,8 +905,11 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
     const JetModel& jm = jets_[static_cast<int>(style)];
     jet_.setV3("uPaintA", paintA);
     jet_.setV3("uPaintB", paintB);
+    jet_.setV3("uPaintC", g_paintC);
     jet_.setF("uCamo", camo);
-    jet_.setF("uRoughness", 0.42f);
+    jet_.setF("uRoughness", g_paintRough);
+    g_paintC = {0, 0, 0};
+    g_paintRough = 0.42f;
     jet_.setF("uHitFlash", hitFlash);
     jet_.setF("uDamage", damage);
     rlDisableBackfaceCulling();
@@ -689,9 +1013,10 @@ void Renderer::drawCloudLayer(const FrameParams& f) {
     rlDisableDepthMask();
     BeginBlendMode(BLEND_ALPHA);
     // two stacked sheets (base + tops) give parallax and apparent thickness
-    const float layers[2] = {2300.0f, 2420.0f};
+    const float cb = static_cast<float>(terrain_->info().cloudBase);
+    const float layers[2] = {cb + 200.0f, cb + 320.0f};
     const float shifts[2] = {0.0f, 0.012f};
-    bool camAbove = f.cam.position.y > 2360.0f;
+    bool camAbove = f.cam.position.y > cb + 260.0f;
     for (int k = 0; k < 2; ++k) {
         int i = camAbove ? k : 1 - k;  // draw the far sheet first
         cloud_.setF("uLayerY", layers[i]);
@@ -838,6 +1163,7 @@ void Renderer::renderWorld(const FrameParams& f) {
             for (const ExtraJet& e : *f.extraJets) {
                 Jet tmp;
                 tmp.team = e.team;
+                tmp.skin = e.skin;
                 tmp.fm = std::make_unique<FlightModel>(profile(e.id), *terrain_);
                 Vector3 pb;
                 float camo;

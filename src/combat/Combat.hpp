@@ -3,6 +3,7 @@
 #pragma once
 
 #include "../sim/FlightModel.hpp"
+#include "../sim/WorldLayout.hpp"
 
 #include <memory>
 #include <string>
@@ -18,6 +19,7 @@ struct Jet {
     int id = 0;
     Team team = Team::Blue;
     bool isPlayer = false;
+    int skin = 0;           // camouflage scheme (0 = factory), see render/Skins.hpp
     std::string callsign;
     std::unique_ptr<FlightModel> fm;
     double health = 100.0;
@@ -89,6 +91,18 @@ enum class GroundKind { Tank, Truck, AAA, SAM, Bunker, Radar,
                         Hangar,     // aircraft shelter
                         Command,    // command post building with masts
                         Ship,       // patrol boat with a deck gun (moves on the sea)
+                        // critical infrastructure (campaign 42-51)
+                        PowerPlant, // turbine hall with two cooling towers and a stack
+                        Refinery,   // distillation columns, pipe racks, flare stack
+                        Bridge,     // a road / rail bridge span (placed on a real bridge of the layout)
+                        CommTower,  // 90 m lattice communications mast
+                        Factory,    // saw-tooth roof production hall with chimney
+                        Locomotive, // diesel locomotive (runs on the railway)
+                        Wagon,      // freight / armoured wagon (runs on the railway)
+                        Launcher,   // mobile missile launcher vehicle
+                        ParkedJet,  // aircraft parked on an airfield
+                        Ammo,       // earth-covered ammunition bunker
+                        Substation, // electrical transformer yard
                         Count };
 
 /// Display name, missile aim height above the base, hit radius and default health per kind.
@@ -99,6 +113,7 @@ double groundMaxHealth(GroundKind k);
 inline bool groundIsNaval(GroundKind k) { return k == GroundKind::OilRig || k == GroundKind::Ship; }
 /// Kinds that shoot at aircraft when armed.
 inline bool groundShootsAir(GroundKind k) { return k == GroundKind::AAA || k == GroundKind::Gun || k == GroundKind::Ship || k == GroundKind::SAM; }
+inline bool groundOnRail(GroundKind k) { return k == GroundKind::Locomotive || k == GroundKind::Wagon; }
 
 struct GroundTarget {
     GroundKind kind = GroundKind::Tank;
@@ -113,6 +128,9 @@ struct GroundTarget {
     Vec3 pathCenter;
     Team team = Team::Red;
     std::string label;        // e.g. "GUN 2", "OIL RIG A" (shown on the HUD and in the kill feed)
+    double railS = -1;        // >= 0: position along the railway (trains), metres
+    double railSpeed = 0;     // m/s along the railway (stops at the end of the line)
+    double length = 0;        // bridges: span length (m); heading gives the span direction
     int group = 0;            // mission objective group (0 = not an objective)
     bool armed = true;        // false for range targets that never shoot back
 };
@@ -133,6 +151,21 @@ struct KillFeedEntry {
     std::string killer, victim, weapon;
     bool killerBlue = true;
     double age = 0;
+};
+
+/// Air-to-air refuelling tanker: flies a racetrack circle at constant speed and altitude, trailing a
+/// hose with a drogue basket behind and below the tail.
+struct Tanker {
+    bool active = false;
+    Vec3 center;              // racetrack centre (x, z) and altitude (y)
+    double radius = 7000;
+    double speed = 175;       // m/s
+    double angle = 0;         // position on the circle
+    Vec3 pos, vel;
+    double heading = 0;
+    bool contact = false;     // player probe in the basket
+    double contactTime = 0;
+    Vec3 basket() const;      // world position of the drogue
 };
 
 struct BattleConfig {
@@ -168,8 +201,19 @@ public:
     /// Spawns `count` hostile jets around `center` at `altitude` (MSL), heading towards the player.
     void spawnEnemies(int count, AiSkill skill, const Vec3& center, double radius, double altitude, bool unarmed = false);
     int groundAlive(int group) const;      // live targets in an objective group
+    Vec3 groundVelocity(int idx) const;    // m/s, from the vehicle's circular route (0 when static)
+    Vec3 groundAimPoint(int idx) const { return ground_[idx].pos + Vec3{0, groundAimHeight(ground_[idx].kind), 0}; }
+    /// Best ground target for the player's ATS / cannon assist inside `coneRad` of `dir` and `range`.
+    int bestGroundTarget(const Vec3& from, const Vec3& dir, double coneRad, double range, Team shooter) const;
     int groundTotal(int group) const;
     int groundKilledByPlayer() const { return groundKills_; }
+    struct PlayerStats { int missilesFired = 0, missileHits = 0, roundsFired = 0, roundHits = 0, damageTaken = 0; };
+    const PlayerStats& playerStats() const { return stats_; }
+    // ---- infrastructure / refuelling ----
+    void setLayout(const WorldLayout* layout) { layout_ = layout; }
+    const WorldLayout* layout() const { return layout_; }
+    void startTanker(const Vec3& center, double radius, double speed, double startAngle);
+    const Tanker& tanker() const { return tanker_; }
     // test helpers (as if destroyed by the player)
     void debugDestroyGround(int idx) { damageGround(idx, 1e6, player().id); }
     void debugKillJet(int id) { if (Jet* j = jetById(id)) damageJet(*j, 1e6, player().id, "TEST"); }
@@ -238,6 +282,10 @@ private:
     int nextMissileId_ = 0;
     int score_ = 0;
     int groundKills_ = 0;
+    PlayerStats stats_;
+    const WorldLayout* layout_ = nullptr;
+    Tanker tanker_;
+    void updateTanker(double dt);
     int wave_ = 0;
     double waveTimer_ = 0;
     double waveBanner_ = 0;

@@ -5,6 +5,9 @@ name: web
 on:
   push:
     branches: [main, master]
+  workflow_run:
+    workflows: ["real terrain"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -34,6 +37,9 @@ jobs:
           cmake --build build-web --parallel 4
           mkdir -p site
           cp build-web/index.html build-web/skyfall.js build-web/skyfall.wasm build-web/skyfall.data site/
+          # real-terrain locations are fetched by the page on demand
+          mkdir -p site/terrain
+          cp assets/terrain/*.skt site/terrain/ 2>/dev/null || echo "no real terrain data yet (run the 'real terrain' workflow)"
           touch site/.nojekyll
 
       - uses: actions/upload-pages-artifact@v3

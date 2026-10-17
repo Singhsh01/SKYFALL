@@ -939,7 +939,30 @@ void Hud::missionPanel(const HudContext& c) {
         }
         if (m.status() == MissionStatus::Complete && c.missionDone) {
             ui::textShadow("MISSION COMPLETE", c.w * 0.5f, c.h * 0.16f, 40 * s, Color{120, 255, 170, 255}, Align::Center);
-            ui::textShadow(fmt("TIME %.0f s     ", m.elapsed()) + c.missionNext, c.w * 0.5f, c.h * 0.16f + 50 * s, 17 * s, WHITE, Align::Center);
+            // debrief card
+            if (c.battle && c.player) {
+                const Battle::PlayerStats& ps = c.battle->playerStats();
+                Rectangle d = {c.w * 0.5f - 210 * s, c.h * 0.16f + 52 * s, 420 * s, 150 * s};
+                ui::panel(d, Color{0, 0, 0, 170}, Color{120, 255, 170, 90});
+                int secs = static_cast<int>(m.elapsed());
+                struct Row { const char* k; std::string v; } rows[] = {
+                    {"FLIGHT TIME", fmt2("%d:%02d", secs / 60, secs % 60)},
+                    {"GROUND TARGETS DESTROYED", fmti("%d", c.battle->groundKilledByPlayer())},
+                    {"AIRCRAFT SHOT DOWN", fmti("%d", c.player->kills)},
+                    {"MISSILES  FIRED / HIT", fmt2("%d / %d", ps.missilesFired, ps.missileHits)},
+                    {"CANNON ACCURACY", ps.roundsFired > 0 ? fmti("%d %%", static_cast<int>(100.0 * ps.roundHits / ps.roundsFired)) : std::string("-")},
+                    {"HULL", fmti("%d %%", static_cast<int>(std::max(0.0, c.player->health)))},
+                };
+                float yy = d.y + 12 * s;
+                for (const Row& r : rows) {
+                    ui::text(r.k, d.x + 16 * s, yy, 13 * s, Color{200, 210, 215, 255});
+                    ui::text(r.v, d.x + d.width - 16 * s, yy, 13 * s, WHITE, Align::Right);
+                    yy += 21 * s;
+                }
+                ui::textShadow(c.missionNext, c.w * 0.5f, d.y + d.height + 12 * s, 17 * s, WHITE, Align::Center);
+            } else {
+                ui::textShadow(fmt("TIME %.0f s     ", m.elapsed()) + c.missionNext, c.w * 0.5f, c.h * 0.16f + 50 * s, 17 * s, WHITE, Align::Center);
+            }
         }
     } else if (c.arena && c.battle) {
         Rectangle r = {18 * s, 18 * s, 250 * s, 78 * s};
@@ -964,11 +987,16 @@ void Hud::objectiveMarkers(const HudContext& c) {
     size_t idx = c.mission->stepIndex();
     if (idx >= c.campaign->objectives.size()) return;
     const ObjectiveDef& o = c.campaign->objectives[idx];
-    if (o.kind != ObjectiveKind::Waypoint) return;
     float s = c.h / 720.0f;
     const FlightState& ps = c.player->fm->state();
+    if (c.battle && c.battle->tanker().active) refuelCues(c);
+    if (o.kind != ObjectiveKind::Waypoint && o.kind != ObjectiveKind::Rendezvous) return;
     Vec3 wp{o.x, ps.pos.y, o.z};
     double dist = std::hypot(o.x - ps.pos.x, o.z - ps.pos.z);
+    if (o.kind == ObjectiveKind::Rendezvous) {
+        wp = c.battle->tanker().pos;
+        dist = length(wp - ps.pos);
+    }
     bool front;
     Vector2 sp = project(c, toRl(wp), &front);
     Vector2 ctr = {c.w * 0.5f, c.h * 0.5f};
@@ -992,6 +1020,51 @@ void Hud::objectiveMarkers(const HudContext& c) {
         ui::textShadow(fmt2("AGL %d  /  MAX %d", static_cast<int>(ps.agl), static_cast<int>(o.maxAgl)), ctr.x, c.h * 0.28f, 15 * s,
                        ok ? Color{150, 255, 205, 255} : Color{255, 90, 70, 255}, Align::Center);
     }
+}
+
+void Hud::refuelCues(const HudContext& c) {
+    // Tanker marker at any range; within 700 m of the basket, precision steering cues for the probe.
+    const Tanker& tk = c.battle->tanker();
+    const FlightState& ps = c.player->fm->state();
+    float s = c.h / 720.0f;
+    const Color cyan = {110, 220, 255, 255};
+    bool front;
+    Vector2 tp = project(c, toRl(tk.pos + Vec3{0, 6, 0}), &front);
+    double dT = length(tk.pos - ps.pos);
+    if (front && dT > 250) {
+        DrawRectangleLinesEx({tp.x - 9 * s, tp.y - 9 * s, 18 * s, 18 * s}, 2 * s, cyan);
+        ui::textShadow("TANKER", tp.x, tp.y + 11 * s, 11 * s, cyan, Align::Center);
+        ui::textShadow(fmt("%.1f", dT / 1000.0), tp.x, tp.y - 24 * s, 11 * s, cyan, Align::Center);
+    }
+    // fuel readout whenever a tanker is around
+    double maxFuel = c.player->fm->profile().fuelMassKg;
+    float fuelPct = static_cast<float>(100.0 * ps.fuelKg / std::max(1.0, maxFuel));
+    ui::textShadow(fmt("FUEL %.0f %%", fuelPct), c.w * 0.5f, c.h * 0.78f, 18 * s, fuelPct < 20 ? Color{255, 90, 70, 255} : cyan, Align::Center);
+    Vec3 probe = ps.pos + ps.q.forward() * 8.0 + ps.q.up() * 1.0;
+    Vec3 rel = tk.basket() - probe;           // where the basket is relative to the probe
+    double dist = length(rel);
+    if (dist > 700) return;
+    Vector2 bp = project(c, toRl(tk.basket()), &front);
+    if (front) {
+        DrawRing(bp, 10 * s, 13 * s, 0, 360, 32, tk.contact ? Color{120, 255, 170, 255} : cyan);
+        ui::textShadow("BASKET", bp.x, bp.y + 15 * s, 11 * s, cyan, Align::Center);
+    }
+    double closure = -dot(ps.vel - tk.vel, normalize(rel));   // + = closing
+    // steering in the jet's own frame
+    double up = dot(rel, ps.q.up()), right = dot(rel, ps.q.right()), fwd = dot(rel, ps.q.forward());
+    float cx = c.w * 0.5f, cy = c.h * 0.66f;
+    if (tk.contact) {
+        ui::textShadow(fmt("CONTACT  -  FUEL FLOWING  %.0f %%", fuelPct), cx, cy, 22 * s, Color{120, 255, 170, 255}, Align::Center);
+        return;
+    }
+    std::string cue;
+    if (std::fabs(up) > 2.5) cue += up > 0 ? "UP  " : "DOWN  ";
+    if (std::fabs(right) > 2.5) cue += right > 0 ? "RIGHT  " : "LEFT  ";
+    if (fwd > 6 && closure < 2.0) cue += "ADD POWER  ";
+    if (closure > 8.0 && dist < 120) cue += "SLOW DOWN  ";
+    if (cue.empty()) cue = "STEADY...";
+    ui::textShadow(cue, cx, cy, 20 * s, cyan, Align::Center);
+    ui::textShadow(fmt("BASKET %.0f m", dist) + fmt("   CLOSURE %+.0f m/s", closure), cx, cy + 26 * s, 15 * s, WHITE, Align::Center);
 }
 
 void Hud::glidePath(const HudContext& c) {

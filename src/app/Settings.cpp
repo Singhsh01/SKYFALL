@@ -64,6 +64,8 @@ bool Settings::load(const std::string& path) {
             else if (k == "deadzone") deadzone = std::clamp(std::stod(v), 0.0, 0.5);
             else if (k == "handling") handling = std::clamp(std::stoi(v), 0, 2);
             else if (k == "aircraft") aircraft = std::clamp(std::stoi(v), 0, 7);
+            else if (k == "location") location = v;
+            else if (k == "skins") { for (size_t i = 0; i < v.size() && i < skins.size(); ++i) skins[i] = (v[i] >= '0' && v[i] <= '7') ? v[i] : '0'; }
             else if (k == "master") master = std::clamp(std::stod(v), 0.0, 1.0);
             else if (k == "music") music = std::clamp(std::stod(v), 0.0, 1.0);
             else if (k == "engine") engine = std::clamp(std::stod(v), 0.0, 1.0);
@@ -71,6 +73,7 @@ bool Settings::load(const std::string& path) {
             else if (k == "effects") effects = std::clamp(std::stod(v), 0.0, 1.0);
             else if (k == "music_enabled") musicEnabled = toBool(v);
             else if (k == "captions") captions = toBool(v);
+            else if (k == "voice_briefings") voiceBriefings = toBool(v);
             else extra[k] = v;
         } catch (...) {
             // malformed value: keep default
@@ -92,9 +95,9 @@ bool Settings::save(const std::string& path) const {
       << "\ncamera_shake=" << cameraShake << "\ng_effects=" << gEffects << "\nui_scale=" << uiScale
       << "\nshow_fps=" << showFps << "\nhigh_contrast_hud=" << highContrastHud << "\nhud_style=" << hudStyle << "\nmissile_cam=" << missileCam << "\ncrash_replay=" << crashReplay << "\ndynamic_resolution=" << dynamicResolution << "\n[input]\n"
       << "invert_pitch=" << invertPitch << "\nsensitivity=" << sensitivity << "\ndeadzone=" << deadzone
-      << "\nhandling=" << handling << "\naircraft=" << aircraft << "\n[audio]\n"
+      << "\nhandling=" << handling << "\naircraft=" << aircraft << "\nskins=" << skins << "\nlocation=" << location << "\n[audio]\n"
       << "master=" << master << "\nmusic=" << music << "\nengine=" << engine << "\nradio=" << radio
-      << "\neffects=" << effects << "\nmusic_enabled=" << musicEnabled << "\ncaptions=" << captions << "\n[progress]\ncampaign_done=" << campaignDone << "\n";
+      << "\neffects=" << effects << "\nmusic_enabled=" << musicEnabled << "\ncaptions=" << captions << "\nvoice_briefings=" << voiceBriefings << "\n[progress]\ncampaign_done=" << campaignDone << "\n";
     if (!extra.empty()) {
         f << "[extra]\n";
         for (auto& [k, v] : extra) f << k << '=' << v << '\n';

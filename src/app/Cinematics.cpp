@@ -221,6 +221,7 @@ void Game::updateReplay(double dt) {
         ExtraJet e;
         e.id = pj.type; e.style = profile(pj.type).style; e.team = Team::Blue;
         e.pos = pj.pos; e.q = pj.q; e.gear = pj.gear; e.throttle = pj.throttle; e.ab = pj.ab;
+        e.skin = settings_.skinFor(static_cast<int>(pj.type));
         replayJets_.push_back(e);
         // engine smoke / vapour hint so the path reads in the replay
         if (GetRandomValue(0, 2) == 0)

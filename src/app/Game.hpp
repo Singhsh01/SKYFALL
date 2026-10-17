@@ -5,6 +5,7 @@
 
 #include "../audio/Audio.hpp"
 #include "../combat/Combat.hpp"
+#include "../audio/Speech.hpp"
 #include "../mission/Campaign.hpp"
 #include "../mission/Mission.hpp"
 #include "../render/Lighting.hpp"
@@ -34,7 +35,7 @@ struct Options {
     int quality = -1;
 };
 
-enum class Screen { Title, Campaign, Hangar, Settings, Playing, Paused, Help };
+enum class Screen { Title, Campaign, Hangar, Settings, Playing, Paused, Help, Briefing, Locations };
 enum class GameMode { None, Mission01, Arena };
 
 class Game {
@@ -93,8 +94,32 @@ private:
     Settings settings_;
     std::string settingsPath_;
     Terrain terrain_;
+    WorldLayout layout_ = WorldLayout::build(terrain_);   // towns, roads, railway, bridges
     Battle battle_{terrain_};
     std::optional<Mission> mission_;
+    // pre-mission briefing by Captain Avery Langlois (Wing Operations)
+    Speech speech_;
+    std::string briefHeader_, briefTitle_, briefText_;
+    std::vector<std::string> briefObjectives_;
+    double briefT_ = 0;
+    CameraMode briefCam_ = CameraMode::Chase;
+    void beginBriefing(int missionNo);   // 0 = Dogfight Arena
+    void updateBriefing(double dt);
+    void drawBriefing();
+    void launchFromBriefing();
+    void startMissionBriefed(int n) { startMission(n); if (switchTo_.empty()) beginBriefing(n); }
+    void startArenaBriefed() { freeFlight_ = false; startArena(false); beginBriefing(0); }
+    // ---- world locations (real terrain) ----
+    bool freeFlight_ = false;
+    std::string locStatus_;          // message on the locations screen
+    std::string locPending_;         // web: location being downloaded
+    std::string switchTo_;           // location switch requested from a menu (done at the next frame start)
+    int switchMission_ = 0;          // campaign mission to start after the switch
+    bool loadLocation(const std::string& id, bool showProgress = true);
+    bool locationAvailable(const std::string& id);
+    std::string terrainPath(const std::string& id);
+    double safeAltitude(Vec3 a, Vec3 b, double margin) const;
+    void drawLocations();
     const CampaignMissionDef* campaignDef_ = nullptr;   // missions 04-40
     CampaignDirector director_;
     // dynamic resolution: 3D scene scale chosen from measured frame times
@@ -105,6 +130,7 @@ private:
     double dynLastUp_ = -100;
     // CPU cost of the last frame's simulation and HUD (ms), for F3 and the benchmark
     double simMs_ = 0, hudMs_ = 0;
+    double chimneyTimer_ = 0;
     std::vector<double> benchSim_, benchHud_;
     bool startModeFromString(const std::string& m);
     void updateDynamicResolution(double dt);

@@ -85,6 +85,7 @@ private:
     void missionPanel(const HudContext& c);
     void glidePath(const HudContext& c);
     void objectiveMarkers(const HudContext& c);
+    void refuelCues(const HudContext& c);
     void minimalSymbology(const HudContext& c);
     void hintsBar(const HudContext& c);
     void pipPanel(const HudContext& c);

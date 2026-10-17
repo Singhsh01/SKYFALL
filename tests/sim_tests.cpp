@@ -5,6 +5,7 @@
 #include "combat/Combat.hpp"
 #include "mission/Campaign.hpp"
 #include "mission/Mission.hpp"
+#include "sim/Locations.hpp"
 #include "sim/Atmosphere.hpp"
 #include "sim/FlightModel.hpp"
 #include "telemetry/FrameStats.hpp"
@@ -40,6 +41,7 @@ struct Reg { Reg(const char* n, std::function<void()> f) { registry().push_back(
 #define TEST(name) static void name(); static Reg reg_##name(#name, name); static void name()
 
 const Terrain& terrain() { static Terrain t; return t; }
+const WorldLayout& layout() { static WorldLayout l = WorldLayout::build(terrain()); return l; }
 
 /// Scripted pilot used by several tests: cold start -> takeoff -> climb -> gear up.
 struct ScriptedTakeoff {
@@ -577,21 +579,22 @@ TEST(all_eight_aircraft_profiles_are_defined) {
 // ------------------------------------------------------------------------------------------
 // Campaign 04-40
 // ------------------------------------------------------------------------------------------
-TEST(campaign_has_forty_playable_missions) {
+TEST(campaign_has_fifty_one_playable_missions) {
     const auto& cat = campaignCatalogue();
-    CHECK(cat.size() == 40);
+    CHECK(cat.size() == static_cast<size_t>(kCampaignMissions));
+    CHECK(kCampaignMissions == 51);
     for (size_t i = 0; i < cat.size(); ++i) {
         CHECK(cat[i].number == static_cast<int>(i) + 1);
         CHECK(cat[i].playable);
         CHECK(!cat[i].title.empty());
     }
-    for (int n = 4; n <= 40; ++n) {
+    for (int n = 4; n <= kCampaignMissions; ++n) {
         const CampaignMissionDef* d = campaignMission(n);
         CHECK(d != nullptr);
         if (d) CHECK(!d->objectives.empty());
     }
     CHECK(campaignMission(3) == nullptr);
-    CHECK(campaignMission(41) == nullptr);
+    CHECK(campaignMission(kCampaignMissions + 1) == nullptr);
 }
 
 TEST(campaign_layouts_are_valid) {
@@ -604,6 +607,18 @@ TEST(campaign_layouts_are_valid) {
         if (std::fabs(m.startX) > 14500 || std::fabs(m.startZ) > 14500) fail(m, "start outside the map");
         if (m.startAlt < t.surfaceHeight(m.startX, m.startZ) + 300) fail(m, "start too close to the ground");
         for (const TargetDef& g : m.targets) {
+            if (g.anchor == TargetDef::Anchor::Railway) {
+                if (layout().railway.length() < 5000) fail(m, g.label + ": no railway");
+                continue;
+            }
+            if (g.anchor == TargetDef::Anchor::Bridge) {
+                if (layout().largestBridge(true) < 0 && layout().largestBridge(false) < 0) fail(m, g.label + ": no bridge");
+                continue;
+            }
+            if (g.anchor == TargetDef::Anchor::Industrial) {
+                if (g.index >= static_cast<int>(layout().factories.size())) fail(m, g.label + ": no industrial slot");
+                continue;
+            }
             auto checkPoint = [&](double x, double z) {
                 if (std::fabs(x) > 15000 || std::fabs(z) > 15000) { fail(m, g.label + " outside the map"); return; }
                 double h = t.height(x, z);
@@ -624,6 +639,7 @@ TEST(campaign_layouts_are_valid) {
             for (size_t b = a + 1; b < m.targets.size(); ++b) {
                 const TargetDef &A = m.targets[a], &B = m.targets[b];
                 if (A.pathRadius > 0 || B.pathRadius > 0) continue;
+                if (A.anchor != TargetDef::Anchor::None || B.anchor != TargetDef::Anchor::None) continue;
                 if (std::hypot(A.x - B.x, A.z - B.z) < 25.0) fail(m, A.label + " overlaps " + B.label);
             }
         for (const ObjectiveDef& o : m.objectives) {
@@ -659,8 +675,10 @@ struct CampaignPlaythrough {
     Mission mission;
     CampaignDirector director;
     explicit CampaignPlaythrough(const CampaignMissionDef& d) : def(d), mission(buildCampaignMission(d)) {
+        battle.setLayout(&layout());
         Jet& p = battle.createPlayer(AircraftId::F22);
         p.fm->resetAirborne({d.startX, d.startAlt, d.startZ}, campaignStartHeading(d), d.startSpeed, 0.8);
+        if (d.startFuel >= 0) p.fm->mutableState().fuelKg = d.startFuel * p.fm->profile().fuelMassKg;
         director.begin(d, battle);
         battle.setAiEnabled(false);
         director.update(mission, battle);
@@ -700,6 +718,27 @@ struct CampaignPlaythrough {
                     if (!fm.state().onGround) fm.resetOnRunway(false);
                     break;
                 case ObjectiveKind::Stop: in.throttleRate = -1.0; in.brake = 1.0; break;
+                case ObjectiveKind::Rendezvous: {
+                    const Tanker& tk = battle.tanker();
+                    Vec3 behind = tk.pos - Vec3{std::cos(tk.heading), 0, std::sin(tk.heading)} * 300.0 - Vec3{0, 30, 0};
+                    if (length(fm.state().pos - tk.pos) > o.radius * 0.5) {
+                        double fuel = fm.state().fuelKg;   // a teleport must not refill the tanks
+                        fm.resetAirborne(behind, tk.heading, tk.speed, 0.6);
+                        fm.mutableState().fuelKg = fuel;
+                    }
+                    break;
+                }
+                case ObjectiveKind::Refuel: {
+                    // fly formation on the basket: probe (8 m ahead, 1 m up) on the drogue, tanker speed
+                    const Tanker& tk = battle.tanker();
+                    FlightState& st = fm.mutableState();
+                    Quat q = Quat::fromEuler(tk.heading, 0.0, 0.0);
+                    st.q = q;
+                    st.pos = tk.basket() - q.forward() * 8.0 - q.up() * 1.0 + tk.vel * FlightModel::kDt;
+                    st.vel = tk.vel;
+                    in.throttleRate = 0.0;
+                    break;
+                }
             }
             step(in);
             if (fm.state().crashed) return false;
@@ -817,6 +856,252 @@ TEST(campaign_battle_step_fits_the_frame_budget) {
         // 120 Hz physics leaves 8.3 ms per step on a 1:1 frame; a step must cost a small fraction of it
         CHECK(mean < 1.0);
     }
+}
+
+namespace {
+/// Player jet pointed at a ground target from `dist` metres away and `agl` metres above it.
+struct GroundAttackRange {
+    Battle b{terrain()};
+    int target = -1;
+    bool valid = true;
+    GroundAttackRange(GroundKind kind, double dist, double agl, double bearing, bool moving) {
+        Jet& p = b.createPlayer(AircraftId::F22);
+        Vec3 tpos{-7600, 0, 2500};   // open ground beside the airbase
+        tpos.y = terrain().height(tpos.x, tpos.z);
+        Vec3 from{tpos.x - std::cos(bearing) * dist, tpos.y + agl, tpos.z - std::sin(bearing) * dist};
+        // the approach must be flyable: above the ground under the jet with a clear line of sight
+        valid = terrain().surfaceHeight(from.x, from.z) < from.y - 80.0 && b.lineOfSight(from, tpos + Vec3{0, 2, 0});
+        double pitch = -std::atan2(agl, dist);
+        p.fm->resetAirborne(from, bearing, 220, 0.8);
+        p.fm->mutableState().q = Quat::fromEuler(bearing, pitch, 0.0);
+        p.fm->mutableState().vel = Quat::fromEuler(bearing, pitch, 0.0).forward() * 220.0;
+        BattleConfig cfg; cfg.enemyJets = 0; cfg.allyJets = 0; cfg.groundTargets = false; cfg.endlessWaves = false;
+        b.start(cfg);
+        b.setAiEnabled(false);
+        GroundTarget g; g.kind = kind; g.pos = tpos; g.label = "T"; g.group = 1; g.armed = false;
+        if (moving) { g.pathCenter = tpos + Vec3{0, 0, 300}; g.pathRadius = 300; g.pathAngle = -kPi / 2; g.pos = tpos; }
+        target = b.addGround(g);
+    }
+    bool atsShot() {
+        Jet& p = b.player();
+        p.weaponAG = true;
+        // hold the nose on the target until the lock completes, as a player would
+        for (int i = 0; i < 240 && p.lockProgress < 1.0; ++i) b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+        PlayerCommands fire; fire.fireMissile = true;
+        b.update(FlightModel::kDt, ControlInputs{}, fire);
+        for (int i = 0; i < 120 * 20 && b.ground()[target].alive; ++i) {
+            b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+            if (b.missiles().empty()) break;
+        }
+        return !b.ground()[target].alive;
+    }
+};
+}  // namespace
+
+TEST(ats_missiles_reliably_hit_static_and_moving_vehicles) {
+    int shots = 0, hits = 0;
+    for (bool moving : {false, true})
+        for (double dist : {2500.0, 4000.0, 6000.0})
+            for (double agl : {300.0, 900.0, 1600.0})
+                for (double bearing : {0.0, 1.9, 3.3, 4.6}) {
+                    GroundAttackRange r(GroundKind::Truck, dist, agl, bearing, moving);
+                    if (!r.valid) continue;
+                    ++shots;
+                    if (r.atsShot()) ++hits;
+                    else std::printf("    miss: moving=%d dist=%.0f agl=%.0f bearing=%.1f\n", moving, dist, agl, bearing);
+                }
+    std::printf("    ATS vs trucks: %d / %d hits\n", hits, shots);
+    CHECK(shots >= 20);
+    CHECK(hits >= shots * 0.9);
+}
+
+TEST(ats_fired_without_full_lock_still_guides_to_the_target_near_the_nose) {
+    GroundAttackRange r(GroundKind::Tank, 3500, 700, 0.0, false);
+    CHECK(r.valid);
+    Jet& p = r.b.player();
+    p.weaponAG = true;
+    PlayerCommands fire; fire.fireMissile = true;
+    r.b.update(FlightModel::kDt, ControlInputs{}, fire);   // no lock yet
+    CHECK(!r.b.missiles().empty());
+    if (!r.b.missiles().empty()) CHECK(r.b.missiles()[0].targetGround == r.target);
+    for (int i = 0; i < 120 * 20 && r.b.ground()[r.target].alive; ++i) r.b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+    CHECK(!r.b.ground()[r.target].alive);
+}
+
+TEST(cannon_strafing_run_destroys_a_truck_with_aim_assist) {
+    int kills = 0, runs = 0;
+    for (bool moving : {false, true})
+        for (double dist : {1400.0, 2000.0}) {
+            GroundAttackRange r(GroundKind::Truck, dist, dist * 0.18, 0.0, moving);
+            CHECK(r.valid);
+            PlayerCommands gun; gun.fireGun = true;
+            ++runs;
+            // nose slightly off the target (within the assist cone): 2 degrees right
+            Jet& p = r.b.player();
+            Euler e = toEuler(p.fm->state().q);
+            p.fm->mutableState().q = Quat::fromEuler(e.heading + 2.0 * kDeg, e.pitch, 0.0);
+            for (int i = 0; i < 120 * 3 && r.b.ground()[r.target].alive; ++i) r.b.update(FlightModel::kDt, ControlInputs{}, gun);
+            if (!r.b.ground()[r.target].alive) ++kills;
+            else std::printf("    strafe failed: moving=%d dist=%.0f hp=%.0f hits=%d/%d\n", moving, dist, r.b.ground()[r.target].health,
+                             r.b.playerStats().roundHits, r.b.playerStats().roundsFired);
+        }
+    CHECK(kills == runs);
+}
+
+TEST(refuelling_takes_fuel_only_in_contact_with_the_basket) {
+    const CampaignMissionDef* d = campaignMission(41);
+    CHECK(d != nullptr);
+    if (!d) return;
+    CampaignPlaythrough pt(*d);
+    FlightModel& fm = *pt.battle.player().fm;
+    double maxFuel = fm.profile().fuelMassKg;
+    CHECK(fm.state().fuelKg < 0.2 * maxFuel);          // the mission starts low on fuel
+    // 1) flying formation 60 m off to the side: no fuel
+    double before = fm.state().fuelKg;
+    for (int i = 0; i < 240; ++i) {
+        const Tanker& tk = pt.battle.tanker();
+        Quat q = Quat::fromEuler(tk.heading, 0.0, 0.0);
+        FlightState& st = fm.mutableState();
+        st.q = q; st.vel = tk.vel;
+        st.pos = tk.basket() - q.forward() * 8.0 + q.right() * 60.0;
+        pt.step(ControlInputs{});
+    }
+    CHECK(fm.state().fuelKg <= before);
+    CHECK(!pt.battle.tanker().contact);
+    // 2) probe in the basket: fuel flows to 90 % within ~20 s
+    int steps = 0;
+    while (fm.state().fuelKg < 0.9 * maxFuel && steps < 120 * 40) {
+        const Tanker& tk = pt.battle.tanker();
+        Quat q = Quat::fromEuler(tk.heading, 0.0, 0.0);
+        FlightState& st = fm.mutableState();
+        st.q = q; st.vel = tk.vel;
+        st.pos = tk.basket() - q.forward() * 8.0 - q.up() * 1.0 + tk.vel * FlightModel::kDt;
+        pt.step(ControlInputs{});
+        ++steps;
+    }
+    std::printf("    refuelled to 90%% in %.1f s\n", steps / 120.0);
+    CHECK(fm.state().fuelKg >= 0.9 * maxFuel);
+    CHECK(steps < 120 * 30);
+    // 3) flying into the tanker is fatal
+    {
+        const Tanker& tk = pt.battle.tanker();
+        FlightState& st = fm.mutableState();
+        st.pos = tk.pos + Vec3{0, 1, 0};
+        st.vel = tk.vel;
+        pt.step(ControlInputs{});
+        CHECK(!pt.battle.player().alive);
+    }
+}
+
+TEST(trains_run_along_the_railway_and_stop_at_the_terminus) {
+    Battle b(terrain());
+    b.setLayout(&layout());
+    b.createPlayer(AircraftId::F22).fm->resetAirborne({0, 3000, 0}, 0, 220, 0.8);
+    BattleConfig cfg; cfg.enemyJets = 0; cfg.allyJets = 0; cfg.groundTargets = false; cfg.endlessWaves = false;
+    b.start(cfg);
+    GroundTarget loco; loco.kind = GroundKind::Locomotive; loco.railS = layout().railway.length() - 200; loco.railSpeed = 20; loco.armed = false;
+    int i = b.addGround(loco);
+    Vec3 p0 = b.ground()[i].pos;
+    { Vec3 r = layout().railway.at(loco.railS); CHECK(std::hypot(b.ground()[i].pos.x - r.x, b.ground()[i].pos.z - r.z) < 1e-6); }
+    CHECK(b.ground()[i].pos.y >= terrain().surfaceHeight(b.ground()[i].pos.x, b.ground()[i].pos.z) - 1e-6);
+    for (int k = 0; k < 120 * 5; ++k) b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+    CHECK(length(b.ground()[i].pos - p0) > 90.0);                        // moved ~100 m along the line
+    for (int k = 0; k < 120 * 20; ++k) b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+    CHECK(b.ground()[i].railS == layout().railway.length());             // stopped at the end of the line
+    CHECK(length(b.groundVelocity(i)) < 1e-9);
+}
+
+TEST(world_layout_has_towns_roads_railway_and_bridges) {
+    const WorldLayout& L = layout();
+    CHECK(L.towns.size() >= 5);
+    CHECK(L.roads.size() >= 4);
+    CHECK(L.railway.length() > 10000);
+    CHECK(!L.bridges.empty());
+    CHECK(L.largestBridge(true) >= 0);
+    CHECK(L.factories.size() >= 4);
+    CHECK(L.turbines.size() >= 6);
+    // the railway profile respects its maximum grade (2.5 %)
+    double maxGrade = 0;
+    for (size_t k = 1; k < L.railway.pts.size(); ++k) {
+        double ds = L.railway.cum[k] - L.railway.cum[k - 1];
+        if (ds > 1) maxGrade = std::max(maxGrade, std::fabs(L.railway.pts[k].y - L.railway.pts[k - 1].y) / ds);
+    }
+    CHECK(maxGrade <= 0.0251);
+    // towns are on dry, reasonably flat ground and away from the runway
+    for (const Town& t : L.towns) {
+        CHECK(terrain().height(t.center.x, t.center.z) > 2.0);
+        CHECK(!terrain().onRunway(t.center.x, t.center.z, 800.0));
+    }
+}
+
+TEST(real_terrain_file_round_trips_and_builds_a_flat_airfield) {
+    // a synthetic "real" map: a 2.5 km high massif with a valley floor at 1400 m
+    Heightmap hm;
+    hm.n = 257;
+    hm.extent = 32000;
+    hm.h.resize(static_cast<size_t>(hm.n) * hm.n);
+    for (int j = 0; j < hm.n; ++j)
+        for (int i = 0; i < hm.n; ++i) {
+            double x = -16000 + i * 125.0, z = -16000 + j * 125.0;
+            hm.h[static_cast<size_t>(j) * hm.n + i] = static_cast<float>(1400 + 2500 * std::exp(-(x * x + (z + 5000) * (z + 5000)) / (2 * 4000.0 * 4000.0)) +
+                                                                          120 * std::sin(x / 2100.0) * std::cos(z / 1700.0));
+        }
+    std::string path = (std::filesystem::temp_directory_path() / "skyfall_test.skt").string();
+    CHECK(saveHeightmap(path, hm, 46.0, 7.7));
+    Heightmap back;
+    std::string err;
+    CHECK(loadHeightmap(path, back, err));
+    CHECK(back.n == hm.n);
+    CHECK_NEAR(back.extent, 32000.0, 1e-3);
+    CHECK_NEAR(back.at(100, 120), std::round(hm.at(100, 120)), 0.51);
+    Heightmap missing;
+    CHECK(!loadHeightmap(path + ".nope", missing, err));
+    const LocationDef* loc = findLocation("matterhorn");
+    CHECK(loc != nullptr);
+    if (!loc) return;
+    Terrain t(back, terrainInfoFor(*loc));
+    CHECK(t.info().real);
+    CHECK(t.info().biome == Biome::Alpine);
+    // the source shape survives (peak ~3.9 km, valley ~1.4 km)
+    CHECK_NEAR(t.height(0, -5000), 3900, 160);
+    // runway on dry ground and flat along its length
+    const RunwayInfo& rw = t.runway();
+    double lo = 1e9, hi = -1e9;
+    for (double a = -1500; a <= 1500; a += 100) { double h = t.height(rw.center.x + a, rw.center.z); lo = std::min(lo, h); hi = std::max(hi, h); }
+    CHECK(hi - lo < 1.5);
+    CHECK(rw.center.y > 1000);
+    CHECK(t.info().cloudBase > rw.center.y);
+    // scenery can be generated on it
+    WorldLayout L = WorldLayout::build(t);
+    CHECK(!L.towns.empty());
+    std::filesystem::remove(path);
+}
+
+TEST(world_has_at_least_twelve_real_locations) {
+    int real = 0;
+    for (const LocationDef& l : locations()) {
+        if (l.id != "desert") ++real;
+        CHECK(!l.name.empty());
+        CHECK(std::fabs(l.lat) <= 90 && std::fabs(l.lon) <= 180);
+    }
+    CHECK(real >= 12);
+    CHECK(findLocation("desert") != nullptr);
+    CHECK(findLocation("everest") != nullptr);
+}
+
+TEST(generated_towns_do_not_cover_campaign_targets) {
+    int bad = 0;
+    for (const CampaignMissionDef& m : campaignMissions())
+        for (const TargetDef& g : m.targets) {
+            if (g.anchor != TargetDef::Anchor::None || g.pathRadius > 0) continue;
+            for (size_t k = 1; k < layout().towns.size(); ++k) {   // town 0 is the original city
+                const Town& tw = layout().towns[k];
+                if (std::hypot(tw.center.x - g.x, tw.center.z - g.z) < tw.radius + 40) {
+                    if (bad++ < 10) std::printf("    mission %02d: %s inside %s\n", m.number, g.label.c_str(), tw.name.c_str());
+                }
+            }
+        }
+    CHECK(bad == 0);
 }
 
 int main(int argc, char** argv) {
