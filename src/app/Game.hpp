@@ -34,6 +34,7 @@ struct Options {
     std::string startMode;      // --mode arena|m01 (skip the title screen)
     int width = 0, height = 0;  // override window size
     bool windowed = false;
+    bool native = false;        // --native: benchmark at full resolution (no dynamic resolution)
     int quality = -1;
 };
 

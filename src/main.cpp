@@ -49,6 +49,7 @@ static int skyfallMain(int argc, char** argv) {
         else if (a == "--bench") opt.benchSeconds = std::atof(next().c_str());
         else if (a == "--mode") opt.startMode = next();
         else if (a == "--windowed") opt.windowed = true;
+        else if (a == "--native") opt.native = true;
         else if (a == "--quality") opt.quality = std::atoi(next().c_str());
         else if (a == "--size") {
             std::string v = next();

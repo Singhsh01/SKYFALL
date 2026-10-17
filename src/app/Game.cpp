@@ -145,7 +145,8 @@ void Game::updateDynamicResolution(double dt) {
     // Holds ~60 fps by lowering the 3D scene resolution in 10 % steps (HUD stays native).
     // Down quickly when frames are slow; up only after sustained headroom, and not again soon
     // after an up-step that had to be undone (prevents oscillation and its stutter).
-    if (!settings_.dynamicResolution || capturing_) { dynScale_ = 1.0; return; }
+    // screenshots and --native benchmarks render at full resolution; a normal --bench plays like the game
+    if (!settings_.dynamicResolution || (capturing_ && opt_.benchSeconds <= 0) || opt_.native) { dynScale_ = 1.0; return; }
     if (screen_ != Screen::Playing || replayActive_) { dynTimer_ = dynAccum_ = 0; dynFrames_ = 0; return; }
     dynAccum_ += dt; ++dynFrames_; dynTimer_ += dt;
     if (dynTimer_ < 1.0) return;
@@ -2376,7 +2377,7 @@ int Game::runBench() {
         // gentle scripted turn so the view changes
         battle_.player().lastInput.roll = std::sin(elapsed * 0.3) * 0.4;
         frame(std::min(dt, 0.25));
-        if (elapsed > 1.0) { stats_.push(dt * 1000.0); benchSim_.push_back(simMs_); benchHud_.push_back(hudMs_); }  // skip warm-up
+        if (elapsed > (opt_.native ? 1.0 : 6.0)) { stats_.push(dt * 1000.0); benchSim_.push_back(simMs_); benchHud_.push_back(hudMs_); }  // skip warm-up
         elapsed += dt;
     }
     auto meanMax = [](const std::vector<double>& v, double& mean, double& mx) {
@@ -2389,6 +2390,7 @@ int Game::runBench() {
     meanMax(benchHud_, hm, hx);
     std::printf("cpu: simulation mean %.3f ms max %.3f ms | hud mean %.3f ms max %.3f ms\n", sm, sx, hm, hx);
     if (renderer_.profiling()) std::printf("gpu passes (per frame, serialised):\n%s", renderer_.profReport().c_str());
+    std::printf("display %dx%d, resolution scale %d%%\n", GetRenderWidth(), GetRenderHeight(), static_cast<int>(std::lround(dynScale_ * 100)));
     std::printf("scene %dx%d, draw calls %d, triangles %.0fk\n", renderer_.width(), renderer_.height(), renderer_.drawCalls(), renderer_.triangles() / 1000.0);
     std::fflush(stdout);
     std::filesystem::create_directories("benchmarks");

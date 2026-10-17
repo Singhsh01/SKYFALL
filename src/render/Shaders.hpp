@@ -704,9 +704,9 @@ void main() {
     float dens = density(vPos.xz);
     if (dens < 0.01) discard;
     // fake surface normal from the density gradient -> billowy relief
-    float e = 60.0;
-    float dx = density(vPos.xz + vec2(e, 0.0)) - density(vPos.xz - vec2(e, 0.0));
-    float dz = density(vPos.xz + vec2(0.0, e)) - density(vPos.xz - vec2(0.0, e));
+    float e = 60.0;   // forward differences: 3 density evaluations per pixel instead of 5
+    float dx = (density(vPos.xz + vec2(e, 0.0)) - dens) * 2.0;
+    float dz = (density(vPos.xz + vec2(0.0, e)) - dens) * 2.0;
     bool above = uCamPos.y > uLayerY;
     vec3 N = normalize(vec3(-dx * 2.2, above ? 1.0 : -1.0, -dz * 2.2));
     vec3 v = normalize(vPos - uCamPos);
@@ -927,12 +927,12 @@ void main() {
         vec3 avg = (hNW + hNE + hSW + hSE) * 0.25;
         h = max(h + (hM - avg) * uSharpen * 2.0, vec3(0.0));
     }
-    vec3 col = toneMap(h);
     vec3 bloom = texture(uBloom1, uv).rgb * 0.6 + texture(uBloom2, uv).rgb * 0.8;
+    vec3 col;
     float l;
     if (uGrade > 0.5) {
-        col += toSrgb(acesHill(bloom * uBloomStrength * uExposure * uGradeK)) * 0.6;
-        col = clamp(col, 0.0, 1.0);
+        // bloom is added in HDR, so the whole image goes through the tone curve once
+        col = toneMap(h + bloom * (uBloomStrength * 0.75));
         // photographic grade: gentle S-curve, a touch of saturation, cool shadows / warm highlights
         col = col * col * (3.0 - 2.0 * col) * 0.35 + col * 0.65;
         l = luma(col);
@@ -941,6 +941,7 @@ void main() {
         col = mix(col, col * vec3(1.03, 1.0, 0.96), l * 0.2);
         col = clamp(col, 0.0, 1.0);
     } else {
+        col = toneMap(h);
         col += aces(bloom * uBloomStrength * uExposure) * 0.9;
         col = clamp(col, 0.0, 1.0);
         // gentle filmic grade: lift shadows to teal, warm highlights

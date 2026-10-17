@@ -308,10 +308,13 @@ void Renderer::resize(int width, int height) {
     scene_ = makeTarget(w_, h_, true, true);
     hdr_ = scene_.id != 0;
     if (!hdr_) scene_ = makeTarget(w_, h_, false, true);
-    bloomA_ = makeTarget(w_ / 2, h_ / 2, hdr_, false);
-    bloomB_ = makeTarget(w_ / 2, h_ / 2, hdr_, false);
-    bloomC_ = makeTarget(w_ / 4, h_ / 4, hdr_, false);
-    bloomD_ = makeTarget(w_ / 4, h_ / 4, hdr_, false);
+    // bloom is soft: at Retina / 4K sizes it is built from a quarter-resolution image (same look,
+    // a quarter of the pixels)
+    int d = w_ > 2000 ? 4 : 2;
+    bloomA_ = makeTarget(w_ / d, h_ / d, hdr_, false);
+    bloomB_ = makeTarget(w_ / d, h_ / d, hdr_, false);
+    bloomC_ = makeTarget(w_ / (d * 2), h_ / (d * 2), hdr_, false);
+    bloomD_ = makeTarget(w_ / (d * 2), h_ / (d * 2), hdr_, false);
 }
 
 void Renderer::shutdown() {
@@ -1598,25 +1601,28 @@ void Renderer::composite(const FrameParams& f) {
         ClearBackground(BLACK);
         BeginShaderMode(bright_.sh);
         bright_.setF("uThreshold", 2.2f);
-        DrawTexturePro(scene_.texture, full, {0, 0, static_cast<float>(w_ / 2), static_cast<float>(h_ / 2)}, {0, 0}, 0, WHITE);
+        DrawTexturePro(scene_.texture, full, {0, 0, static_cast<float>(bloomA_.texture.width), static_cast<float>(bloomA_.texture.height)}, {0, 0}, 0, WHITE);
         EndShaderMode();
         EndTextureMode();
+        // keep the blur radius the same on screen whatever the bloom buffer resolution
+        const float bloomK = 2.0f * static_cast<float>(bloomA_.texture.width) / static_cast<float>(std::max(1, w_));
         auto blur = [&](RenderTexture2D& src, RenderTexture2D& dst, Vector2 dir, int w, int h) {
             BeginTextureMode(dst);
             ClearBackground(BLACK);
             BeginShaderMode(blur_.sh);
-            blur_.setV2("uDir", dir);
+            blur_.setV2("uDir", Vector2Scale(dir, bloomK));
             DrawTexturePro(src.texture, {0, 0, static_cast<float>(src.texture.width), static_cast<float>(-src.texture.height)},
                            {0, 0, static_cast<float>(w), static_cast<float>(h)}, {0, 0}, 0, WHITE);
             EndShaderMode();
             EndTextureMode();
         };
-        blur(bloomA_, bloomB_, {1, 0}, w_ / 2, h_ / 2);
-        blur(bloomB_, bloomA_, {0, 1}, w_ / 2, h_ / 2);
-        blur(bloomA_, bloomD_, {2, 0}, w_ / 4, h_ / 4);
-        blur(bloomD_, bloomC_, {0, 2}, w_ / 4, h_ / 4);
-        blur(bloomC_, bloomD_, {3, 0}, w_ / 4, h_ / 4);
-        blur(bloomD_, bloomC_, {0, 3}, w_ / 4, h_ / 4);
+        const int hw = bloomA_.texture.width, hh = bloomA_.texture.height, qw = bloomC_.texture.width, qh = bloomC_.texture.height;
+        blur(bloomA_, bloomB_, {1, 0}, hw, hh);
+        blur(bloomB_, bloomA_, {0, 1}, hw, hh);
+        blur(bloomA_, bloomD_, {2, 0}, qw, qh);
+        blur(bloomD_, bloomC_, {0, 2}, qw, qh);
+        blur(bloomC_, bloomD_, {3, 0}, qw, qh);
+        blur(bloomD_, bloomC_, {0, 3}, qw, qh);
     }
     {
         // heat-haze footprints behind the nozzles of nearby jets running hot
