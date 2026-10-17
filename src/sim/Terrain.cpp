@@ -245,9 +245,24 @@ double Terrain::rawHeight(double x, double z) const {
 
 double Terrain::analyticHeight(double x, double z) const {
     if (info_.real) {
-        // beyond a real map the edge simply continues
-        double cx = clampd(x, -kHalfSize, kHalfSize - 1e-6), cz = clampd(z, -kHalfSize, kHalfSize - 1e-6);
-        return height(cx, cz);
+        // Beyond a real map the landscape goes on: first the map mirrored across its edge (so
+        // ridges, valleys and coastlines continue without a seam), then, further out, mountains
+        // generated with the map's own height and relief. Sea at the edge stays sea.
+        const double H = kHalfSize - 1e-6;
+        auto mirror = [&](double v) { return v > H ? clampd(2.0 * H - v, -H, H) : (v < -H ? clampd(-2.0 * H - v, -H, H) : v); };
+        double e = height(mirror(x), mirror(z));
+        double out = std::max({std::fabs(x) - kHalfSize, std::fabs(z) - kHalfSize, 0.0});
+        double w = smoothstep(3000.0, 14000.0, out);
+        if (w <= 0.0) return e;
+        double wx = x + (fbm2(x / 5200.0 + 3.1, z / 5200.0, 3, 141u) - 0.5) * 2600.0;
+        double wz = z + (fbm2(x / 5200.0, z / 5200.0 - 5.3, 3, 142u) - 0.5) * 2600.0;
+        double ridges = ridged2(wx / 3600.0, wz / 3600.0, 5, 131u);
+        double massif = fbm2(x / 14000.0, z / 14000.0, 3, 137u);
+        double proc = outerBase_ + (ridges - 0.45) * outerRelief_ * 2.4 + (massif - 0.5) * outerRelief_ * 1.6;
+        proc = std::max(proc, 4.0 + fbm2(x / 900.0, z / 900.0, 2, 139u) * 8.0);   // low ground stays dry land
+        double land = smoothstep(-15.0, 12.0, e);
+        double sea = std::min(e, -25.0 - out * 0.004);
+        return lerpd(sea, lerpd(e, proc, w), land);
     }
     return applyModifiers(x, z, rawHeight(x, z));
 }
@@ -376,6 +391,19 @@ Terrain::Terrain(const Heightmap& hmIn, const TerrainInfo& info) : info_(info) {
         for (int j = 0; j < n; j += 32) for (int i = 0; i < n; i += 32) sample.push_back(grid_[static_cast<size_t>(j) * n + i]);
         std::nth_element(sample.begin(), sample.begin() + sample.size() / 2, sample.end());
         info_.cloudBase = std::max(1800.0, static_cast<double>(sample[sample.size() / 2]) + 1400.0);
+    }
+    // land statistics for the procedural continuation beyond the map edge
+    {
+        double sum = 0, sum2 = 0; int cnt = 0;
+        for (int j = 0; j < n; j += 8) for (int i = 0; i < n; i += 8) {
+            double h = grid_[static_cast<size_t>(j) * n + i];
+            if (h < 2.0) continue;
+            sum += h; sum2 += h * h; ++cnt;
+        }
+        if (cnt > 0) {
+            outerBase_ = sum / cnt;
+            outerRelief_ = std::clamp(std::sqrt(std::max(0.0, sum2 / cnt - outerBase_ * outerBase_)), 60.0, 1400.0);
+        }
     }
     // 4. flatten the airbase and the town square
     parallelRows(n, [&](int j) {

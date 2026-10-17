@@ -257,6 +257,8 @@ bool Renderer::init(const Terrain& t, const WorldLayout& layout, int width, int 
     terrainMat_.maps[MATERIAL_MAP_EMISSION].texture = world_.terrainData;
     terrain_p_.sh.locs[SHADER_LOC_MAP_HEIGHT] = terrain_p_.loc("uDetailGrad");
     terrainMat_.maps[MATERIAL_MAP_HEIGHT].texture = world_.detailGrad;
+    terrain_p_.sh.locs[SHADER_LOC_MAP_OCCLUSION] = terrain_p_.loc("uLandCover");
+    terrainMat_.maps[MATERIAL_MAP_OCCLUSION].texture = world_.landCover;
     terrainMat_.shader = terrain_p_.sh;
     bindShadow(lit_, litMat_);
     bindShadow(jet_, jetMat_);
@@ -295,6 +297,7 @@ void Renderer::rebuildWorld(const Terrain& t, const WorldLayout& layout) {
     waterMat_.maps[MATERIAL_MAP_NORMAL].texture = world_.depthMap;
     terrainMat_.maps[MATERIAL_MAP_EMISSION].texture = world_.terrainData;
     terrainMat_.maps[MATERIAL_MAP_HEIGHT].texture = world_.detailGrad;
+    terrainMat_.maps[MATERIAL_MAP_OCCLUSION].texture = world_.landCover;
     applyTerrainInfo();
 }
 

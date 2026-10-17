@@ -83,7 +83,7 @@ bool Speech::hasRecording(Speaker who, const std::string& text) const {
 void Speech::say(Speaker who, const std::string& text, bool interrupt) {
     if (!enabled_ || text.empty()) return;
     if (interrupt) { queue_.clear(); stopCurrent(); }
-    if (queue_.size() >= 2) queue_.pop_front();   // radio chatter: never fall far behind the action
+    if (queue_.size() >= 3) queue_.pop_front();   // radio chatter: never fall far behind the action
     queue_.push_back({who, text});
     update();
 }

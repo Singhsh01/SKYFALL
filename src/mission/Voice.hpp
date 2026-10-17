@@ -10,7 +10,8 @@
 
 namespace sky {
 
-/// Who is talking. Every speaker is a woman; radio speakers get a radio-band filter.
+/// Who is talking. Every speaker is a woman, heard over the radio (radio-band filter).
+/// Captain = the operations officer who briefs the pilot ("Captain") from the ground.
 enum class Speaker { Captain = 0, Awacs = 1, Tower = 2, Instructor = 3, Wingman = 4 };
 
 struct VoiceLine {
@@ -31,7 +32,8 @@ std::string spokenCaps(const std::string& caps);
 struct Briefing {
     std::string header, title;
     std::string display;                  // typed-out text on screen
-    std::string speech;                   // what the captain says
+    std::string speech;                   // the whole briefing as one text
+    std::vector<std::string> parts;       // the radio transmissions it is spoken in
     std::vector<std::string> objectives;  // HUD titles
 };
 Briefing makeBriefing(int missionNo);

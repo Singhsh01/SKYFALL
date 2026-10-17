@@ -633,12 +633,41 @@ void Game::startMission(int n) {
     killerName_.clear();
 
     applySettings();
-    if (campaignDef_ && campaignDef_->carrier) radio(Speaker::Tower, lines::kCarrierCat, 8);
-    else if (campaignDef_) radio(Speaker::Awacs, campaignDef_->briefing, 9, false);   // just heard in the briefing
-    else if (n == 1) radio(Speaker::Tower, lines::kTowerStartup, 7, false);
-    else if (n == 2) radio(Speaker::Instructor, lines::kInstructorStart, 6, false);
-    else radio(Speaker::Tower, lines::kTowerLanding, 7, false);
+    // the operations briefing comes first over the radio (queueBriefing), then these calls
+    radioQueue_.clear();
+    if (campaignDef_ && campaignDef_->carrier) queueRadio(Speaker::Tower, lines::kCarrierCat);
+    else if (n == 1) queueRadio(Speaker::Tower, lines::kTowerStartup);
+    else if (n == 2) queueRadio(Speaker::Instructor, lines::kInstructorStart);
+    else if (n == 3) queueRadio(Speaker::Tower, lines::kTowerLanding);
     audio_.play(Sfx::Radio);
+}
+
+void Game::queueRadio(Speaker who, const std::string& text, bool front) {
+    if (front) radioQueue_.push_front({who, text});
+    else radioQueue_.push_back({who, text});
+}
+
+void Game::queueBriefing(int missionNo) {
+    // the pilot is already in the cockpit; operations briefs over the radio, in short calls
+    Briefing br = makeBriefing(missionNo);
+    for (auto it = br.parts.rbegin(); it != br.parts.rend(); ++it) queueRadio(Speaker::Captain, *it, true);
+    camMode_ = CameraMode::Cockpit;
+    chaseInit_ = false;
+    radioNextAt_ = time_ + 1.2;   // a moment to settle in before the first call
+}
+
+void Game::updateRadioQueue() {
+    if (radioQueue_.empty() || time_ < radioNextAt_) return;
+    if (speech_.speaking()) { radioNextAt_ = time_ + 0.2; return; }
+    auto item = radioQueue_.front();
+    radioQueue_.pop_front();
+    double dur = std::max(4.0, item.second.size() / 13.0 + 1.0);
+    hud_.radio(speakerName(item.first), item.second, dur);
+    bool voiced = settings_.voiceBriefings && !capturing_;
+    if (voiced) speech_.say(item.first, item.second);
+    audio_.play(Sfx::Radio, 0.5f);
+    // with a voice, the next call follows the end of this one; captions-only paces by length
+    radioNextAt_ = time_ + (voiced && speech_.hasRecording(item.first, item.second) ? 0.6 : dur * 0.9);
 }
 
 void Game::startArena(bool keepPlayerState) {
@@ -678,8 +707,9 @@ void Game::startArena(bool keepPlayerState) {
     respawnTimer_ = -1;
     chaseInit_ = false;
     applySettings();
-    if (freeFlight_) radio(Speaker::Tower, freeFlightLine(terrain_.info().name), 6);
-    else radio(Speaker::Awacs, lines::kArenaStart, 6, false);
+    radioQueue_.clear();
+    if (freeFlight_) queueRadio(Speaker::Tower, freeFlightLine(terrain_.info().name));
+    else queueRadio(Speaker::Awacs, lines::kArenaStart);
     audio_.play(Sfx::Radio);
 }
 
@@ -736,6 +766,7 @@ void Game::respawnPlayer() {
 // ------------------------------------------------------------------------------------------
 void Game::frame(double dt, bool render) {
     speech_.update();
+    if (screen_ == Screen::Playing) updateRadioQueue();
     if (!switchTo_.empty()) {
         // menus request location changes; the world is rebuilt here, outside any drawing
         std::string id = switchTo_;
@@ -1888,9 +1919,12 @@ int Game::runCapture() {
         snap("menu_settings", 2);
         startTitle(); locReturn_ = Screen::Settings; screen_ = Screen::Locations; nav_.focus = 3;
         snap("menu_locations", 2);
-        startMission(55); beginBriefing(55);
-        for (int i = 0; i < 300; ++i) briefT_ += 1.0 / 30.0;
-        snap("menu_briefing_carrier", 2);
+        startMission(55); queueBriefing(55);
+        hideHud_ = false;
+        scriptedStep(1.5, [&](double) { updateRadioQueue(); });
+        snap("radio_briefing_1", 2);
+        scriptedStep(4.0, [&](double) { updateRadioQueue(); });
+        snap("radio_briefing_2", 2);
         return 0;
     }
     if (set == "detail") {

@@ -13,7 +13,7 @@ namespace sky {
 
 const char* speakerName(Speaker s) {
     switch (s) {
-        case Speaker::Captain: return "NORTHSTAR";
+        case Speaker::Captain: return "OPS";
         case Speaker::Awacs: return "AWACS";
         case Speaker::Tower: return "TOWER";
         case Speaker::Instructor: return "INSTRUCTOR";
@@ -33,7 +33,7 @@ const char* speakerVoice(Speaker s) {
     return "bf_isabella";
 }
 
-bool speakerOnRadio(Speaker s) { return s != Speaker::Captain; }
+bool speakerOnRadio(Speaker) { return true; }   // everything is heard over the radio
 
 std::string voiceKey(Speaker who, const std::string& text) {
     // FNV-1a 64 over "<voice>|<radio>|<text>" (identical in tools/make_voice.py)
@@ -98,18 +98,22 @@ Briefing makeBriefing(int missionNo) {
         }
     }
     b.display = story + (tip.empty() ? "" : " " + tip) + " Good luck, Captain.";
-    std::string say = "Captain, this is Captain Avery Langlois, Wing Operations. ";
-    say += missionNo == 0 ? std::string("Dogfight Arena. ") : (std::string("Mission ") + std::to_string(missionNo) + ", " + b.title + ". ");
-    say += story + " ";
+    // spoken over the radio once the pilot is in the cockpit, in short transmissions
+    std::string first = "Captain, ";
+    first += missionNo == 0 ? std::string("Dogfight Arena. ") : (std::string("mission ") + std::to_string(missionNo) + ", " + b.title + ". ");
+    first += story;
+    b.parts.push_back(first);
     if (!b.objectives.empty()) {
-        say += "Your objectives: ";
+        std::string obj = "Your objectives: ";
         for (size_t i = 0; i < b.objectives.size(); ++i) {
-            say += spokenCaps(b.objectives[i]);
-            say += i + 1 < b.objectives.size() ? "; " : ". ";
+            obj += spokenCaps(b.objectives[i]);
+            obj += i + 1 < b.objectives.size() ? "; " : ".";
         }
+        b.parts.push_back(obj);
     }
-    if (!tip.empty()) say += tip + " ";
-    say += "Good luck, Captain.";
+    b.parts.push_back(tip.empty() ? std::string("Good luck, Captain.") : tip + " Good luck, Captain.");
+    std::string say;
+    for (const auto& pt : b.parts) say += (say.empty() ? "" : " ") + pt;
     b.speech = say;
     return b;
 }
@@ -147,9 +151,9 @@ std::vector<VoiceLine> allVoiceLines() {
         if (t.empty()) return;
         if (seen.insert(voiceKey(s, t)).second) v.push_back({s, t});
     };
-    add(Speaker::Captain, makeBriefing(0).speech);
+    for (const auto& pt : makeBriefing(0).parts) add(Speaker::Captain, pt);
     for (int n = 1; n <= kCampaignMissions; ++n) {
-        add(Speaker::Captain, makeBriefing(n).speech);
+        for (const auto& pt : makeBriefing(n).parts) add(Speaker::Captain, pt);
         const CampaignMissionDef* def = n >= 4 ? campaignMission(n) : nullptr;
         if (def) add(Speaker::Awacs, def->debrief);
         Mission m = def ? buildCampaignMission(*def) : n == 1 ? makeMission01() : n == 2 ? makeMission02() : makeMission03();

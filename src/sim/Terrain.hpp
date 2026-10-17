@@ -107,6 +107,7 @@ private:
     DeckInfo deck_;
     Vec3 town_;
     TerrainInfo info_;
+    double outerBase_ = 300.0, outerRelief_ = 300.0;   // real maps: statistics for the land beyond the edge
 };
 
 /// Deterministic value-noise helpers (also mirrored in the terrain shader for detail).

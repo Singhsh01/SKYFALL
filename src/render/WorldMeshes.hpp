@@ -47,6 +47,8 @@ struct WorldMeshes {
     void evictL0(Vector3 camPos, double now);
     Texture2D noise{};     // tiling RGBA noise
     Texture2D detailGrad{}; // gradient of the noise green channel (terrain detail normals)
+    Texture2D landCover{};  // 1024^2 over the map: r forest, g grass/meadow, b farmland, a rock
+    std::vector<unsigned char> coverPixels;
     Texture2D depthMap{};  // sea floor height
     Texture2D minimap{};   // coloured hill-shaded map for the HUD (covers +/- kMinimapHalf metres)
     static constexpr double kMinimapHalf = 20000.0;   // map is +/-16 km; the margin shows what lies beyond

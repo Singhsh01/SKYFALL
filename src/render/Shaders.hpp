@@ -136,6 +136,7 @@ in vec3 vNormal;
 in vec4 vMask;  // r scrub, g town, b dry river bed
 uniform sampler2D uNoise;
 uniform sampler2D uTerrainData;   // RG normal.xz, B ambient occlusion, A baked sun shadow
+uniform sampler2D uLandCover;     // r forest, g grass / meadow, b farmland, a rock
 uniform float uCloudCover;
 uniform vec3 uFlashPos;
 uniform vec3 uFlashColor;
@@ -196,18 +197,19 @@ void main() {
         grain = mix(texture(uNoise, vPos.xz / 7.0).a, 0.5, smoothstep(2500.0, 6000.0, dist));
     }
 
-    vec3 sandLight = vec3(0.47, 0.41, 0.32);
-    vec3 sandDark = vec3(0.39, 0.32, 0.24);
+    vec3 sandLight = vec3(0.52, 0.38, 0.26);
+    vec3 sandDark = vec3(0.42, 0.27, 0.17);
     vec3 sand = mix(sandLight, sandDark, smoothstep(0.3, 0.75, macro + (meso - 0.5) * 0.5));
     sand *= 0.92 + 0.12 * micro;
     // wind-blown dune ripples on flat sand
     float ripple = sin(dot(vPos.xz, vec2(0.21, 0.13)) + meso * 9.0) * 0.5 + 0.5;
     sand *= 1.0 - 0.05 * ripple * near * (1.0 - slope * 3.0);
-    vec3 gravel = mix(vec3(0.36, 0.32, 0.27), vec3(0.29, 0.26, 0.22), meso) * (0.85 + 0.25 * grain);
+    vec3 gravel = mix(vec3(0.40, 0.27, 0.19), vec3(0.31, 0.21, 0.15), meso) * (0.85 + 0.25 * grain);
     // sedimentary rock strata: horizontal bands warped by noise
     float strata = sin(h * 0.085 + meso * 6.0 + macro * 4.0) * 0.5 + 0.5;
     float strata2 = sin(h * 0.31 + micro * 3.0) * 0.5 + 0.5;
-    vec3 rockA = vec3(0.33, 0.30, 0.27), rockB = vec3(0.23, 0.21, 0.19), rockC = vec3(0.40, 0.37, 0.33);
+    // desert: red sandstone cliffs with pale bands; green climates override with granite below
+    vec3 rockA = vec3(0.44, 0.22, 0.13), rockB = vec3(0.29, 0.14, 0.09), rockC = vec3(0.56, 0.38, 0.25);
     vec3 rock = mix(rockB, rockA, 0.35 + 0.65 * mix(meso, strata, 0.35));
     rock = mix(rock, rockC, smoothstep(0.7, 0.95, strata2) * 0.25);
     rock *= 0.80 + 0.32 * micro * grain + 0.1 * meso;
@@ -236,16 +238,84 @@ void main() {
     vec3 soil = mix(vec3(0.17, 0.18, 0.12), vec3(0.24, 0.24, 0.18), micro * 0.6 + meso * 0.4);
     albedo = mix(albedo, mix(soil, granite, rockW), green * 0.9);
     albedo = mix(albedo, highRock, smoothstep(uHighRock, uHighRock + 450.0, h + meso * 200.0) * (0.6 + 0.4 * rockW));
-    // vegetation: meadows and forest on gentle ground below the tree line
+    // ---- land cover: forest canopy, meadows, patchwork farmland, desert grassland ----
+    vec4 lc;
+    if (inMap) lc = texture(uLandCover, tuv);
+    else {
+        // beyond the map: the same rules from noise, so the landscape goes on to the horizon
+        float bigN = texture(uNoise, vPos.xz / 9000.0).r * 0.65 + texture(uNoise, vPos.xz / 2300.0).g * 0.35;
+        float rkO = smoothstep(0.30, 0.45, slope);
+        if (uBiome > 0.5) {
+            float below = 1.0 - smoothstep(uTreeLine - 120.0, uTreeLine + 80.0, h);
+            float frO = below * smoothstep(0.30, 0.42, bigN) * (1.0 - rkO);
+            float faO = (1.0 - smoothstep(0.015, 0.06, slope)) * (1.0 - smoothstep(uTreeLine * 0.55, uTreeLine * 0.85, h)) * smoothstep(0.42, 0.5, bigN);
+            lc = vec4(frO * (1.0 - faO), (1.0 - frO) * (1.0 - faO) * (1.0 - rkO), faO, rkO);
+        } else {
+            float rkD = smoothstep(0.16, 0.30, slope);
+            lc = vec4(smoothstep(0.04, 0.12, slope) * (1.0 - rkD) * 0.3, (1.0 - smoothstep(0.04, 0.12, slope)) * smoothstep(0.3, 0.55, bigN), 0.0, rkD);
+        }
+        if (h < 0.5) lc = vec4(0.0, 1.0, 0.0, 0.0);
+    }
+    float tufts = near > 0.0 ? texture(uNoise, vPos.xz / 1.9).a : 0.5;
     if (uBiome > 0.5) {
-        vec3 grassA = uBiome > 2.5 ? vec3(0.10, 0.17, 0.05) : vec3(0.16, 0.20, 0.08);
-        vec3 grassB = uBiome > 2.5 ? vec3(0.06, 0.12, 0.04) : vec3(0.10, 0.14, 0.06);
-        if (uBiome < 1.5) { grassA = vec3(0.19, 0.20, 0.10); grassB = vec3(0.14, 0.15, 0.08); }   // alpine meadow
-        vec3 forest = uBiome > 2.5 ? vec3(0.035, 0.075, 0.03) : vec3(0.045, 0.07, 0.04);
-        float veg = (1.0 - smoothstep(0.14, 0.32, slope)) * (1.0 - smoothstep(uTreeLine - 150.0, uTreeLine + 120.0, h + meso * 150.0));
-        float forestMask = smoothstep(0.42, 0.58, macro * 0.6 + meso * 0.4) * (1.0 - smoothstep(0.1, 0.3, slope));
-        vec3 grass = mix(grassA, grassB, meso) * (0.82 + 0.3 * micro);
-        albedo = mix(albedo, mix(grass, forest, forestMask), veg * smoothstep(0.5, 4.0, h));
+        // meadow / pasture: bright yellow-green, patchy, tufted close up
+        float ma = meso, mb = dist < 5000.0 ? texture(uNoise, vPos.xz / 70.0).g : 0.5;
+        vec3 meadow = mix(vec3(0.12, 0.20, 0.045), vec3(0.24, 0.30, 0.08), ma);
+        meadow = mix(meadow, vec3(0.30, 0.29, 0.11), smoothstep(0.62, 0.9, mb) * 0.5);
+        if (uBiome < 1.5) meadow = mix(meadow, vec3(0.27, 0.25, 0.13), smoothstep(uTreeLine - 100.0, uTreeLine + 300.0, h));   // alpine grass
+        if (uBiome > 2.5) meadow *= vec3(0.85, 1.05, 0.9);
+        meadow *= 0.86 + 0.28 * tufts * near;
+        albedo = mix(albedo, meadow, lc.g);
+        // patchwork farmland: blocks of fields, each block with its own orientation
+        if (lc.b > 0.01) {
+            vec2 blk = floor(vPos.xz / 1500.0);
+            float ang = hash12(blk) * 3.14159;
+            vec2 q = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * vPos.xz;
+            vec2 fsz = vec2(230.0, 120.0) * (0.7 + 0.6 * hash12(blk + 3.1));
+            vec2 id = floor(q / fsz), fr = fract(q / fsz);
+            float r = hash12(id + blk * 7.0);
+            vec3 crop = r < 0.18 ? vec3(0.50, 0.45, 0.07) : (r < 0.36 ? vec3(0.44, 0.37, 0.16) : (r < 0.62 ? vec3(0.13, 0.25, 0.05)
+                       : (r < 0.84 ? vec3(0.21, 0.31, 0.09) : vec3(0.25, 0.17, 0.11))));
+            crop *= 1.0 - 0.10 * (0.5 + 0.5 * sin(q.x * 2.1 + r * 10.0)) * near;          // crop rows
+            crop *= 1.0 - 0.25 * smoothstep(0.47, 0.5, abs(fract(fr.y * 7.0) - 0.5)) * near;   // tramlines
+            vec2 e = min(fr, 1.0 - fr) * fsz;
+            float hedge = (1.0 - smoothstep(2.5, 6.0, min(e.x, e.y))) * step(0.3, hash12(id + 19.0));
+            crop = mix(crop, vec3(0.03, 0.06, 0.025), hedge * 0.85);
+            crop *= 0.9 + 0.2 * micro;
+            albedo = mix(albedo, crop, lc.b);
+        }
+        // forest canopy: sunlit crowns with dark gaps, species tint varying across the slopes
+        if (lc.r > 0.01) {
+            float farF = smoothstep(2500.0, 9000.0, dist);
+            float c = farF < 1.0 ? texture(uNoise, vPos.xz / 11.0).r * 0.6 + texture(uNoise, vPos.xz / 4.3).g * 0.4 : 0.5;
+            float crowns = mix(smoothstep(0.38, 0.62, c), 0.5, farF);
+            vec3 gap = uBiome > 2.5 ? vec3(0.008, 0.020, 0.008) : vec3(0.010, 0.017, 0.010);
+            vec3 lit = uBiome > 2.5 ? vec3(0.060, 0.125, 0.035) : (uBiome < 1.5 ? vec3(0.032, 0.058, 0.030) : vec3(0.040, 0.078, 0.030));
+            float species = texture(uNoise, vPos.xz / 140.0).b;
+            lit *= 0.75 + 0.55 * species;
+            lit = mix(lit, lit * vec3(1.25, 1.15, 0.8), smoothstep(0.7, 0.9, species) * 0.6);   // lighter deciduous stands
+            vec3 canopy = mix(gap, lit, crowns);
+            albedo = mix(albedo, canopy, lc.r);
+            if (near > 0.0) {
+                vec2 gc = detailGrad(vPos.xz / 11.0, 2.8 * near);
+                nd = normalize(nd + vec3(-gc.x, 0.0, -gc.y) * lc.r * 1.6);
+            }
+        }
+        vec3 granite2 = mix(vec3(0.30, 0.30, 0.31), vec3(0.42, 0.41, 0.40), meso) * (0.82 + 0.3 * micro * grain);
+        albedo = mix(albedo, granite2, lc.a * (1.0 - lc.r));
+    } else {
+        // desert grassland: golden bunch grass over red soil, with soil patches and old tracks
+        float ga = meso, gb = dist < 5000.0 ? texture(uNoise, vPos.xz / 85.0).g : 0.5;
+        vec3 gold = mix(vec3(0.44, 0.31, 0.12), vec3(0.60, 0.46, 0.20), ga);
+        float soilP = smoothstep(0.56, 0.76, gb * 0.7 + micro * 0.3);
+        float track = 1.0 - smoothstep(0.0, 0.012, abs(texture(uNoise, vPos.xz / 3000.0).g - 0.5));
+        vec3 grassland = mix(gold, vec3(0.44, 0.19, 0.10), max(soilP * 0.6, track * 0.7 * near));
+        grassland *= 0.84 + 0.3 * tufts * near;
+        albedo = mix(albedo, grassland, lc.g);
+        // junipers / pinyon: scattered dark green crowns on the foothills
+        float jun = dist < 9000.0 && lc.r > 0.01 ? smoothstep(0.63, 0.70, texture(uNoise, vPos.xz / 19.0).r * 0.6 + grain * 0.4) : 0.35;
+        albedo = mix(albedo, vec3(0.05, 0.08, 0.035), lc.r * mix(jun, 0.35, smoothstep(3000.0, 9000.0, dist)) * 1.4);
+        albedo = mix(albedo, rock, lc.a * 0.7);
     }
     float snowW = smoothstep(uSnowLine, uSnowLine + 250.0, h + meso * 180.0) * (1.0 - smoothstep(0.25, 0.5, slope));
     albedo = mix(albedo, snow, snowW);

@@ -165,9 +165,89 @@ Color surfaceTint(const Terrain& t, double x, double z, double h, double forest,
 }
 
 const TerrainInfo* g_info = nullptr;   // terrain being built (biome, tree line)
+const std::vector<unsigned char>* g_cover = nullptr;   // land-cover map being built (RGBA, kCoverN^2)
+constexpr int kCoverN = 1024;
+
+/// Land cover at a world position from the map (bilinear): r forest, g grass/meadow, b farmland, a rock.
+Vector4 coverAt(double x, double z) {
+    if (!g_cover) return {0, 0, 0, 0};
+    double gx = (x / (2.0 * Terrain::kHalfSize) + 0.5) * kCoverN - 0.5, gz = (z / (2.0 * Terrain::kHalfSize) + 0.5) * kCoverN - 0.5;
+    if (gx < 0 || gz < 0 || gx >= kCoverN - 1 || gz >= kCoverN - 1) return {0, 0, 0, 0};
+    int i = static_cast<int>(gx), j = static_cast<int>(gz);
+    double u = gx - i, v = gz - j;
+    float out[4];
+    for (int c = 0; c < 4; ++c) {
+        auto P = [&](int a, int b) { return (*g_cover)[(static_cast<size_t>(b) * kCoverN + a) * 4 + c] / 255.0; };
+        out[c] = static_cast<float>((P(i, j) * (1 - u) + P(i + 1, j) * u) * (1 - v) + (P(i, j + 1) * (1 - u) + P(i + 1, j + 1) * u) * v);
+    }
+    return {out[0], out[1], out[2], out[3]};
+}
+
+/// Where forests, meadows, farmland and bare rock are, from height, slope, hollows and climate.
+/// Green climates: forest on the valley sides and lower slopes below the tree line (with clearings),
+/// meadows and patchwork farmland on flat low valley floors, alpine grass above the trees, bare rock
+/// on cliffs. Desert: golden grassland on the flats, scattered junipers on the foothills, red rock
+/// on every steep face.
+void computeLandCover(const Terrain& t, std::vector<unsigned char>& out) {
+    const int N = kCoverN;
+    const double cell = 2.0 * Terrain::kHalfSize / N;
+    const TerrainInfo& info = t.info();
+    const bool desert = info.biome == Biome::Desert;
+    std::vector<float> H(static_cast<size_t>(N) * N);
+    parallelRows(N, [&](int j) {
+        for (int i = 0; i < N; ++i)
+            H[static_cast<size_t>(j) * N + i] = static_cast<float>(t.height(-Terrain::kHalfSize + (i + 0.5) * cell, -Terrain::kHalfSize + (j + 0.5) * cell));
+    });
+    auto Hc = [&](int i, int j) { i = std::clamp(i, 0, N - 1); j = std::clamp(j, 0, N - 1); return double(H[static_cast<size_t>(j) * N + i]); };
+    out.assign(static_cast<size_t>(N) * N * 4, 0);
+    parallelRows(N, [&](int j) {
+        for (int i = 0; i < N; ++i) {
+            double x = -Terrain::kHalfSize + (i + 0.5) * cell, z = -Terrain::kHalfSize + (j + 0.5) * cell;
+            double h = Hc(i, j);
+            Vec3 n = normalize(Vec3{Hc(i - 1, j) - Hc(i + 1, j), 2 * cell, Hc(i, j - 1) - Hc(i, j + 1)});
+            double slope = 1.0 - n.y;                                      // 0 flat .. ~0.5 cliff
+            double around = (Hc(i - 4, j) + Hc(i + 4, j) + Hc(i, j - 4) + Hc(i, j + 4)) * 0.25;
+            double hollow = std::clamp((around - h) / 25.0, -1.0, 1.0);   // + in valleys, - on ridges
+            double big = fbm2(x / 2600.0, z / 2600.0, 4, 401u), mid = fbm2(x / 650.0, z / 650.0, 3, 402u);
+            double fr = 0, gr = 0, fa = 0, rk = 0;
+            if (h < 0.5) { gr = 1.0; /* sea floor or shore: grass where the water line leaves it dry */ }
+            else if (desert) {
+                rk = smoothstep(0.16, 0.30, slope + (mid - 0.5) * 0.08);
+                double flat = 1.0 - smoothstep(0.04, 0.12, slope);
+                gr = flat * smoothstep(0.30, 0.55, big * 0.7 + mid * 0.3) * (1.0 - rk) * (1.0 - smoothstep(info.highRock, info.highRock + 400, h));
+                // junipers / pinyon on the foothills and the talus below cliffs
+                fr = smoothstep(0.04, 0.12, slope) * (1.0 - rk) * smoothstep(0.45, 0.62, mid) * 0.55 * (1.0 - smoothstep(info.treeLine + 600, info.treeLine + 1200, h));
+            } else {
+                double snowy = smoothstep(info.snowLine - 100, info.snowLine + 200, h);
+                rk = std::clamp(smoothstep(0.25, 0.44, slope + (mid - 0.5) * 0.12) + smoothstep(info.highRock, info.highRock + 300, h) * (0.4 + slope), 0.0, 1.0);
+                double belowTrees = 1.0 - smoothstep(info.treeLine - 120, info.treeLine + 80, h + (mid - 0.5) * 140);
+                // forests: dense on slopes and valley sides, broken by clearings
+                double clearing = smoothstep(0.30, 0.42, big * 0.65 + mid * 0.35);
+                fr = belowTrees * clearing * (1.0 - rk) * (0.55 + 0.45 * smoothstep(0.02, 0.12, slope));
+                // patchwork farmland on flat, low valley floors (and meadows around it)
+                double lowFlat = (1.0 - smoothstep(0.015, 0.06, slope)) * (1.0 - smoothstep(info.treeLine * 0.55, info.treeLine * 0.85, h)) *
+                                 smoothstep(-0.2, 0.3, hollow + 0.2);
+                fa = lowFlat * smoothstep(0.35, 0.5, big) * (info.biome == Biome::Alpine ? 0.6 : 1.0) * (info.treeLine < 800 ? 0.4 : 1.0);   // highlands: few fields
+                fr *= 1.0 - fa;
+                gr = (1.0 - rk) * (1.0 - snowy) * (1.0 - fr) * (1.0 - fa) * (h < info.treeLine + 500 ? 1.0 : 0.6);
+                if (h < 3.0) { fr *= 0.3; fa = 0; }   // beaches and shore
+            }
+            size_t o = (static_cast<size_t>(j) * N + i) * 4;
+            out[o + 0] = u8(fr);
+            out[o + 1] = u8(gr);
+            out[o + 2] = u8(fa);
+            out[o + 3] = u8(rk);
+        }
+    });
+}
 
 // Desert: sparse scrub in low gentle ground; green climates: forests below the tree line.
+// Inside the map the land-cover map decides (so 3D trees stand exactly where the shader paints forest).
 double forestMask(double x, double z, double h) {
+    if (g_cover && std::fabs(x) < Terrain::kHalfSize - 40 && std::fabs(z) < Terrain::kHalfSize - 40) {
+        double f = coverAt(x, z).x;
+        return g_info && g_info->biome == Biome::Desert ? f * 0.6 : f;
+    }
     if (g_info && g_info->biome != Biome::Desert) {
         double f = smoothstep(0.40, 0.58, fbm2(x / 900.0, z / 900.0, 3, 99u)) * 0.95;
         f *= 1.0 - smoothstep(g_info->treeLine - 180.0, g_info->treeLine + 60.0, h);
@@ -315,6 +395,16 @@ void WorldMeshes::build(const Terrain& t) {
     glow = makeSprite(1);
     spark = makeSprite(2);
 
+    // ---- land cover (forest / grass / farmland / rock) ----
+    computeLandCover(t, coverPixels);
+    g_cover = &coverPixels;
+    {
+        Image img = {coverPixels.data(), kCoverN, kCoverN, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+        landCover = LoadTextureFromImage(img);
+        SetTextureFilter(landCover, TEXTURE_FILTER_BILINEAR);
+        SetTextureWrap(landCover, TEXTURE_WRAP_CLAMP);
+    }
+
     // ---- terrain chunks ----
     chunks.resize(kChunks * kChunks);
     for (int cz = 0; cz < kChunks; ++cz)
@@ -415,7 +505,7 @@ void WorldMeshes::build(const Terrain& t) {
     }
 
     // ---- far ring (coarse terrain out to the horizon) ----
-    farRing = buildGridMesh(t, -60000.0, -60000.0, 120000.0, 101, 0.0, 12.0, true);
+    farRing = buildGridMesh(t, -60000.0, -60000.0, 120000.0, 241, 0.0, 12.0, true);
 
     // ---- sea, cloud plane ----
     {
@@ -738,7 +828,7 @@ void WorldMeshes::unload() {
     chunks.clear();
     UnloadMesh(farRing); UnloadMesh(water); UnloadMesh(cloudPlane);
     UnloadMesh(runway); UnloadMesh(taxiways); UnloadMesh(airbase); UnloadMesh(town);
-    UnloadTexture(noise); UnloadTexture(detailGrad); UnloadTexture(depthMap); UnloadTexture(minimap); UnloadTexture(terrainData);
+    UnloadTexture(noise); UnloadTexture(detailGrad); UnloadTexture(landCover); UnloadTexture(depthMap); UnloadTexture(minimap); UnloadTexture(terrainData);
     UnloadTexture(puff); UnloadTexture(glow); UnloadTexture(spark);
     for (auto& c : cloud) UnloadTexture(c);
 }

@@ -2,6 +2,7 @@
 // screenshot capture and benchmark modes.
 #pragma once
 #include <chrono>
+#include <deque>
 
 #include "../audio/Audio.hpp"
 #include "../combat/Combat.hpp"
@@ -109,8 +110,13 @@ private:
     void drawBriefing();
     void launchFromBriefing();
     void radio(Speaker who, const std::string& text, double dur, bool voice = true);
-    void startMissionBriefed(int n) { startMission(n); if (switchTo_.empty()) beginBriefing(n); }
-    void startArenaBriefed() { freeFlight_ = false; startArena(false); beginBriefing(0); }
+    void startMissionBriefed(int n) { startMission(n); if (switchTo_.empty()) queueBriefing(n); }
+    void startArenaBriefed() { freeFlight_ = false; startArena(false); queueBriefing(0); }
+    void queueBriefing(int missionNo);   // radio briefing in the cockpit (0 = Dogfight Arena)
+    void queueRadio(Speaker who, const std::string& text, bool front = false);
+    void updateRadioQueue();
+    std::deque<std::pair<Speaker, std::string>> radioQueue_;
+    double radioNextAt_ = 0;
     // ---- world locations (real terrain) ----
     bool freeFlight_ = false;
     std::string locStatus_;          // message on the locations screen

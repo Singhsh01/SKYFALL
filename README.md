@@ -27,7 +27,7 @@ copyrighted models, textures, sounds or code from commercial games.
 |---|---|
 | ![Missile camera](docs/screenshots/missile_cam.jpg) | ![Hit camera](docs/screenshots/hit_cam.jpg) |
 | ![Crash replay](docs/screenshots/crash_replay.jpg) | ![Canyon](docs/screenshots/canyon.jpg) |
-| ![Cockpit](docs/screenshots/cockpit_air.jpg) | ![Briefing](docs/screenshots/briefing.jpg) |
+| ![Cockpit](docs/screenshots/cockpit_air.jpg) | ![Radio briefing in the cockpit](docs/screenshots/briefing.jpg) |
 | ![Gun line](docs/screenshots/gun_line.jpg) | ![Hangar](docs/screenshots/hangar.jpg) |
 | ![Refuelling](docs/screenshots/refuelling.jpg) | ![Dogfight arena](docs/screenshots/arena_chase.jpg) |
 | ![Town and railway](docs/screenshots/scenery_town.jpg) | ![Camouflage schemes](docs/screenshots/skins.jpg) |
@@ -35,6 +35,7 @@ copyrighted models, textures, sounds or code from commercial games.
 | ![Afterburner climb-out in a storm](docs/screenshots/afterburner_rain.jpg) | ![Campaign: 61 missions](docs/screenshots/campaign_menu.jpg) |
 | ![Everest, real elevation data](docs/screenshots/real_everest.jpg) | ![Geirangerfjord, real elevation data](docs/screenshots/real_geiranger.jpg) |
 | ![High-G wing condensation](docs/screenshots/wing_vapour.jpg) | ![Gear, wheels and landing light](docs/screenshots/gear_lights.jpg) |
+| ![Forested valleys and fields, Glen Coe](docs/screenshots/landscape_glencoe.jpg) | ![Patchwork farmland below Mount Fuji](docs/screenshots/landscape_farmland.jpg) |
 
 > Screenshots are captured from the running executable (`skyfall --capture`) on a Linux
 > container with Mesa's software rasteriser: they show the real renderer output, not macOS
@@ -52,7 +53,7 @@ copyrighted models, textures, sounds or code from commercial games.
 * **A real voice for the whole game** — every briefing and every radio call (AWACS, tower,
   instructor, your wingman) is spoken by a natural neural female voice, recorded once with the
   open-source Kokoro-82M model (`tools/make_voice.py`) and shipped as `assets/voice/*.mp3`. Radio
-  calls get a radio-band filter; the captain's briefings are clean. If a recording is missing the
+  calls get a radio-band filter. If a recording is missing the
   system voice reads the line instead.
 * **Download maps in the game** — Settings → DOWNLOAD WORLD MAPS (or click a location marked NOT
   DOWNLOADED) fetches and converts the real elevation data in the background with a progress bar.
@@ -74,8 +75,7 @@ copyrighted models, textures, sounds or code from commercial games.
   diamonds change with speed and altitude.
 * **Cockpit** — sharper multifunction displays (rendered at twice the resolution), windscreen
   frame, backlit switches and annunciators, master caution / warning lights.
-* **Camouflage everywhere** — the scheme you paint in the Hangar is what you fly, and you can
-  change it on the briefing screen with ← / →.
+* **Camouflage everywhere** — the scheme you paint in the Hangar is what you fly.
 
 * **World locations with real terrain** (title → WORLD LOCATIONS): Everest & Khumbu, Matterhorn,
   Geirangerfjord, Glen Coe, Erg Chebbi (Sahara), Wadi Rum, Musandam fjords, Grand Canyon,
@@ -91,9 +91,16 @@ copyrighted models, textures, sounds or code from commercial games.
 * **All eight aircraft are flyable** (Hangar → select → FLY): F-22, F-35, Rafale, Su-57, Su-35,
   MiG-29, Su-30, F-16, each with **eight camouflage schemes** (factory, desert, woodland, arctic,
   naval, digital urban, night, tiger) — ← / → on an aircraft in the Hangar. Choices are saved.
-* **Spoken briefings** — before every campaign mission and the Dogfight Arena, Captain Avery
-  Langlois (Wing Operations) briefs you on the aim and objectives and signs off with
-  "Good luck, Captain." Captions are always shown; Settings → Voice turns the voice off.
+* **Briefings over the radio, in the cockpit** — no briefing board: every campaign mission and the
+  Dogfight Arena starts with you strapped in, and Operations briefs you over the radio ("Captain,
+  mission 55, Coastal Radar…"), reads the objectives and signs off with "Good luck, Captain."
+  Captions appear in the radio box; Settings → Voice turns the voice off.
+* **Living landscapes to the horizon** — a land-cover map drives the ground: forest canopy with
+  sunlit crowns and dark gaps on the valley sides, meadows and alpine grass, patchwork farmland
+  (rapeseed, wheat, pasture, ploughed fields, hedgerows) on the valley floors, granite and snow on
+  the peaks; in the desert, golden grassland over red soil, juniper-dotted foothills and red
+  sandstone cliffs. Real maps no longer stop at their edge: the land continues seamlessly and then
+  becomes generated mountains with the map's own height and relief, all the way to the horizon.
 * **Arcade handling (default)** — Battlefield-style: the flight path follows the nose, hard turns
   bleed energy, every jet has enough afterburner thrust to climb out of a low dive.
   **Double-tap ← / →** for an aileron roll. Assisted and Simulation handling remain in Settings.
@@ -204,7 +211,7 @@ Useful flags: `--mode arena` / `--mode m01` (skip the menu), `--size 1440x900`, 
 | `Q` / `1` / `2` | swap / select ATA (air-to-air) or ATS (air-to-surface) missiles | double-tap `←`/`→` | aileron roll |
 | `Enter` / `Space` | skip the crash replay | | |
 | `U` | HUD style (minimal / full) | `Cmd+Q` | quit immediately |
-| Hangar `←` / `→` | change camouflage | Briefing `Enter` / `Esc` | launch / back |
+| Hangar `←` / `→` | change camouflage | | |
 | `C` | camera: cockpit → chase → external | right-drag, `I J K L` | look / orbit, wheel = zoom |
 | `R` | reset / respawn | `H` | help overlay |
 | `F3` | telemetry (p50/p95/p99 frame times, physics) | `F5` | time of day |
