@@ -63,6 +63,33 @@ Texture2D makeNoiseTexture() {
     return t;
 }
 
+// Pre-differentiated green channel of the noise texture: R/G = d/du, d/dv (scaled by 6 around
+// 0.5). One fetch replaces the four the terrain shader needed per detail octave.
+Texture2D makeDetailGradTexture() {
+    const int N = 256;
+    std::vector<double> g(N * N);
+    for (int y = 0; y < N; ++y)
+        for (int x = 0; x < N; ++x) {
+            double u = double(x) / N, v = double(y) / N;
+            double t = periodicFbm(u, v, 8, 5, 2u);
+            g[y * N + x] = std::clamp((t - 0.5) * 1.7 + 0.5, 0.0, 1.0);
+        }
+    Image img = GenImageColor(N, N, BLACK);
+    Color* px = static_cast<Color*>(img.data);
+    for (int y = 0; y < N; ++y)
+        for (int x = 0; x < N; ++x) {
+            double dx = g[y * N + (x + 1) % N] - g[y * N + (x + N - 1) % N];
+            double dy = g[((y + 1) % N) * N + x] - g[((y + N - 1) % N) * N + x];
+            px[y * N + x] = {u8(std::clamp(0.5 + dx * 6.0, 0.0, 1.0)), u8(std::clamp(0.5 + dy * 6.0, 0.0, 1.0)), 128, 255};
+        }
+    Texture2D t = LoadTextureFromImage(img);
+    UnloadImage(img);
+    GenTextureMipmaps(&t);
+    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
+    SetTextureWrap(t, TEXTURE_WRAP_REPEAT);
+    return t;
+}
+
 Texture2D makeSprite(int kind) {
     const int N = 128;
     Image img = GenImageColor(N, N, BLANK);
@@ -282,6 +309,7 @@ void WorldMeshes::build(const Terrain& t) {
     g_info = &t.info();
     const bool green = t.info().biome != Biome::Desert;
     noise = makeNoiseTexture();
+    detailGrad = makeDetailGradTexture();
     puff = makeSprite(0);
     for (int i = 0; i < 4; ++i) cloud[i] = makeCloudSprite(100u + i * 17u);
     glow = makeSprite(1);
@@ -710,7 +738,7 @@ void WorldMeshes::unload() {
     chunks.clear();
     UnloadMesh(farRing); UnloadMesh(water); UnloadMesh(cloudPlane);
     UnloadMesh(runway); UnloadMesh(taxiways); UnloadMesh(airbase); UnloadMesh(town);
-    UnloadTexture(noise); UnloadTexture(depthMap); UnloadTexture(minimap); UnloadTexture(terrainData);
+    UnloadTexture(noise); UnloadTexture(detailGrad); UnloadTexture(depthMap); UnloadTexture(minimap); UnloadTexture(terrainData);
     UnloadTexture(puff); UnloadTexture(glow); UnloadTexture(spark);
     for (auto& c : cloud) UnloadTexture(c);
 }

@@ -518,6 +518,9 @@ MissionContext Game::missionContext() {
 }
 
 void Game::shutdown() {
+    std::fflush(stdout);
+    speech_.stop();          // free any voice clip before the audio device goes away
+    download_.cancel();
     audio_.shutdown();
     cockpit_.unload();
     renderer_.shutdown();
@@ -2300,6 +2303,7 @@ int Game::runBench() {
     std::printf("cpu: simulation mean %.3f ms max %.3f ms | hud mean %.3f ms max %.3f ms\n", sm, sx, hm, hx);
     if (renderer_.profiling()) std::printf("gpu passes (per frame, serialised):\n%s", renderer_.profReport().c_str());
     std::printf("scene %dx%d, draw calls %d, triangles %.0fk\n", renderer_.width(), renderer_.height(), renderer_.drawCalls(), renderer_.triangles() / 1000.0);
+    std::fflush(stdout);
     std::filesystem::create_directories("benchmarks");
     std::string renderer = std::string(reinterpret_cast<const char*>(rlGetVersion() == RL_OPENGL_33 ? "OpenGL 3.3" : "OpenGL"));
     stats_.writeCsv("benchmarks/frame_times.csv");

@@ -255,6 +255,8 @@ bool Renderer::init(const Terrain& t, const WorldLayout& layout, int width, int 
     bindShadow(terrain_p_, terrainMat_);
     terrain_p_.sh.locs[SHADER_LOC_MAP_EMISSION] = terrain_p_.loc("uTerrainData");
     terrainMat_.maps[MATERIAL_MAP_EMISSION].texture = world_.terrainData;
+    terrain_p_.sh.locs[SHADER_LOC_MAP_HEIGHT] = terrain_p_.loc("uDetailGrad");
+    terrainMat_.maps[MATERIAL_MAP_HEIGHT].texture = world_.detailGrad;
     terrainMat_.shader = terrain_p_.sh;
     bindShadow(lit_, litMat_);
     bindShadow(jet_, jetMat_);
@@ -292,6 +294,7 @@ void Renderer::rebuildWorld(const Terrain& t, const WorldLayout& layout) {
     for (Material* m : {&terrainMat_, &waterMat_, &jetMat_, &flameMat_, &cloudMat_, &runwayMat_}) m->maps[MATERIAL_MAP_METALNESS].texture = world_.noise;
     waterMat_.maps[MATERIAL_MAP_NORMAL].texture = world_.depthMap;
     terrainMat_.maps[MATERIAL_MAP_EMISSION].texture = world_.terrainData;
+    terrainMat_.maps[MATERIAL_MAP_HEIGHT].texture = world_.detailGrad;
     applyTerrainInfo();
 }
 
@@ -1517,6 +1520,8 @@ void Renderer::composite(const FrameParams& f) {
         static float gk = std::getenv("SKYFALL_GK") ? static_cast<float>(std::atof(std::getenv("SKYFALL_GK"))) : 0.5f;
         composite_.setF("uGrade", grade);
         composite_.setF("uGradeK", gk);
+        float up = static_cast<float>(GetRenderWidth()) / static_cast<float>(std::max(1, w_));
+        composite_.setF("uSharpen", std::clamp(0.12f + (up - 1.0f) * 0.35f, 0.0f, 0.5f));
     }
     int l1 = composite_.loc("uBloom1"), l2 = composite_.loc("uBloom2");
     if (l1 >= 0) SetShaderValueTexture(composite_.sh, l1, bloomA_.texture);
@@ -1561,6 +1566,7 @@ void Renderer::renderPip(const FrameParams& f, int w, int h) {
     composite_.setF("uGrain", 0.045f);
     composite_.setF("uGrade", 1.0f);
     composite_.setF("uGradeK", 0.5f);
+    composite_.setF("uSharpen", 0.0f);
     composite_.setF("uSpeedFx", 0.0f);
     int l1 = composite_.loc("uBloom1"), l2 = composite_.loc("uBloom2");
     if (l1 >= 0) SetShaderValueTexture(composite_.sh, l1, bloomA_.texture);

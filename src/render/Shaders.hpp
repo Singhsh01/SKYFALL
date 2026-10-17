@@ -56,10 +56,10 @@ float shadowAt(vec3 wp, float ndl) {
     float bias = 0.0008 + 0.0025 * (1.0 - clamp(ndl, 0.0, 1.0));
     vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
     float occl = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x)
-            occl += (p.z - bias > texture(uShadowMap, p.xy + vec2(x, y) * texel).r) ? 1.0 : 0.0;
-    occl /= 9.0;
+    for (int y = 0; y < 2; ++y)
+        for (int x = 0; x < 2; ++x)
+            occl += (p.z - bias > texture(uShadowMap, p.xy + (vec2(x, y) - 0.5) * 1.2 * texel).r) ? 1.0 : 0.0;
+    occl *= 0.25;
     // fade out towards the edge of the shadow volume
     vec2 e = abs(p.xy - 0.5) * 2.0;
     occl *= 1.0 - smoothstep(0.8, 1.0, max(e.x, e.y));
@@ -156,12 +156,11 @@ float cloudShadow(vec3 p) {
     return 1.0 - c * 0.68;
 }
 
-// small-scale height detail -> normal perturbation (rock grain, sand ripples)
+// small-scale height detail -> normal perturbation (rock grain, sand ripples):
+// one fetch of the pre-differentiated noise per octave
+uniform sampler2D uDetailGrad;
 vec2 detailGrad(vec2 uv, float s) {
-    float e = 0.004;
-    float hx = texture(uNoise, uv + vec2(e, 0.0)).g - texture(uNoise, uv - vec2(e, 0.0)).g;
-    float hz = texture(uNoise, uv + vec2(0.0, e)).g - texture(uNoise, uv - vec2(0.0, e)).g;
-    return vec2(hx, hz) * s;
+    return (texture(uDetailGrad, uv).rg - 0.5) * (s / 6.0);
 }
 
 void main() {
@@ -178,17 +177,24 @@ void main() {
     float slope = 1.0 - n.y;
     float h = vPos.y;
     float near = 1.0 - smoothstep(600.0, 3500.0, dist);
-    vec2 g1 = detailGrad(vPos.xz / 260.0, 1.6) + detailGrad(vPos.xz / 41.0, 0.9 * near);
+    vec2 g1 = detailGrad(vPos.xz / 260.0, 1.6);
     // craggy rock: extra high-frequency relief on steep ground, strongest close to the camera
     float steep = smoothstep(0.05, 0.25, slope);
-    vec2 g2 = detailGrad(vPos.xz / 95.0 + vec2(0.37, 0.11), 2.6) + detailGrad(vPos.xz / 17.0, 1.6 * near);
+    vec2 g2 = detailGrad(vPos.xz / 95.0 + vec2(0.37, 0.11), 2.6);
+    if (near > 0.0) {   // fine octaves only near the camera (skipped for most of the screen)
+        g1 += detailGrad(vPos.xz / 41.0, 0.9 * near);
+        g2 += detailGrad(vPos.xz / 17.0, 1.6 * near);
+    }
     vec3 nd = normalize(n + vec3(-g1.x, 0.0, -g1.y) * (0.35 + slope) + vec3(-g2.x, 0.0, -g2.y) * steep * 1.1);
 
     // ---- material layers (arid mountains) ----
     float macro = texture(uNoise, vPos.xz / 5200.0).r;
     float meso = texture(uNoise, vPos.xz / 700.0).g;
-    float micro = texture(uNoise, vPos.xz / 31.0).b;
-    float grain = texture(uNoise, vPos.xz / 7.0).a;
+    float micro = 0.5, grain = 0.5;
+    if (dist < 6000.0) {
+        micro = mix(texture(uNoise, vPos.xz / 31.0).b, 0.5, smoothstep(4500.0, 6000.0, dist));
+        grain = mix(texture(uNoise, vPos.xz / 7.0).a, 0.5, smoothstep(2500.0, 6000.0, dist));
+    }
 
     vec3 sandLight = vec3(0.47, 0.41, 0.32);
     vec3 sandDark = vec3(0.39, 0.32, 0.24);
@@ -244,7 +250,9 @@ void main() {
     float snowW = smoothstep(uSnowLine, uSnowLine + 250.0, h + meso * 180.0) * (1.0 - smoothstep(0.25, 0.5, slope));
     albedo = mix(albedo, snow, snowW);
     // sparse scrub: dark dots where the vegetation mask allows it
-    float dots = smoothstep(0.62, 0.70, texture(uNoise, vPos.xz / 23.0).r * 0.6 + texture(uNoise, vPos.xz / 9.0).g * 0.4);
+    float dots = 0.0;
+    if (dist < 5000.0 && vMask.r > 0.01)
+        dots = smoothstep(0.62, 0.70, texture(uNoise, vPos.xz / 23.0).r * 0.6 + texture(uNoise, vPos.xz / 9.0).g * 0.4);
     albedo = mix(albedo, scrub, clamp(vMask.r * 1.6, 0.0, 1.0) * dots * (1.0 - rockW));
     albedo = mix(albedo, wadi, clamp(vMask.b, 0.0, 1.0) * (1.0 - rockW));
     albedo = mix(albedo, town, clamp(vMask.g, 0.0, 1.0));
@@ -750,6 +758,7 @@ uniform float uDamage;          // red damage pulse
 uniform float uTime;
 uniform float uGrain;
 uniform float uSpeedFx;
+uniform float uSharpen;   // contrast-adaptive sharpening when the 3D scene is upscaled
 uniform float uGrade;     // 1 = filmic pipeline with sRGB output
 uniform float uGradeK;
 out vec4 finalColor;
@@ -770,36 +779,42 @@ vec3 acesHill(vec3 c) {
     return clamp(o * (a / b), 0.0, 1.0);
 }
 vec3 toSrgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
-vec3 tone(vec2 uv) {
-    vec3 hdr = texture(texture0, uv).rgb;
+vec3 toneMap(vec3 hdr) {
     if (uGrade > 0.5) return toSrgb(acesHill(hdr * uExposure * uGradeK));
     return aces(hdr * uExposure);
 }
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+// cheap perceptual luma straight from the HDR value (edge detection only)
+float lumaH(vec3 hdr) { float y = luma(hdr) * uExposure * 0.6; return y / (1.0 + y); }
 
 void main() {
     vec2 uv = fragTexCoord;
     vec2 cc = uv - 0.5;
     float r2 = dot(cc, cc);
-    // FXAA-style edge smoothing on the tone-mapped image (the HDR target has no MSAA)
+    // FXAA-style edge smoothing + sharpening on the HDR image, then ONE tone-mapping evaluation
     vec2 px = 1.0 / vec2(textureSize(texture0, 0));
-    vec3 cM = tone(uv);
-    vec3 cNW = tone(uv + vec2(-1.0, -1.0) * px), cNE = tone(uv + vec2(1.0, -1.0) * px);
-    vec3 cSW = tone(uv + vec2(-1.0, 1.0) * px), cSE = tone(uv + vec2(1.0, 1.0) * px);
-    float lM = luma(cM), lNW = luma(cNW), lNE = luma(cNE), lSW = luma(cSW), lSE = luma(cSE);
+    vec3 hM = texture(texture0, uv).rgb;
+    vec3 hNW = texture(texture0, uv + vec2(-1.0, -1.0) * px).rgb, hNE = texture(texture0, uv + vec2(1.0, -1.0) * px).rgb;
+    vec3 hSW = texture(texture0, uv + vec2(-1.0, 1.0) * px).rgb, hSE = texture(texture0, uv + vec2(1.0, 1.0) * px).rgb;
+    float lM = lumaH(hM), lNW = lumaH(hNW), lNE = lumaH(hNE), lSW = lumaH(hSW), lSE = lumaH(hSE);
     float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
     float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
-    vec3 col = cM;
+    vec3 h = hM;
     if (lMax - lMin > max(0.04, lMax * 0.12)) {
         vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)), ((lNW + lSW) - (lNE + lSE)));
         float red = max((lNW + lNE + lSW + lSE) * 0.03125, 1.0 / 128.0);
         float rcp = 1.0 / (min(abs(dir.x), abs(dir.y)) + red);
         dir = clamp(dir * rcp, vec2(-8.0), vec2(8.0)) * px;
-        vec3 a = 0.5 * (tone(uv + dir * (1.0 / 3.0 - 0.5)) + tone(uv + dir * (2.0 / 3.0 - 0.5)));
-        vec3 b = a * 0.5 + 0.25 * (tone(uv + dir * -0.5) + tone(uv + dir * 0.5));
-        float lb = luma(b);
-        col = (lb < lMin || lb > lMax) ? a : b;
+        vec3 a = 0.5 * (texture(texture0, uv + dir * (1.0 / 3.0 - 0.5)).rgb + texture(texture0, uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+        vec3 b = a * 0.5 + 0.25 * (texture(texture0, uv + dir * -0.5).rgb + texture(texture0, uv + dir * 0.5).rgb);
+        float lb = lumaH(b);
+        h = (lb < lMin || lb > lMax) ? a : b;
+    } else if (uSharpen > 0.0) {
+        // sharpen against the diagonal neighbours (flat and textured areas only, never on edges)
+        vec3 avg = (hNW + hNE + hSW + hSE) * 0.25;
+        h = max(h + (hM - avg) * uSharpen * 2.0, vec3(0.0));
     }
+    vec3 col = toneMap(h);
     vec3 bloom = texture(uBloom1, uv).rgb * 0.6 + texture(uBloom2, uv).rgb * 0.8;
     float l;
     if (uGrade > 0.5) {
