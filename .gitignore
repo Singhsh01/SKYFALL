@@ -14,3 +14,4 @@ build_config.log
 logs/
 .pull.tgz
 .terrain_cache/
+__pycache__/
