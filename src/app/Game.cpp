@@ -568,6 +568,7 @@ void Game::startTitle() {
 }
 
 void Game::startMission(int n) {
+    TraceLog(LOG_INFO, "SKYFALL: start mission %d", n);
     if (terrain_.info().id != "desert") {
         // the campaign is set in the Skyfall Desert: switch first (next frame), then start
         switchTo_ = "desert";

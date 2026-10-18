@@ -32,6 +32,7 @@ bool downloadFile(const std::string& url, const std::string& path) {
     pid_t pid = -1;
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
     posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0);
     posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
     const char* exe = access("/usr/bin/curl", X_OK) == 0 ? "/usr/bin/curl" : "/bin/curl";

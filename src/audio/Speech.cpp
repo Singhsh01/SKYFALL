@@ -119,6 +119,7 @@ bool Speech::playRecording(const Item& it) {
     if (s.frameCount == 0) return false;
     SetSoundVolume(s, volume_);
     PlaySound(s);
+    TraceLog(LOG_INFO, "SKYFALL: voice %s", path.c_str());
     sound_ = new Sound(s);
     return true;
 #endif
@@ -176,7 +177,7 @@ void Speech::detectVoice() {
     if (!ttsAvailable_) return;
     // Lines look like "Samantha (Enhanced)   en_US    # Hello! My name is Samantha."
     std::vector<std::pair<std::string, std::string>> voices;   // name, locale
-    if (FILE* p = popen("/usr/bin/say -v '?' 2>/dev/null", "r")) {
+    if (FILE* p = popen("/usr/bin/say -v '?' 2>/dev/null </dev/null", "r")) {
         char line[512];
         while (std::fgets(line, sizeof line, p)) {
             std::string l(line);
@@ -222,9 +223,17 @@ void Speech::systemSpeak(const std::string& text) {
     pid_t pid = -1;
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
     posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0);
     posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
-    if (posix_spawn(&pid, engine_.c_str(), &fa, nullptr, argv.data(), environ) == 0) pid_ = pid;
+    // own process group: the voice process never takes part in the terminal's job control
+    posix_spawnattr_t at;
+    posix_spawnattr_init(&at);
+    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
+    posix_spawnattr_setpgroup(&at, 0);
+    if (posix_spawn(&pid, engine_.c_str(), &fa, &at, argv.data(), environ) == 0) pid_ = pid;
+    posix_spawnattr_destroy(&at);
+    TraceLog(LOG_INFO, "SKYFALL: system voice (%s) for: %.60s", voice_.c_str(), text.c_str());
     posix_spawn_file_actions_destroy(&fa);
 #else
     (void)text;

@@ -21,8 +21,53 @@
 #include <cstring>
 #include <string>
 
+#if !defined(__EMSCRIPTEN__) && (defined(__APPLE__) || defined(__unix__))
+#include <csignal>
+#include <exception>
+#include <execinfo.h>
+#include <unistd.h>
+#define SKYFALL_SIGNALS 1
+#endif
+
 namespace {
 FILE* g_log = nullptr;
+
+#ifdef SKYFALL_SIGNALS
+// If the game is ever stopped by a signal, say which one (and where) in logs/skyfall.log and on
+// the terminal, so a crash or a forced stop on a player's machine can be diagnosed afterwards.
+void writeBoth(const char* s) {
+    (void)!write(2, s, std::strlen(s));
+    if (g_log) (void)!write(fileno(g_log), s, std::strlen(s));
+}
+void fatalSignal(int sig) {
+    const char* name = sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS" : sig == SIGILL ? "SIGILL" : sig == SIGFPE ? "SIGFPE"
+                     : sig == SIGABRT ? "SIGABRT" : sig == SIGTERM ? "SIGTERM" : sig == SIGINT ? "SIGINT" : sig == SIGHUP ? "SIGHUP"
+                     : sig == SIGTSTP ? "SIGTSTP" : "signal";
+    if (g_log) std::fflush(g_log);
+    writeBoth("ERROR: SKYFALL: stopped by ");
+    writeBoth(name);
+    writeBoth("\n");
+    if (sig != SIGINT && sig != SIGTERM && sig != SIGHUP && sig != SIGTSTP) {
+        void* frames[48];
+        int n = backtrace(frames, 48);
+        backtrace_symbols_fd(frames, n, 2);
+        if (g_log) backtrace_symbols_fd(frames, n, fileno(g_log));
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+void installSignalHandlers() {
+    // terminal job control and broken pipes must never stop the game
+    signal(SIGTTOU, SIG_IGN);
+    signal(SIGTTIN, SIG_IGN);
+    signal(SIGPIPE, SIG_IGN);
+    for (int s : {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTERM, SIGINT, SIGHUP, SIGTSTP}) signal(s, fatalSignal);
+    std::set_terminate([] {
+        writeBoth("ERROR: SKYFALL: uncaught exception\n");
+        std::abort();
+    });
+}
+#endif
 // Mirror raylib's log to the console and to logs/skyfall.log (warnings, errors and GPU info),
 // so problems on a user's machine can be diagnosed after the window is closed.
 void logCallback(int level, const char* fmt, va_list args) {
@@ -40,6 +85,9 @@ static int skyfallMain(int argc, char** argv) {
     std::error_code ec;
     std::filesystem::create_directories("logs", ec);
     g_log = std::fopen("logs/skyfall.log", "w");
+#ifdef SKYFALL_SIGNALS
+    installSignalHandlers();
+#endif
     SetTraceLogCallback(logCallback);
     sky::Options opt;
     for (int i = 1; i < argc; ++i) {
