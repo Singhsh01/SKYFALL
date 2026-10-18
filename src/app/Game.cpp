@@ -182,7 +182,7 @@ void Game::beginBriefing(int missionNo) {
 
 void Game::radio(Speaker who, const std::string& text, double dur, bool voice) {
     hud_.radio(speakerName(who), text, dur);
-    if (voice && !capturing_) speech_.say(who, text);
+    if (voice && (!capturing_ || std::getenv("SKYFALL_VOICE"))) speech_.say(who, text);
 }
 
 void Game::launchFromBriefing() {
@@ -531,7 +531,6 @@ void Game::shutdown() {
 
 void Game::applySettings() {
     audio_.applySettings(settings_);
-    battle_.player();  // ensure exists
     if (!battle_.jets().empty())
         battle_.player().skin = settings_.skinFor(static_cast<int>(battle_.player().fm->profile().id));
     if (!battle_.jets().empty())
@@ -664,7 +663,7 @@ void Game::updateRadioQueue() {
     radioQueue_.pop_front();
     double dur = std::max(4.0, item.second.size() / 13.0 + 1.0);
     hud_.radio(speakerName(item.first), item.second, dur);
-    bool voiced = settings_.voiceBriefings && !capturing_;
+    bool voiced = settings_.voiceBriefings && (!capturing_ || std::getenv("SKYFALL_VOICE"));
     if (voiced) speech_.say(item.first, item.second);
     audio_.play(Sfx::Radio, 0.5f);
     // with a voice, the next call follows the end of this one; captions-only paces by length
@@ -1910,6 +1909,51 @@ int Game::runCapture() {
         camMode_ = CameraMode::Cockpit;
         scriptedStep(0.3, [&](double) { setInput(0, 0, 0, 0); });
         snap("carrier_cockpit_rain", 2);
+        return 0;
+    }
+    if (set == "gear") {
+        // gear retraction in flight, through the normal input path, with sound
+        audio_.init();
+        for (int n : {1, 2, 52, 53}) {
+            startMissionBriefed(n);
+            Jet& p = battle_.player();
+            std::printf("mission %d: onGround %d gearDown %d\n", n, p.fm->state().onGround, p.fm->state().gearDown);
+            std::fflush(stdout);
+            for (int k = 0; k < 60; ++k) frame(1.0 / 30.0);
+            if (p.fm->state().onGround && !p.fm->state().catArmed) {
+                // runway start: engine start, brakes off, full power, rotate
+                p.fm->requestEngineStart();
+                for (int k = 0; k < 60 && p.fm->state().engine != EngineState::Running; ++k) { scriptedStep(0.5, [&](double) { setInput(0, 0, 0, 0); }); frame(1.0 / 30.0); }
+                p.fm->setParkingBrake(false);
+                for (int k = 0; k < 120 && p.fm->state().agl < 60; ++k) {
+                    scriptedStep(0.5, [&](double) { setInput(p.fm->state().airspeed > 75 ? 0.45 : 0.0, 0, 0, 1.0); });
+                    frame(1.0 / 30.0);
+                }
+            } else if (p.fm->state().onGround) {
+                scriptedStep(5.0, [&](double) { setInput(0, 0, 0, 1.0); });
+                p.fm->setParkingBrake(false);
+                scriptedStep(9.0, [&](double t) { setInput(t > 4.0 ? 0.35 : 0.0, 0, 0, 1.0); });
+            }
+            std::printf("  airborne: agl %.0f gearDown %d\n", p.fm->state().agl, p.fm->state().gearDown);
+            std::fflush(stdout);
+            if (p.fm->toggleGear()) audio_.play(Sfx::Gear, 0.6f);
+            for (int k = 0; k < 150; ++k) frame(1.0 / 30.0);
+            snap("gear_mission_" + std::to_string(n));
+        }
+        startArena(false);
+        Jet& p = battle_.player();
+        p.fm->resetAirborne({-4000, 1500, 2000}, 0.0, 120, 0.7);
+        if (!p.fm->state().gearDown) p.fm->toggleGear();
+        scriptedStep(4.0, [&](double) { setInput(0, 0, 0, 0); });
+        for (CameraMode cm : {CameraMode::Chase, CameraMode::Cockpit}) {
+            camMode_ = cm; chaseInit_ = false;
+            if (!p.fm->state().gearDown) { p.fm->toggleGear(); scriptedStep(4.0, [&](double) { setInput(0, 0, 0, 0); }); }
+            if (p.fm->toggleGear()) audio_.play(Sfx::Gear, 0.6f);
+            for (int k = 0; k < 6; ++k) {
+                scriptedStep(0.5, [&](double) { setInput(0, 0, 0, 0); });
+                snap(std::string("gear_") + (cm == CameraMode::Chase ? "chase_" : "cockpit_") + std::to_string(k));
+            }
+        }
         return 0;
     }
     if (set == "menus") {

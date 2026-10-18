@@ -148,7 +148,8 @@ int Battle::addGround(GroundTarget g) {
     return static_cast<int>(ground_.size()) - 1;
 }
 
-void Battle::spawnEnemies(int count, AiSkill skill, const Vec3& center, double radius, double altitude, bool unarmed) {
+void Battle::spawnEnemies(int count, AiSkill skill, const Vec3& center, double radius, double altitude, bool unarmed,
+                          const std::string& leadCallsign) {
     static const AircraftId types[] = {AircraftId::Su35, AircraftId::MiG29, AircraftId::Su57, AircraftId::Su30};
     const Vec3 pp = player().fm->state().pos;
     for (int i = 0; i < count; ++i) {
@@ -161,6 +162,9 @@ void Battle::spawnEnemies(int count, AiSkill skill, const Vec3& center, double r
         Jet& j = debugAddJet(Team::Red, types[(i + wave_) % 4], pos, hdg, 220);
         j.ai = AiState::Engage;
         j.skill = skill;
+        j.squad = wave_;
+        j.squadRole = i;
+        if (i == 0 && !leadCallsign.empty()) j.callsign = leadCallsign;
         if (unarmed) { j.missiles = 0; j.rounds = 0; j.flareCharges = 0; j.ai = AiState::Patrol; }
     }
     ++wave_;
@@ -662,6 +666,26 @@ ControlInputs Battle::aiPilot(Jet& j, double dt, PlayerCommands& out) {
     }
     Jet* target = jetById(j.aiTarget);
     if (target && !target->alive) target = nullptr;
+    const int tac = cfg_.tactics;
+    // tactics: is someone sitting on our six with the nose on us?
+    bool gunThreat = false, gunThreatLocked = false;
+    if (tac > 0) {
+        for (auto& t : jets_) {
+            if (!t->alive || t->team == j.team) continue;
+            const FlightState& ts = t->fm->state();
+            Vec3 rel = s.pos - ts.pos;
+            double d = length(rel);
+            if (d > 1300.0 || d < 1.0) continue;
+            Vec3 u = rel * (1.0 / d);
+            if (dot(ts.q.forward(), u) > std::cos(12.0 * kDeg) && dot(s.q.forward(), u) > std::cos(60.0 * kDeg)) {
+                gunThreat = true;
+                gunThreatLocked = t->lockTarget == j.id && t->lockProgress > 0.6;
+                // break towards the attacker's side: the turn that makes him overshoot
+                if (tac >= 2 && j.jinkTimer <= 0) j.jinkSign = dot(ts.pos - s.pos, s.q.right()) >= 0 ? 1.0 : -1.0;
+            }
+        }
+    }
+    j.crankTimer = std::max(0.0, j.crankTimer - dt);
 
     Vec3 desired = s.q.forward();
     double desiredSpeed = 215.0;
@@ -681,15 +705,53 @@ ControlInputs Battle::aiPilot(Jet& j, double dt, PlayerCommands& out) {
         Vec3 f = s.q.forward();
         desired = normalize(Vec3{f.x, 0, f.z} + Vec3{0, 1.3, 0});
         desiredSpeed = 260;
-    } else if (threat && threatD < 3200.0) {
+    } else if (threat && threatD < (tac > 0 ? 3800.0 : 3200.0)) {
         j.ai = AiState::Evade;
         Vec3 los = normalize(threat->pos - s.pos);
         Vec3 side = normalize(cross(los, Vec3{0, 1, 0}));
-        if (dot(side, s.q.right()) < 0) side = -side;
-        desired = normalize(side + Vec3{0, -0.15, 0});
+        if (tac == 0) {
+            if (dot(side, s.q.right()) < 0) side = -side;
+            desired = normalize(side + Vec3{0, -0.15, 0});
+        } else {
+            // beam the missile (fly across its line of sight so its closure collapses) and drag it
+            // down towards the clutter; the side is chosen once per missile, at squadron level not
+            // always the obvious one
+            if (j.evadeMissile != threat->id) {
+                j.evadeMissile = threat->id;
+                j.evadeSign = dot(side, s.q.right()) >= 0 ? 1.0 : -1.0;
+                if (tac >= 2 && rng_.uniform() < 0.3) j.evadeSign = -j.evadeSign;
+            }
+            side = side * j.evadeSign;
+            double dive = agl > 900.0 ? -0.32 : (agl > 500.0 ? -0.1 : 0.12);
+            desired = normalize(side + Vec3{0, dive, 0});
+            if (threatD < 950.0) {
+                // last-ditch break: pull hard across the missile's path, over the top or under
+                double vert = (tac >= 2 && agl > 700.0 && (threat->id % 2)) ? -0.5 : 0.55;
+                desired = normalize(side * 0.6 - los * 0.4 + Vec3{0, vert, 0});
+            }
+        }
         desiredSpeed = 400;
         double reactRange = j.skill == AiSkill::Ace ? 2200.0 : (j.skill == AiSkill::Veteran ? 1700.0 : 1100.0);
+        if (tac > 0) reactRange += 400.0;
         if (threatD < reactRange && j.flareCharges > 0 && j.flareBurstTimer <= 0) out.flares = true;
+    } else if (tac > 0 && gunThreat) {
+        // guns defence: an enemy is saddled up behind; break hard and keep reversing the turn so
+        // the attacker can never settle the pipper
+        j.ai = AiState::Evade;
+        if (j.jinkTimer <= 0) j.jinkTimer = tac >= 2 ? rng_.range(1.4, 2.8) : 2.4;   // first break
+        j.jinkTimer -= dt;
+        if (j.jinkTimer <= 0) {
+            j.jinkSign = -j.jinkSign;   // reversal (scissors)
+            j.jinkTimer = tac >= 2 ? rng_.range(1.1, 2.6) : 2.4;
+        }
+        Vec3 f = s.q.forward();
+        Vec3 rr = s.q.right();
+        Vec3 r = length(Vec3{rr.x, 0, rr.z}) > 0.1 ? normalize(Vec3{rr.x, 0, rr.z}) : normalize(cross(f, Vec3{0, 1, 0}));
+        double vert = tac >= 2 ? (j.jinkSign > 0 ? 0.25 : -0.15) : 0.1;
+        if (agl < 700.0) vert = 0.35;
+        desired = normalize(r * (1.6 * j.jinkSign) + f * 0.25 + Vec3{0, vert, 0});
+        desiredSpeed = 260;
+        if (j.flareCharges > 0 && j.flareBurstTimer <= 0 && gunThreatLocked) out.flares = true;
     } else if (horiz > 13000.0) {
         j.ai = AiState::Patrol;
         desired = normalize(Vec3{-s.pos.x, 0, -s.pos.z} + Vec3{0, 0.1, 0});
@@ -701,22 +763,68 @@ ControlInputs Battle::aiPilot(Jet& j, double dt, PlayerCommands& out) {
         double tLead = clampd(dist / (kMuzzleSpeed + V * 0.3), 0.0, 2.0);
         Vec3 aim = dist < 1600.0 ? ts.pos + ts.vel * tLead : ts.pos + ts.vel * 1.2;
         desired = normalize(aim - s.pos);
+        if (tac >= 2 && j.squad >= 0 && dist > 2300.0) {
+            // squadron geometry: flankers bracket the target from both sides, the third jet comes
+            // in high; the leader drives straight in
+            Vec3 tv{ts.vel.x, 0, ts.vel.z};
+            Vec3 tf = length(tv) > 1.0 ? normalize(tv) : normalize(Vec3{d.x, 0, d.z});
+            Vec3 tr{-tf.z, 0, tf.x};
+            int role = j.squadRole % 4;
+            Vec3 offset;
+            if (role == 1) offset = tr * 1800.0 + Vec3{0, 250, 0};
+            else if (role == 3) offset = tr * -1800.0 + Vec3{0, 250, 0};
+            else if (role == 2) offset = Vec3{0, 900, 0};
+            double fade = smoothstep(2300.0, 5000.0, dist);
+            desired = normalize(aim + offset * fade - s.pos);
+        }
+        if (tac >= 2 && j.crankTimer > 0 && dist > 3000.0) {
+            // crank after a missile shot: offset 40 degrees to slow the closure while the missile flies
+            Vec3 h = normalize(Vec3{desired.x, 0, desired.z});
+            Vec3 hr{-h.z, 0, h.x};
+            desired = normalize(h * std::cos(40.0 * kDeg) + hr * (std::sin(40.0 * kDeg) * j.crankSign) + Vec3{0, desired.y, 0});
+        }
         if (dist < 260.0 && dot(normalize(ts.vel), s.q.forward()) < -0.3) {
             // head-on merge: break away to avoid collision
             desired = normalize(s.q.right() + Vec3{0, 0.3, 0});
         }
         desiredSpeed = dist > 3000 ? 300 : 230;
+        if (tac > 0) {
+            desiredSpeed = dist > 3000 ? 310 : (dist > 1500 ? 260 : 225);   // fast in, corner speed in the turn fight
+            if (j.extendTimer <= 0 && V < 150.0 && dist > 900.0) j.extendTimer = tac >= 2 ? 3.5 : 4.5;
+            if (j.extendTimer > 0) {
+                // too slow to turn: unload and extend, then come back for another pass
+                j.extendTimer -= dt;
+                j.ai = AiState::Extend;
+                Vec3 f = s.q.forward();
+                desired = normalize(Vec3{f.x, 0, f.z} + Vec3{0, agl > 900.0 ? -0.2 : 0.05, 0});
+                desiredSpeed = 420;
+            }
+        }
         aggressive = true;
         // Weapons
         Vec3 fwd = s.q.forward();
         double offBore = std::acos(clampd(dot(normalize(aim - s.pos), fwd), -1.0, 1.0));
         double gunCone = j.skill == AiSkill::Ace ? 3.5 * kDeg : 2.5 * kDeg;
+        if (tac >= 2) gunCone += 0.8 * kDeg;   // squadron pilots take the snapshot
         out.fireGun = dist < 1000.0 && offBore < gunCone && j.rounds > 0;
         int missilesAtTarget = 0;
         for (const Missile& m : missiles_) if (m.active && m.targetJet == target->id && m.decoyFlare < 0) ++missilesAtTarget;
-        if (j.lockProgress >= 1.0 && j.lockTarget == target->id && dist < 4200.0 && dist > 600.0 &&
-            missilesAtTarget < (target->isPlayer ? 1 : 2) && j.missileCooldown <= 0)
-            out.fireMissile = rng_.uniform() < 0.02;
+        if (tac == 0) {
+            if (j.lockProgress >= 1.0 && j.lockTarget == target->id && dist < 4200.0 && dist > 600.0 &&
+                missilesAtTarget < (target->isPlayer ? 1 : 2) && j.missileCooldown <= 0)
+                out.fireMissile = rng_.uniform() < 0.02;
+        } else {
+            // never more than one missile at the player at a time, and a breather between shots
+            double spacing = tac >= 3 ? 3.0 : (tac >= 2 ? 3.5 : 5.0);
+            bool spaced = !target->isPlayer || time_ - lastShotAtPlayer_ > spacing;
+            double maxR = tac >= 2 ? 4800.0 : 4400.0;
+            if (j.lockProgress >= 1.0 && j.lockTarget == target->id && dist < maxR && dist > 700.0 && spaced &&
+                missilesAtTarget < (target->isPlayer ? 1 : 2) && j.missileCooldown <= 0 && rng_.uniform() < (tac >= 2 ? 0.04 : 0.03)) {
+                out.fireMissile = true;
+                if (target->isPlayer) lastShotAtPlayer_ = time_;
+                if (tac >= 2) { j.crankTimer = 3.0; j.crankSign = rng_.uniform() < 0.5 ? -1.0 : 1.0; }
+            }
+        }
     } else {
         j.ai = AiState::Patrol;
         Vec3 d = j.waypoint - s.pos;
@@ -1032,7 +1140,7 @@ void Battle::updateGround(double dt) {
                 Bullet b;
                 b.pos = g.pos + Vec3{0, 3, 0};
                 Vec3 jitter{rng_.range(-1, 1), rng_.range(-1, 1), rng_.range(-1, 1)};
-                b.vel = normalize(dir + jitter * 0.03) * 900.0;
+                b.vel = normalize(dir + jitter * (cfg_.tactics >= 2 ? 0.024 : 0.03)) * 900.0;
                 b.team = g.team;
                 b.owner = -1;
                 b.life = 3.2;
@@ -1041,9 +1149,10 @@ void Battle::updateGround(double dt) {
             }
             g.fireCooldown = 0.12;
             if (rng_.uniform() < 0.03) g.fireCooldown = 2.5;  // pause between bursts
-        } else if (g.kind == GroundKind::SAM && bd < 6500.0 && best->isPlayer && lineOfSight(g.pos + Vec3{0, 8, 0}, best->fm->state().pos)) {
+        } else if (g.kind == GroundKind::SAM && bd < (cfg_.tactics >= 2 ? 7200.0 : 6500.0) && best->isPlayer &&
+                   lineOfSight(g.pos + Vec3{0, 8, 0}, best->fm->state().pos)) {
             launchSurfaceMissile(g.pos, best->id);
-            g.fireCooldown = 22.0;
+            g.fireCooldown = cfg_.tactics >= 2 ? 16.0 : 22.0;
         } else {
             g.fireCooldown = 1.0;
         }
@@ -1051,6 +1160,7 @@ void Battle::updateGround(double dt) {
 }
 
 void Battle::update(double dt, const ControlInputs& playerInput, const PlayerCommands& cmd) {
+    time_ += dt;
     for (auto& jp : jets_) {
         if (jp->isPlayer) updateJet(*jp, dt, &playerInput, &cmd);
         else updateJet(*jp, dt, nullptr, nullptr);

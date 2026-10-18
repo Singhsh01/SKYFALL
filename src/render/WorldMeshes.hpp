@@ -53,7 +53,7 @@ struct WorldMeshes {
     Texture2D minimap{};   // coloured hill-shaded map for the HUD (covers +/- kMinimapHalf metres)
     static constexpr double kMinimapHalf = 20000.0;   // map is +/-16 km; the margin shows what lies beyond
     Texture2D puff{};      // soft cloud/smoke sprite
-    Texture2D cloud[4]{};  // cumulus sprites (baked shading, upright)
+    Texture2D cloudAtlas{};  // four cumulus sprites in a 2x2 atlas (baked shading, upright)
     Texture2D glow{};      // radial glow sprite
     Texture2D spark{};     // hard spark sprite
 

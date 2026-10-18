@@ -120,7 +120,7 @@ Texture2D makeSprite(int kind) {
 
 /// Cumulus sprite: several overlapping lobes with eroded edges, a flat base and baked
 /// top-lit shading in RGB (drawn upright, never rotated).
-Texture2D makeCloudSprite(unsigned seed) {
+Image makeCloudSprite(unsigned seed) {
     const int N = 256;
     Image img = GenImageColor(N, N, BLANK);
     Color* px = static_cast<Color*>(img.data);
@@ -152,11 +152,7 @@ Texture2D makeCloudSprite(unsigned seed) {
             unsigned char c = u8(lit);
             px[y * N + x] = {c, c, u8(std::min(1.0, lit * 1.03)), u8(a)};
         }
-    Texture2D t = LoadTextureFromImage(img);
-    UnloadImage(img);
-    GenTextureMipmaps(&t);
-    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
-    return t;
+    return img;
 }
 
 Color surfaceTint(const Terrain& t, double x, double z, double h, double forest, double town) {
@@ -391,7 +387,21 @@ void WorldMeshes::build(const Terrain& t) {
     noise = makeNoiseTexture();
     detailGrad = makeDetailGradTexture();
     puff = makeSprite(0);
-    for (int i = 0; i < 4; ++i) cloud[i] = makeCloudSprite(100u + i * 17u);
+    {
+        // the four cumulus sprites share one 2x2 atlas: the whole cloud field draws in one batch
+        // (switching textures per sprite flushed the batch hundreds of times a frame, which
+        // stalls Apple's OpenGL driver)
+        Image atlas = GenImageColor(512, 512, BLANK);
+        for (int i = 0; i < 4; ++i) {
+            Image im = makeCloudSprite(100u + i * 17u);
+            ImageDraw(&atlas, im, {0, 0, 256, 256}, {static_cast<float>((i % 2) * 256), static_cast<float>((i / 2) * 256), 256, 256}, WHITE);
+            UnloadImage(im);
+        }
+        cloudAtlas = LoadTextureFromImage(atlas);
+        UnloadImage(atlas);
+        GenTextureMipmaps(&cloudAtlas);
+        SetTextureFilter(cloudAtlas, TEXTURE_FILTER_TRILINEAR);
+    }
     glow = makeSprite(1);
     spark = makeSprite(2);
 
@@ -830,7 +840,7 @@ void WorldMeshes::unload() {
     UnloadMesh(runway); UnloadMesh(taxiways); UnloadMesh(airbase); UnloadMesh(town);
     UnloadTexture(noise); UnloadTexture(detailGrad); UnloadTexture(landCover); UnloadTexture(depthMap); UnloadTexture(minimap); UnloadTexture(terrainData);
     UnloadTexture(puff); UnloadTexture(glow); UnloadTexture(spark);
-    for (auto& c : cloud) UnloadTexture(c);
+    UnloadTexture(cloudAtlas);
 }
 
 }  // namespace sky

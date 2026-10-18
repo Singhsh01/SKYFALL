@@ -46,6 +46,16 @@ struct Jet {
     Vec3 waypoint;
     double aiTimer = 0;
     double reaction = 0;
+    // squadron tactics (campaign tactics level >= 1; unused at level 0)
+    int squad = -1;               // wave the jet belongs to (-1 = none)
+    int squadRole = 0;            // position in the squadron: 0 lead, 1/3 flankers, 2 high cover
+    double jinkTimer = 0;         // time to the next break reversal
+    double jinkSign = 1;          // current break direction (+1 right / -1 left)
+    int evadeMissile = -1;        // missile the current beam manoeuvre is against
+    double evadeSign = 1;
+    double extendTimer = 0;       // > 0: unloading to regain speed
+    double crankTimer = 0;        // > 0: offsetting after a missile launch
+    double crankSign = 1;
     double hitFlash = 0;
     int kills = 0;
     ControlInputs lastInput{};
@@ -177,6 +187,11 @@ struct BattleConfig {
     unsigned seed = 1234;
     bool playerInvulnerable = false;
     double agReloadSeconds = 14.0;
+    /// Enemy tactics (campaign difficulty): 0 = classic pursuit AI (missions 1-46 and the arena),
+    /// 1 = tactical (beam/notch missile defence, guns defence with break reversals, energy
+    /// management), 2 = squadron (adds bracketing flankers, high cover, cranking after a shot,
+    /// unpredictable reversals, tighter air defences), 3 = final battle (as 2, faster tempo).
+    int tactics = 0;
 };
 
 struct PlayerCommands {
@@ -199,7 +214,9 @@ public:
     /// Adds a ground target; y is set from the terrain (sea surface for naval kinds), health from the kind.
     int addGround(GroundTarget g);
     /// Spawns `count` hostile jets around `center` at `altitude` (MSL), heading towards the player.
-    void spawnEnemies(int count, AiSkill skill, const Vec3& center, double radius, double altitude, bool unarmed = false);
+    void spawnEnemies(int count, AiSkill skill, const Vec3& center, double radius, double altitude, bool unarmed = false,
+                      const std::string& leadCallsign = "");
+    int tactics() const { return cfg_.tactics; }
     int groundAlive(int group) const;      // live targets in an objective group
     Vec3 groundVelocity(int idx) const;    // m/s, from the vehicle's circular route (0 when static)
     Vec3 groundAimPoint(int idx) const { return ground_[idx].pos + Vec3{0, groundAimHeight(ground_[idx].kind), 0}; }
@@ -292,6 +309,8 @@ private:
     bool missileWarning_ = false;
     bool prevWarning_ = false;
     double threatDist_ = 1e9;
+    double time_ = 0;                 // battle clock (s)
+    double lastShotAtPlayer_ = -1e9;  // last enemy missile launch at the player (tactics >= 1 spacing)
     Vec3 threatDir_;
 };
 

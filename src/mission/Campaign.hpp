@@ -34,6 +34,7 @@ struct WaveDef {
     double radius = 1500;
     double altitude = 2000;   // metres above sea level
     bool unarmed = false;     // target drones
+    std::string callsign;     // name of the wave leader (empty = generated)
 };
 
 enum class ObjectiveKind {
@@ -85,6 +86,7 @@ struct CampaignMissionDef {
     double timeLimit = 0;        // seconds, 0 = none
     bool carrier = false;        // start on the aircraft carrier's catapult
     bool rain = false;           // rain and low overcast
+    int tactics = -1;            // enemy tactics level (see BattleConfig::tactics); -1 = by mission number
 };
 
 /// The aircraft carrier used by the carrier missions: off the east coast, bow to the north.
@@ -104,7 +106,8 @@ bool objectivePoint(const CampaignMissionDef& def, const ObjectiveDef& o, const 
 /// enemy waves when the objective that owns them begins. Shared by the game and the tests.
 class CampaignDirector {
 public:
-    void begin(const CampaignMissionDef& def, Battle& battle);
+    /// `seedSalt` varies the random draws (tests replay a mission with different luck).
+    void begin(const CampaignMissionDef& def, Battle& battle, unsigned seedSalt = 0);
     /// Call after every Mission::update; spawns waves for newly started objectives.
     void update(const Mission& mission, Battle& battle);
     const CampaignMissionDef* def() const { return def_; }

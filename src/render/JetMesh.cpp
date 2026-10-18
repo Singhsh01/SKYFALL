@@ -472,7 +472,6 @@ Geo geoFor(AirframeStyle s) {
 
 namespace {
 
-Vector3 V3s(float x, float y, float z) { return {x, y, z}; }
 
 /// Planform evaluated at a spanwise position z (right side): leading / trailing edge x and height.
 void planformAt(const Planform& p, float z, float& le, float& te, float& y) {

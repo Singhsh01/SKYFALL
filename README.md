@@ -50,6 +50,20 @@ copyrighted models, textures, sounds or code from commercial games.
   rotate to a climb by themselves. Then patrols, picket boats, a coastal radar, a harbour, fleet
   defence, oil platforms, a beachhead, a rail viaduct and a final strike, each ending with a low
   pass over the carrier. Every launch is test-flown in all 8 aircraft and all 3 handling modes.
+* **A difficulty curve that builds to the finale** — missions 1-46 play as before. From mission 47
+  the enemy flies with tactics: it turns across your missiles and drags them down (beam / notch)
+  with well-timed flares, breaks and reverses when you sit on its six, extends to regain speed
+  instead of stalling in a turn, and paces its missile shots. Missions 47-51 add gun lines, SAM
+  sites and interceptors between the objectives. In the carrier missions (52-60) the bandits fly
+  as squadrons: flankers bracket you from both sides while a third comes in high, they crank away
+  after a missile shot and their reversals are unpredictable. The air defences are sharper, and
+  objectives come in stages: strike, fight off the response, strike again. Mission 61, *Typhoon*,
+  is the final battle: break the SAM belt, beat two counterattacks, hit the flak-ringed command
+  post, then a duel with Typhoon flight, their two aces, with your two wingmen beside you.
+  Difficulty comes from tactics and mission design only; enemy aircraft are never tougher, and
+  never more than one enemy missile is in the air at you at once. A test bot flies every one of
+  missions 47-61 for real, in all three handling modes with five different random seeds each, and
+  must win them all (`hard_campaign_missions_are_winnable_by_a_real_pilot_in_every_handling_mode`).
 * **A real voice for the whole game** — every briefing and every radio call (AWACS, tower,
   instructor, your wingman) is spoken by a natural neural female voice, recorded once with the
   open-source Kokoro-82M model (`tools/make_voice.py`) and shipped as `assets/voice/*.mp3`. Radio

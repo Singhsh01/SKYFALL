@@ -593,34 +593,41 @@ std::vector<CampaignMissionDef> buildAll() {
         m.targets.push_back(tgt(K::AAA, -6000, 2600, "", 0));
         m.objectives = {destroy(1, "DESTROY THE ARMOURED TRAIN")};
     }
+    // ---------------- Missions 47-51: tactical (smarter enemy, defended targets) ----------------
     {
-        auto& m = add(47, "Factory Floor", "The arms factories in the industrial zone.");
+        auto& m = add(47, "Factory Floor", "The arms factories, gun-defended, with interceptors on call.");
         m.startX = -11000; m.startZ = -1500; m.startAlt = 1500; m.startHeading = 0.68;
-        m.briefing = "The industrial zone is assembling missiles. Four production halls, defended by guns.";
-        m.debrief = "Production lines destroyed. That's months of output gone.";
+        m.briefing = "The industrial zone is assembling missiles. Four production halls behind a gun line. Hit the first two and their interceptors will come for you: deal with them, then finish the job.";
+        m.debrief = "Production lines destroyed and the interceptors with them. That's months of output gone.";
         for (int i = 0; i < 4; ++i) {
-            TargetDef f = tgt(K::Factory, 0, 0, "FACTORY " + std::to_string(i + 1), 1);
+            TargetDef f = tgt(K::Factory, 0, 0, "FACTORY " + std::to_string(i + 1), i < 2 ? 1 : 2);
             f.anchor = TargetDef::Anchor::Industrial; f.index = i; m.targets.push_back(f);
         }
-        m.objectives = {destroy(1, "DESTROY FACTORY 1-4", "Big halls take two ATS hits each; follow up with the cannon.")};
+        m.targets.push_back(tgt(K::Gun, -4500, 3050, "GUN 1", 0));
+        m.targets.push_back(tgt(K::Gun, -4500, 4450, "GUN 2", 0));
+        m.targets.push_back(tgt(K::Gun, -5250, 3750, "GUN 3", 0));
+        m.waves = {wave(2, AiSkill::Veteran, -1500, 1500, 1900)};
+        m.objectives = {destroy(1, "DESTROY FACTORY 1-2", "Big halls take two ATS hits each; follow up with the cannon."),
+                        air("SPLASH THE INTERCEPTORS", {0}, "Two interceptors scrambled. They break hard when you get behind them: stay patient, lock, fire."),
+                        destroy(2, "DESTROY FACTORY 3-4", "Finish the last two halls.")};
     }
     {
-        auto& m = add(48, "Grounded", "Catch their fighters on the ground before they scramble.");
+        auto& m = add(48, "Grounded", "Catch their fighters on the ground, then beat the scramble.");
         m.startX = -10000; m.startZ = -12000; m.startAlt = 1800;
-        m.briefing = "Six fighters are parked at a forward strip, fuelling up. Hit them on the ground. Whatever gets airborne, you deal with.";
+        m.briefing = "Six fighters are parked at a forward strip, fuelling up, with guns around it. Hit them on the ground. Two pairs will scramble from two directions, one after the other: watch both sides.";
         m.debrief = "Six kills on the ground and the scramble failed. Clean sweep.";
         line(m.targets, K::ParkedJet, "PARKED JET", 6, -4500, -12200, 60, 0.0, 1);
         line(m.targets, K::Hangar, "HANGAR", 2, -4500, -11900, 120, 0.0, 1);
         line(m.targets, K::Gun, "GUN", 2, -4500, -12050, 700, 0.0, 0);
-        m.waves = {wave(3, AiSkill::Veteran, -3000, -10000, 1800)};
-        m.objectives = {destroy(1, "DESTROY 6 PARKED JETS AND 2 HANGARS"), air("SHOOT DOWN THE SCRAMBLE", {0})};
-        m.objectives[0].wavesOnStart = {};
-        m.objectives[1].wavesOnStart = {0};
+        m.targets.push_back(tgt(K::Gun, -3900, -12500, "GUN 3", 0));
+        m.waves = {wave(2, AiSkill::Veteran, -3000, -10000, 1800), wave(2, AiSkill::Veteran, -7000, -13500, 1600, 1200)};
+        m.objectives = {destroy(1, "DESTROY 6 PARKED JETS AND 2 HANGARS"), air("SHOOT DOWN THE SCRAMBLE", {0}),
+                        air("SHOOT DOWN THE SECOND PAIR", {1}, "The second pair is coming in from the south-west, low.")};
     }
     {
-        auto& m = add(49, "Launch Window", "Four mobile missile launchers. Five minutes.");
-        m.startX = -9000; m.startZ = 7000; m.startAlt = 1600; m.timeLimit = 300;
-        m.briefing = "Four mobile launchers are setting up to fire on our airbase. You have five minutes. They're moving, so lead them.";
+        auto& m = add(49, "Launch Window", "Four mobile missile launchers, a fighter screen, five and a half minutes.");
+        m.startX = -9000; m.startZ = 7000; m.startAlt = 1600; m.timeLimit = 330;
+        m.briefing = "Four mobile launchers are setting up to fire on our airbase, under flak and a two-ship fighter screen. You have five and a half minutes. They're moving, so lead them.";
         m.debrief = "All launchers destroyed with time to spare. The base is safe.";
         const double sites[4][2] = {{-4500, 5600}, {-3300, 4700}, {-2187, 5550}, {-900, 4700}};
         for (int i = 0; i < 4; ++i) {
@@ -628,22 +635,28 @@ std::vector<CampaignMissionDef> buildAll() {
             l.pathRadius = 220; l.pathAngle = i * 1.4; m.targets.push_back(l);
         }
         m.targets.push_back(tgt(K::Radar, -2500, 5000, "RADAR", 0));
-        m.objectives = {destroy(1, "DESTROY 4 LAUNCHERS (5 MIN)", "Fire ATS a little ahead of the moving launchers; the seeker leads them.")};
+        m.targets.push_back(tgt(K::AAA, -3000, 5300, "AAA 1", 0));
+        m.targets.push_back(tgt(K::AAA, -1600, 5100, "AAA 2", 0));
+        m.waves = {wave(2, AiSkill::Veteran, 1500, 8000, 2000)};
+        m.objectives = {destroy(1, "DESTROY 4 LAUNCHERS (5:30)", "Fire ATS a little ahead of the moving launchers; the seeker leads them. Fighters will try to drag you off.")};
+        m.objectives[0].wavesOnStart = {0};
     }
     {
-        auto& m = add(50, "Ammunition Dump", "Six earth-covered bunkers full of munitions.");
+        auto& m = add(50, "Ammunition Dump", "A SAM guards six bunkers full of munitions.");
         m.startX = 6000; m.startZ = 12000; m.startAlt = 1600;
-        m.briefing = "The main ammunition dump: six bunkers. Expect big secondary explosions, so don't fly through the fireballs.";
+        m.briefing = "The main ammunition dump: six bunkers, a SAM site on the hill to the south-west and guns around the dump. Kill the SAM first, then the bunkers. Expect big secondary explosions.";
         m.debrief = "The dump is gone. Felt that one from here.";
         for (int i = 0; i < 6; ++i)
             m.targets.push_back(tgt(K::Ammo, 4733 + (i % 3) * 110, 6350 + (i / 3) * 120, "AMMO BUNKER " + std::to_string(i + 1), 1, true, 0.0));
         line(m.targets, K::Gun, "GUN", 3, 4833, 6410, 520, 1.2, 0);
-        m.objectives = {destroy(1, "DESTROY 6 AMMO BUNKERS")};
+        m.targets.push_back(tgt(K::SAM, 4400, 6000, "SAM SITE", 2));
+        m.objectives = {destroy(2, "DESTROY THE SAM SITE", "Lock the SAM from range with ATS (2). Flares (X) on the missile warning."),
+                        destroy(1, "DESTROY 6 AMMO BUNKERS")};
     }
     {
         auto& m = add(51, "Critical Mass", "Power, communications, command, fighters, then home.");
         m.startX = -11000; m.startZ = -5000; m.startAlt = 1700; m.allies = 2;
-        m.briefing = "This is it, Captain. Power plant, the relay masts, their command post, and whatever they launch. Then bring it home.";
+        m.briefing = "This is it, Captain. Power plant, the relay masts with their escort, the SAM-covered command post, and whatever they launch. Then bring it home.";
         m.debrief = "Critical infrastructure destroyed, and you landed it. Mission accomplished, Captain.";
         m.targets.push_back(tgt(K::PowerPlant, -5000, -9200, "POWER PLANT", 1));
         m.targets.push_back(tgt(K::CommTower, -2000, -8000, "COMMS TOWER 1", 2));
@@ -651,56 +664,67 @@ std::vector<CampaignMissionDef> buildAll() {
         m.targets.push_back(tgt(K::Command, 1050, -1913, "COMMAND POST", 3));
         ring(m.targets, K::Bunker, "BUNKER", 3, 1050, -1913, 170, 3, true, 0.3);
         ring(m.targets, K::Gun, "GUN", 3, 1050, -1913, 450, 0, true, 1.0);
-        m.waves = {wave(4, AiSkill::Veteran, 3000, 0, 2400), wave(1, AiSkill::Ace, 4000, 1000, 2800, 300)};
+        m.targets.push_back(tgt(K::SAM, 600, -2300, "SAM", 0));
+        m.waves = {wave(2, AiSkill::Veteran, -3000, -4000, 2200), wave(2, AiSkill::Veteran, 3000, 0, 2400), wave(1, AiSkill::Ace, 4000, 1000, 2800, 300)};
         m.objectives = {destroy(1, "DESTROY THE POWER PLANT"), destroy(2, "DESTROY COMMS TOWERS 1-2"),
-                        destroy(3, "DESTROY COMMAND POST AND BUNKERS"), air("DESTROY THE LAST FIGHTERS", {0, 1})};
+                        destroy(3, "DESTROY COMMAND POST AND BUNKERS"), air("DESTROY THE LAST FIGHTERS", {1, 2})};
+        m.objectives[1].wavesOnStart = {0};
         landAtHome(m);
     }
-    // ---------------- Carrier operations (52-61): catapult launches in a storm ----------------
+    // ---------------- Carrier operations (52-61): catapult launches in a storm, hard ----------------
     {
-        auto& m = add(52, "Cat Shot", "Your first catapult launch, in the rain, then a patrol.");
-        m.briefing = "Welcome aboard. Weather is closing in, but the deck is open. One catapult shot, climb out, check the patrol station, and come back overhead.";
-        m.debrief = "Smooth shot and a tidy patrol. Welcome to carrier aviation, Captain.";
+        auto& m = add(52, "Cat Shot", "Your first catapult launch, in the rain, and a hot patrol station.");
+        m.briefing = "Welcome aboard. Weather is closing in, but the deck is open. One catapult shot, climb out and take the patrol station. A pair of bandits is working the area: expect company.";
+        m.debrief = "A clean shot, two kills and home. Welcome to carrier aviation, Captain.";
+        m.waves = {wave(2, AiSkill::Veteran, 10500, -9800, 1700, 1500)};
         m.objectives = {simple(ObjectiveKind::Climb, "CLIMB TO 1200 M", "Keep climbing straight ahead to 1200 metres.", "PULL BACK GENTLY", 1200),
-                        waypoint("PATROL STATION", 12500, -7000, 900)};
+                        waypoint("PATROL STATION", 12500, -7000, 900),
+                        air("SPLASH 2 BANDITS", {0}, "Two bandits, working as a pair: when one runs, the other is setting you up.")};
         carrierStart(m);
         recoverOverCarrier(m);
     }
     {
-        auto& m = add(53, "Storm Front", "Two bandits are probing the fleet under the storm.");
-        m.briefing = "Radar has two bandits low over the water, using the storm for cover. Launch, climb, and splash them before they find the fleet.";
-        m.debrief = "Two kills in the rain. The fleet never even saw them.";
-        m.waves = {wave(2, AiSkill::Rookie, 11500, -9000, 1500, 1200)};
-        m.objectives = {air("SPLASH 2 BANDITS", {0})};
+        auto& m = add(53, "Storm Front", "Two pairs of bandits are probing the fleet under the storm.");
+        m.briefing = "Radar has two bandits low over the water, using the storm for cover, and a second pair is coming round from the west. Launch, climb, and splash all four before they find the fleet.";
+        m.debrief = "Four kills in the rain. The fleet never even saw them.";
+        m.waves = {wave(2, AiSkill::Veteran, 11500, -9000, 1500, 1200), wave(1, AiSkill::Veteran, 5000, -3000, 1800, 300),
+                   wave(1, AiSkill::Rookie, 4000, -1500, 1600, 300)};
+        m.objectives = {air("SPLASH THE FIRST PAIR", {0}), air("SPLASH THE SECOND PAIR", {1, 2})};
         carrierStart(m);
         recoverOverCarrier(m);
     }
     {
-        auto& m = add(54, "Picket Boats", "Four fast attack boats are shadowing the carrier.");
-        m.briefing = "Four fast attack boats are shadowing us from the north. Sink them before they get into missile range.";
-        m.debrief = "All four boats are on the bottom. Good shooting.";
+        auto& m = add(54, "Picket Boats", "Four armed attack boats and their fighter cover.");
+        m.briefing = "Four fast attack boats are shadowing us from the north, and they shoot back. Sink two, and their fighter cover will come down on you. Splash the fighters, then finish the boats.";
+        m.debrief = "All four boats are on the bottom and the cover is gone. Good shooting.";
         for (int i = 0; i < 4; ++i) {
-            TargetDef b = tgt(K::Ship, 12600, -6500, "BOAT " + std::to_string(i + 1), 1);
+            TargetDef b = tgt(K::Ship, 12600, -6500, "BOAT " + std::to_string(i + 1), i % 2 == 0 ? 1 : 2);
             b.pathRadius = 600; b.pathAngle = i * 1.57; m.targets.push_back(b);
         }
-        m.objectives = {destroy(1, "SINK 4 ATTACK BOATS", "Select ATS (2), lead the moving boats and fire. The cannon works well on them too.")};
+        m.waves = {wave(2, AiSkill::Veteran, 9000, -9500, 1600)};
+        m.objectives = {destroy(1, "SINK BOATS 1 AND 3", "Select ATS (2), lead the moving boats and fire. Keep moving: their deck guns track you."),
+                        air("SPLASH THE FIGHTER COVER", {0}), destroy(2, "SINK BOATS 2 AND 4")};
         carrierStart(m);
         recoverOverCarrier(m);
     }
     {
-        auto& m = add(55, "Coastal Radar", "Blind the coast: radar, SAM and gun pits.");
-        m.briefing = "A coastal radar is tracking the fleet and cueing a SAM. Take out the radar and the launcher; the gun pits are optional.";
-        m.debrief = "The coast is blind. The fleet can move in.";
+        auto& m = add(55, "Coastal Radar", "Blind the coast: radar, two SAMs, then their interceptors.");
+        m.briefing = "A coastal radar is cueing two SAM sites against the fleet, with gun pits around them. Take out the radar and both launchers. Once the coast is blind, they'll scramble interceptors.";
+        m.debrief = "The coast is blind and their interceptors are down. The fleet can move in.";
         m.targets.push_back(tgt(K::Radar, 3087, -8150, "COASTAL RADAR", 1));
-        m.targets.push_back(tgt(K::SAM, 2587, -8650, "SAM", 1));
+        m.targets.push_back(tgt(K::SAM, 2587, -8650, "SAM 1", 1));
+        m.targets.push_back(tgt(K::SAM, 1800, -8400, "SAM 2", 1));
         line(m.targets, K::Gun, "GUN", 2, 3087, -7550, 300, 0.0, 0);
-        m.objectives = {destroy(1, "DESTROY RADAR AND SAM", "Lock from range with ATS (2). Flares (X) on the missile warning.")};
+        m.targets.push_back(tgt(K::Gun, 3300, -9100, "GUN 3", 0));
+        m.waves = {wave(2, AiSkill::Veteran, 6000, -12500, 2000)};
+        m.objectives = {destroy(1, "DESTROY RADAR AND SAM 1-2", "Lock from range with ATS (2). Flares (X) on the missile warning, then turn across the missile."),
+                        air("SPLASH THE INTERCEPTORS", {0})};
         carrierStart(m);
         recoverOverCarrier(m);
     }
     {
-        auto& m = add(56, "Harbour Strike", "Boats in the bay and fuel on the quay, from the sea.");
-        m.briefing = "The enemy harbour on the south-east coast is refuelling their navy. Sink the boats in the bay, then burn the fuel tanks.";
+        auto& m = add(56, "Harbour Strike", "Boats in the bay, a fighter response, then fuel on the quay.");
+        m.briefing = "The enemy harbour on the south-east coast is refuelling their navy. Sink the boats in the bay; that will bring their fighters out. Then burn the fuel tanks under the SAM umbrella.";
         m.debrief = "Harbour closed. Nothing is sailing out of there tonight.";
         for (int i = 0; i < 4; ++i) {
             TargetDef b = tgt(K::Ship, 10200, 9800, "BOAT " + std::to_string(i + 1), 1);
@@ -708,69 +732,109 @@ std::vector<CampaignMissionDef> buildAll() {
         }
         ring(m.targets, K::FuelTank, "FUEL TANK", 4, 5850, 9760, 60, 2);
         m.targets.push_back(tgt(K::Gun, 6150, 9460, "GUN 1", 0));
-        m.objectives = {destroy(1, "SINK 4 BOATS"), destroy(2, "DESTROY 4 FUEL TANKS")};
+        m.targets.push_back(tgt(K::SAM, 5500, 9500, "SAM", 0));
+        m.waves = {wave(2, AiSkill::Veteran, 12500, 13000, 2000)};
+        m.objectives = {destroy(1, "SINK 4 BOATS"), air("SPLASH THE HARBOUR FIGHTERS", {0}), destroy(2, "DESTROY 4 FUEL TANKS")};
         carrierStart(m);
         recoverOverCarrier(m);
     }
     {
-        auto& m = add(57, "Fleet Defence", "Two raids are coming for the carrier. Stop both.");
+        auto& m = add(57, "Fleet Defence", "Two coordinated raids are coming for the carrier.");
         m.allies = 1;
-        m.briefing = "Two enemy raids are inbound on the carrier, one behind the other. You and your wingman are the only fighters up. Stop both raids.";
-        m.debrief = "Both raids turned back. The carrier is untouched, thanks to you.";
-        m.waves = {wave(3, AiSkill::Rookie, 6000, -6000, 1800, 1400), wave(3, AiSkill::Veteran, 5000, 8000, 2200, 1400)};
-        m.objectives = {air("STOP THE FIRST RAID", {0}), air("STOP THE SECOND RAID", {1})};
+        m.briefing = "Two enemy raids are inbound on the carrier. The first from the north-west; the second, an ace and his wingman, will come from the south. You and your wingman are the only fighters up. Stop both raids.";
+        m.debrief = "Both raids turned back and their ace is down. The carrier is untouched, thanks to you.";
+        WaveDef ace = wave(1, AiSkill::Ace, 4000, 9500, 2600, 300);
+        ace.callsign = "RAIDER LEAD";
+        m.waves = {wave(2, AiSkill::Veteran, 6000, -6000, 1800, 1400), wave(1, AiSkill::Rookie, 7000, -7000, 1500, 600),
+                   wave(1, AiSkill::Veteran, 6500, 8500, 2200, 600), ace};
+        m.objectives = {air("STOP THE FIRST RAID", {0, 1}), air("STOP THE SECOND RAID", {2, 3})};
         carrierStart(m);
         recoverOverCarrier(m);
     }
     {
-        auto& m = add(58, "Offshore Platforms", "Two enemy rigs and their patrol boat.");
-        m.briefing = "Two enemy platforms north of the fleet are fuelling their navy. Destroy both rigs; the patrol boat will shoot at you.";
+        auto& m = add(58, "Offshore Platforms", "Two enemy rigs, armed boats and a fighter patrol.");
+        m.briefing = "Two enemy platforms north of the fleet are fuelling their navy. Two armed patrol boats guard them, and a fighter patrol will come for you after the first rig. Destroy both rigs.";
         m.debrief = "Both platforms are burning. Their fuel supply is cut.";
         m.targets.push_back(tgt(K::OilRig, 11500, -6000, "OIL RIG A", 1));
-        m.targets.push_back(tgt(K::OilRig, 12500, -3200, "OIL RIG B", 1));
-        TargetDef boat = tgt(K::Ship, 11800, -4600, "PATROL BOAT", 0);
+        m.targets.push_back(tgt(K::OilRig, 12500, -3200, "OIL RIG B", 2));
+        TargetDef boat = tgt(K::Ship, 11800, -4600, "PATROL BOAT 1", 0);
         boat.pathRadius = 500; m.targets.push_back(boat);
-        m.objectives = {destroy(1, "DESTROY OIL RIG A AND B", "Rigs take two ATS hits each.")};
+        TargetDef boat2 = tgt(K::Ship, 12600, -7600, "PATROL BOAT 2", 0);
+        boat2.pathRadius = 400; boat2.pathAngle = 2.0; m.targets.push_back(boat2);
+        m.waves = {wave(2, AiSkill::Veteran, 6000, 1500, 1800)};
+        m.objectives = {destroy(1, "DESTROY OIL RIG A", "Rigs take two ATS hits each."), air("SPLASH THE RIG PATROL", {0}),
+                        destroy(2, "DESTROY OIL RIG B")};
         carrierStart(m);
         recoverOverCarrier(m);
     }
     {
-        auto& m = add(59, "Beachhead", "Clear the artillery off the coast for the landing force.");
-        m.briefing = "Our marines are going ashore in an hour. Artillery is dug in behind the coast and a refinery feeds their trucks. Clear the guns first.";
+        auto& m = add(59, "Beachhead", "Artillery under a SAM, fighters, then the refinery.");
+        m.briefing = "Our marines go ashore in an hour. Artillery is dug in behind the coast under guns and a SAM, and a refinery feeds their trucks. Clear the guns, beat the fighters they send, then burn the refinery.";
         m.debrief = "The beach is clear. The landing force is on its way in.";
         line(m.targets, K::Artillery, "ARTILLERY", 4, 5586, -9246, 140, 0.0, 1);
         m.targets.push_back(tgt(K::Refinery, 5586, -9696, "REFINERY", 2));
-        m.objectives = {destroy(1, "DESTROY 4 ARTILLERY PIECES"), destroy(2, "DESTROY THE REFINERY")};
+        m.targets.push_back(tgt(K::Gun, 5300, -9000, "GUN 1", 0));
+        m.targets.push_back(tgt(K::Gun, 5900, -9000, "GUN 2", 0));
+        m.targets.push_back(tgt(K::SAM, 5200, -9600, "SAM", 0));
+        m.waves = {wave(2, AiSkill::Veteran, 2000, -12500, 2000)};
+        m.objectives = {destroy(1, "DESTROY 4 ARTILLERY PIECES"), air("SPLASH THE COUNTER-AIR", {0}), destroy(2, "DESTROY THE REFINERY")};
         carrierStart(m);
         recoverOverCarrier(m);
     }
     {
-        auto& m = add(60, "Bridge Breaker", "Drop the viaduct their reinforcements must cross.");
-        m.briefing = "Their reinforcements have one way to the coast: the railway viaduct inland. Drop it, then get back to the boat.";
-        m.debrief = "The viaduct is in the river. The coast is cut off.";
+        auto& m = add(60, "Bridge Breaker", "Drop the defended viaduct, then outrun the pursuit.");
+        m.briefing = "Their reinforcements have one way to the coast: the railway viaduct inland, under guns and a fighter patrol. Drop it. Then their ace and his wingman will chase you home: deal with them before you land.";
+        m.debrief = "The viaduct is in the river and their ace with it. The coast is cut off.";
         TargetDef br = tgt(K::Bridge, 0, 0, "RAIL VIADUCT", 1);
         br.anchor = TargetDef::Anchor::Bridge; m.targets.push_back(br);
-        m.objectives = {destroy(1, "DESTROY THE RAIL VIADUCT", "Bridges take several hits: ATS from range, then the cannon.")};
+        m.targets.push_back(tgt(K::Gun, 6500, 2600, "GUN 1", 0));
+        m.targets.push_back(tgt(K::Gun, 6600, 1900, "GUN 2", 0));
+        m.targets.push_back(tgt(K::AAA, 7200, 2600, "AAA", 0));
+        WaveDef shrike = wave(1, AiSkill::Ace, 1500, -2000, 2400, 300);
+        shrike.callsign = "SHRIKE LEAD";
+        m.waves = {wave(2, AiSkill::Veteran, -1500, 4500, 2000), shrike, wave(1, AiSkill::Veteran, 2500, -3000, 2200, 300)};
+        m.objectives = {destroy(1, "DESTROY THE RAIL VIADUCT", "Bridges take several hits: ATS from range, then the cannon."),
+                        air("SPLASH THE PURSUIT", {1, 2}, "Their ace and his wingman are on your tail. They fly as a pair and fire from range: turn across their missiles, then fight.")};
+        m.objectives[0].wavesOnStart = {0};
+        m.objectives[1].instruction += " Their patrol is still up: it counts too.";
         carrierStart(m);
         recoverOverCarrier(m);
     }
     {
-        auto& m = add(61, "Typhoon", "Air defences, the command post and the last fighters, in the storm.");
-        m.allies = 1;
-        m.briefing = "Final strike from the boat, Captain. Their coastal SAM belt, then the command post, then whatever fighters they launch. Then bring it home to the carrier.";
-        m.debrief = "Command post destroyed and the sky is ours. Welcome back aboard, Captain. Outstanding.";
+        auto& m = add(61, "Typhoon", "The final battle: the SAM belt, two counterattacks, the command post and Typhoon flight.");
+        m.allies = 2;
+        m.briefing = "Final strike from the boat, Captain. Break their coastal SAM belt, beat the counterattacks and destroy the command post. Then their two best pilots, Typhoon flight, will come for you. Your two wingmen are with you. End it, and bring it home to the carrier.";
+        m.debrief = "Typhoon flight is down, the command post is gone and the sky is ours. Welcome back aboard, Captain. Outstanding.";
         m.targets.push_back(tgt(K::Radar, 3087, -8150, "RADAR", 1));
         m.targets.push_back(tgt(K::SAM, 2587, -8650, "SAM 1", 1));
         m.targets.push_back(tgt(K::SAM, 3687, -8550, "SAM 2", 1));
+        m.targets.push_back(tgt(K::SAM, 1800, -8400, "SAM 3", 1));
+        m.targets.push_back(tgt(K::Gun, 2800, -7800, "GUN 1", 0));
+        m.targets.push_back(tgt(K::Gun, 3600, -7800, "GUN 2", 0));
+        m.targets.push_back(tgt(K::Gun, 3300, -9100, "GUN 3", 0));
         m.targets.push_back(tgt(K::Command, 1050, -1913, "COMMAND POST", 2));
         ring(m.targets, K::Bunker, "BUNKER", 3, 1050, -1913, 170, 2, true, 0.3);
-        m.waves = {wave(3, AiSkill::Veteran, 3000, 0, 2400)};
-        m.objectives = {destroy(1, "DESTROY RADAR AND SAM 1-2"), destroy(2, "DESTROY COMMAND POST AND BUNKERS"),
-                        air("DESTROY THE LAST FIGHTERS", {0})};
+        ring(m.targets, K::Gun, "FLAK", 3, 1050, -1913, 450, 0, true, 1.0);
+        m.targets.push_back(tgt(K::SAM, 600, -2300, "SAM 4", 0));
+        WaveDef lead = wave(1, AiSkill::Ace, 4000, 1500, 2900, 300);
+        lead.callsign = "TYPHOON LEAD";
+        WaveDef two = wave(1, AiSkill::Ace, 5000, 2500, 2700, 300);
+        two.callsign = "TYPHOON 2";
+        m.waves = {wave(2, AiSkill::Veteran, 6000, -12500, 2000),
+                   wave(2, AiSkill::Veteran, 9500, -2000, 1800), wave(1, AiSkill::Veteran, -7000, -6000, 2200, 300),
+                   lead, two};
+        m.objectives = {destroy(1, "DESTROY RADAR AND SAM 1-3", "Three SAMs cover each other: attack from range and turn across every missile."),
+                        air("BREAK THE FIRST COUNTERATTACK", {0}, "A pair is coming off the coast. Splash them before you go inland."),
+                        destroy(2, "DESTROY COMMAND POST AND BUNKERS", "Flak and a SAM ring the command post. Get in, hit it, get out."),
+                        air("BREAK THE SECOND COUNTERATTACK", {1, 2}, "Three fighters from two directions. Take them one at a time."),
+                        air("DEFEAT TYPHOON FLIGHT", {3, 4}, "Their best two pilots. They fight as a pair and never fly straight: stay fast, use your wingman.")};
         carrierStart(m);
         recoverOverCarrier(m);
     }
     for (auto& m : v) if (m.atsReload <= 0) m.atsReload = 10.0;
+    // difficulty: 1-46 classic, 47-51 tactical, 52-60 squadron tactics, 61 the final battle
+    for (auto& m : v)
+        if (m.tactics < 0) m.tactics = m.number >= 61 ? 3 : (m.number >= 52 ? 2 : (m.number >= 47 ? 1 : 0));
     return v;
 }
 
@@ -982,7 +1046,7 @@ Mission buildCampaignMission(const CampaignMissionDef& def) {
     return m;
 }
 
-void CampaignDirector::begin(const CampaignMissionDef& def, Battle& battle) {
+void CampaignDirector::begin(const CampaignMissionDef& def, Battle& battle, unsigned seedSalt) {
     def_ = &def;
     lastStep_ = static_cast<size_t>(-1);
     BattleConfig cfg;
@@ -990,8 +1054,9 @@ void CampaignDirector::begin(const CampaignMissionDef& def, Battle& battle) {
     cfg.allyJets = def.allies;
     cfg.groundTargets = false;
     cfg.endlessWaves = false;
-    cfg.seed = 1000u + static_cast<unsigned>(def.number);
+    cfg.seed = 1000u + static_cast<unsigned>(def.number) + seedSalt * 7919u;
     cfg.agReloadSeconds = def.atsReload;
+    cfg.tactics = std::max(0, def.tactics);
     battle.start(cfg);
     const WorldLayout* L = battle.layout();
     if (def.tanker) battle.startTanker({def.tankerX, def.tankerAlt, def.tankerZ}, def.tankerRadius, def.tankerSpeed, 3.4);
@@ -1038,7 +1103,7 @@ void CampaignDirector::spawnFor(size_t objective, Battle& battle) {
     for (int wi : def_->objectives[objective].wavesOnStart) {
         if (wi < 0 || wi >= static_cast<int>(def_->waves.size())) continue;
         const WaveDef& w = def_->waves[wi];
-        battle.spawnEnemies(w.count, w.skill, {w.x, 0, w.z}, w.radius, w.altitude, w.unarmed);
+        battle.spawnEnemies(w.count, w.skill, {w.x, 0, w.z}, w.radius, w.altitude, w.unarmed, w.callsign);
     }
 }
 

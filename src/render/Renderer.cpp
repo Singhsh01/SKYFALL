@@ -924,7 +924,6 @@ void Renderer::drawStatics(const FrameParams& f) {
     drawDressing(f);
     lit_.setF("uSpecular", 0.0f);
     Vector3 cp = f.cam.position;
-    Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
     float treeDist = f.quality == GraphicsQuality::Low ? 3000.0f : (f.quality == GraphicsQuality::Medium ? 6000.0f : 9000.0f);
     for (auto& c : world_.chunks) {
         if (!c.hasTrees) continue;
@@ -1383,7 +1382,8 @@ void Renderer::drawCloudPuffs(const FrameParams& f) {
     Vector3 hr = Vector3Normalize({right.x, 0.0f, right.z});
     if (Vector3Length(hr) < 0.1f) hr = right;
     Vector3 vu = {0, 1, 0};
-    int curTex = -1;
+    rlSetTexture(world_.cloudAtlas.id);
+    rlBegin(RL_QUADS);
     for (auto& [d2, p] : vis) {
         float dist = sqrtf(d2);
         Vector3 viewDir = Vector3Scale(Vector3Subtract(p->pos, cp), 1.0f / std::max(dist, 1.0f));
@@ -1394,24 +1394,21 @@ void Renderer::drawCloudPuffs(const FrameParams& f) {
         float near = std::clamp((dist - p->size * 0.35f) / (p->size * 0.8f), 0.0f, 1.0f);
         float a = 0.97f * near;
         if (a <= 0.01f) continue;
-        if (p->tex != curTex) {
-            if (curTex >= 0) { rlEnd(); rlDrawRenderBatchActive(); }
-            curTex = p->tex;
-            rlSetTexture(world_.cloud[curTex].id);
-            rlBegin(RL_QUADS);
-        }
+        // atlas cell of this sprite (a 2 px inset keeps mip levels from bleeding)
+        const float u0 = (p->tex % 2) * 0.5f + 0.004f, u1 = u0 + 0.492f;
+        const float v0 = (p->tex / 2) * 0.5f + 0.004f, v1 = v0 + 0.492f;
         float h = p->size * 0.5f;
         Vector3 r = Vector3Scale(hr, h), u = Vector3Scale(vu, h * 0.75f);
         Color cc = hdrColor(col, scale, a);
         Vector3 q0 = Vector3Subtract(Vector3Subtract(p->pos, r), u), q1 = Vector3Subtract(Vector3Add(p->pos, r), u);
         Vector3 q2 = Vector3Add(Vector3Add(p->pos, r), u), q3 = Vector3Add(Vector3Subtract(p->pos, r), u);
         rlColor4ub(cc.r, cc.g, cc.b, cc.a);
-        rlTexCoord2f(0, 1); rlVertex3f(q0.x, q0.y, q0.z);
-        rlTexCoord2f(1, 1); rlVertex3f(q1.x, q1.y, q1.z);
-        rlTexCoord2f(1, 0); rlVertex3f(q2.x, q2.y, q2.z);
-        rlTexCoord2f(0, 0); rlVertex3f(q3.x, q3.y, q3.z);
+        rlTexCoord2f(u0, v1); rlVertex3f(q0.x, q0.y, q0.z);
+        rlTexCoord2f(u1, v1); rlVertex3f(q1.x, q1.y, q1.z);
+        rlTexCoord2f(u1, v0); rlVertex3f(q2.x, q2.y, q2.z);
+        rlTexCoord2f(u0, v0); rlVertex3f(q3.x, q3.y, q3.z);
     }
-    if (curTex >= 0) rlEnd();
+    rlEnd();
     rlSetTexture(0);
     rlDrawRenderBatchActive();
     EndBlendMode();
