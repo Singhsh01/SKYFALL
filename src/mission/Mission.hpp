@@ -70,9 +70,13 @@ private:
 /// Mission 01 — Cold Start & Takeoff.
 Mission makeMission01();
 /// Mission 02 — First Solo Flight (attitude, turns, climb, level-off, power).
-Mission makeMission02();
+Mission makeMission02(double heightOffset = 0.0);   // heights raised on a high airfield
 /// Mission 03 — Runway Landing (gear, 3-degree glide path, touchdown, stop).
-Mission makeMission03();
+/// Mission 3's landing: dir +1 = runway 09 (from the west), -1 = runway 27; dist = start distance.
+struct Mission03Approach { int dir = 1; double dist = 4800.0; };
+Mission03Approach mission03Approach(const Terrain& t);
+Vec3 landingThreshold(const RunwayInfo& rw, int dir);
+Mission makeMission03(int dir = 1);
 /// Ideal 3-degree glide-path height above the runway for a horizontal distance to the threshold.
 double glidePathHeight(double distanceToThreshold);
 

@@ -1,5 +1,4 @@
 #include "Voice.hpp"
-#include "Operations.hpp"
 #include "Training.hpp"
 
 #include "../sim/Locations.hpp"
@@ -67,7 +66,7 @@ std::string spokenCaps(const std::string& caps) {
     return out;
 }
 
-Briefing makeBriefing(int missionNo) {
+Briefing makeBriefing(int missionNo, const CampaignVariant* v) {
     Briefing b;
     std::string story, tip;
     if (missionNo == 0) {
@@ -81,12 +80,19 @@ Briefing makeBriefing(int missionNo) {
         std::snprintf(h, sizeof h, "MISSION %02d", missionNo);
         b.header = h;
         b.title = campaignCatalogue()[missionNo - 1].title;
-        const CampaignMissionDef* def = missionNo >= 4 ? campaignMission(missionNo) : nullptr;
+        const CampaignMissionDef* orig = missionNo >= 4 ? campaignMission(missionNo) : nullptr;
+        CampaignMissionDef variant;
+        if (orig && v) variant = retitleCampaignMission(*orig, *v);
+        const CampaignMissionDef* def = orig && v ? &variant : orig;
+        const double off = v ? v->climbOffset : 0.0;
         if (def) story = def->briefing;
         else if (missionNo == 1) story = "Today is your cold start and takeoff from runway zero nine. Start the engine, release the brakes, and climb out to three hundred metres heading east.";
-        else if (missionNo == 2) story = "Your first solo flight. Show me clean banks, a turn onto heading two seven zero, a climb to two thousand metres and a steady level-off.";
+        else if (missionNo == 2)
+            story = off > 0 ? "Your first solo flight. Show me clean banks, a turn onto heading two seven zero, a climb of seven hundred and fifty metres and a steady level-off."
+                            : "Your first solo flight. Show me clean banks, a turn onto heading two seven zero, a climb to two thousand metres and a steady level-off.";
+        else if (v && v->runway27) story = "You're on final for runway two seven. Gear down, fly the three degree glide path, touch down and bring it to a stop.";
         else story = "You're five kilometres out on final for runway zero nine. Gear down, fly the three degree glide path, touch down and bring it to a stop.";
-        Mission m = def ? buildCampaignMission(*def) : missionNo == 1 ? makeMission01() : missionNo == 2 ? makeMission02() : makeMission03();
+        Mission m = def ? buildCampaignMission(*def) : missionNo == 1 ? makeMission01() : missionNo == 2 ? makeMission02(off) : makeMission03(v && v->runway27 ? -1 : 1);
         for (const auto& st : m.steps()) b.objectives.push_back(st.title);
         if (def) {
             bool ground = false, airObj = false;
@@ -124,6 +130,7 @@ namespace lines {
 const char* const kTowerStartup = "Skyfall One, runway zero nine, wind calm. Start-up approved.";
 const char* const kInstructorStart = "Your aircraft. Let's see some clean flying, Skyfall One.";
 const char* const kTowerLanding = "Skyfall One, cleared to land runway zero nine, wind calm.";
+const char* const kTowerLanding27 = "Skyfall One, cleared to land runway two seven, wind calm.";
 const char* const kArenaStart = "Skyfall One, multiple bandits bearing zero nine zero. Weapons free.";
 const char* const kRespawn = "Skyfall One, you're back in the fight.";
 const char* const kTowerEngine = "Engine start confirmed. Release brakes when ready.";
@@ -154,26 +161,38 @@ std::vector<VoiceLine> allVoiceLines() {
         if (seen.insert(voiceKey(s, t)).second) v.push_back({s, t});
     };
     for (const auto& pt : makeBriefing(0).parts) add(Speaker::Captain, pt);
+    // every location variant of the campaign: with or without sea, carrier and railway, and the
+    // raised heights of mission 2 on a high airfield
+    std::vector<CampaignVariant> variants;
+    for (int k = 0; k < 16; ++k) {
+        CampaignVariant cv;
+        cv.sea = k & 1; cv.carrier = (k & 2) != 0; cv.rail = (k & 4) != 0; cv.climbOffset = (k & 8) ? 100.0 : 0.0;
+        cv.runway27 = (k & 8) != 0;
+        if (cv.carrier && !cv.sea) continue;
+        variants.push_back(cv);
+    }
     for (int n = 1; n <= kCampaignMissions; ++n) {
-        for (const auto& pt : makeBriefing(n).parts) add(Speaker::Captain, pt);
-        const CampaignMissionDef* def = n >= 4 ? campaignMission(n) : nullptr;
-        if (def) add(Speaker::Awacs, def->debrief);
-        Mission m = def ? buildCampaignMission(*def) : n == 1 ? makeMission01() : n == 2 ? makeMission02() : makeMission03();
-        if (def)
+        for (const CampaignVariant& cv : variants) {
+            for (const auto& pt : makeBriefing(n, &cv).parts) add(Speaker::Captain, pt);
+            const CampaignMissionDef* orig = n >= 4 ? campaignMission(n) : nullptr;
+            if (!orig) continue;
+            CampaignMissionDef def = retitleCampaignMission(*orig, cv);
+            add(Speaker::Awacs, def.debrief);
+            Mission m = buildCampaignMission(def);
             for (size_t i = 1; i < m.steps().size(); ++i)
-                if (!(def->carrier && m.steps()[i].title == "GEAR UP")) add(Speaker::Awacs, nextObjectiveLine(m.steps()[i].title));
+                if (!(def.carrier && m.steps()[i].title == "GEAR UP")) add(Speaker::Awacs, nextObjectiveLine(m.steps()[i].title));
+        }
     }
     using namespace lines;
-    for (const char* t : {kTowerStartup, kTowerLanding, kTowerEngine, kTowerTakeoff, kTowerClimb, kTowerDone1, kTowerDone3}) add(Speaker::Tower, t);
+    for (const char* t : {kTowerStartup, kTowerLanding, kTowerLanding27, kTowerEngine, kTowerTakeoff, kTowerClimb, kTowerDone1, kTowerDone3}) add(Speaker::Tower, t);
     for (const char* t : {kInstructorStart, kInstructorDone2}) add(Speaker::Instructor, t);
     for (const char* t : {kArenaStart, kRespawn, kSamLaunch, kLost}) add(Speaker::Awacs, t);
     for (const char* t : {kCarrierCat, kCarrierAirborne}) add(Speaker::Tower, t);
     add(Speaker::Wingman, kMissileSix);
     for (const char* t : kKills) add(Speaker::Wingman, t);
     for (const auto& l : locations()) add(Speaker::Tower, freeFlightLine(l.name));
-    // Training Academy instructor / tower / lead / tanker, and every location's Operations
+    // Training Academy instructor / tower / lead / tanker
     for (const VoiceLine& l : trainingVoiceLines()) add(l.who, l.text);
-    for (const VoiceLine& l : operationVoiceLines()) add(l.who, l.text);
     return v;
 }
 

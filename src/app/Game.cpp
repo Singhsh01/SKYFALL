@@ -5,6 +5,7 @@
 #include "../sim/Locations.hpp"
 #include "../mission/Progress.hpp"
 #include "../render/Skins.hpp"
+#include "../sim/TerrainAnalysis.hpp"
 
 #include "../render/Convert.hpp"
 #include "../ui/Font.hpp"
@@ -167,7 +168,7 @@ void Game::updateDynamicResolution(double dt) {
 
 void Game::beginBriefing(int missionNo) {
     briefT_ = 0;
-    Briefing br = makeBriefing(missionNo);
+    Briefing br = makeBriefing(missionNo, missionNo > 0 ? &campVariant_ : nullptr);
     briefHeader_ = br.header;
     briefTitle_ = br.title;
     briefObjectives_ = br.objectives;
@@ -576,9 +577,12 @@ void Game::startMission(int n) {
     terrain_.clearObstacles();
     gateMarkers_.clear();
     corridor_.clear();
-    if (n <= kCampaignMissions && terrain_.info().id != "desert") {
-        // the campaign is set in the Skyfall Desert: switch first (next frame), then start
-        switchTo_ = "desert";
+    const std::string loc = campaignLocation();
+    if (n <= kCampaignMissions && terrain_.info().id != loc) {
+        // the campaign is flown over the location chosen on the campaign screen: switch first
+        // (next frame), then start
+        if (!locationAvailable(loc)) { locStatus_ = "This location is not downloaded yet: get it in WORLD LOCATIONS."; return; }
+        switchTo_ = loc;
         switchMission_ = n;
         return;
     }
@@ -586,12 +590,12 @@ void Game::startMission(int n) {
     screen_ = Screen::Playing;
     mode_ = GameMode::Mission01;   // "guided mission" mode
     missionNo_ = n;
-    campaignDef_ = n >= 4 ? campaignMission(n) : nullptr;
-    if (n > 200) {
-        // a location operation: built from the terrain that is loaded now
-        opsLocation_ = terrain_.info().id;
-        opsDef_ = buildOperation(n - 200, terrain_, layout_);
-        campaignDef_ = &opsDef_;
+    campaignDef_ = nullptr;
+    campVariant_ = campaignVariantFor(terrain_, layout_);
+    if (n >= 4 && campaignMission(n)) {
+        // the mission laid out on the loaded location (the desert keeps the original)
+        campDef_ = adaptCampaignMission(*campaignMission(n), terrain_, layout_);
+        campaignDef_ = &campDef_;
     }
     director_ = CampaignDirector{};
     tod_ = n == 3 ? TimeOfDay::Noon : TimeOfDay::Morning;
@@ -599,7 +603,7 @@ void Game::startMission(int n) {
                            : campaignDef_->timeOfDay == 3 ? TimeOfDay::Storm : TimeOfDay::Morning;
     lighting_ = Lighting::preset(tod_);
     rain_ = campaignDef_ && campaignDef_->rain;
-    if (campaignDef_ && campaignDef_->carrier) terrain_.setDeck(campaignCarrierDeck());
+    if (campaignDef_ && campaignDef_->carrier) terrain_.setDeck(campaignDef_->deck);
     else terrain_.clearDeck();
     Jet& p = battle_.createPlayer(static_cast<AircraftId>(settings_.aircraft));
     battle_.setAiEnabled(true);
@@ -614,16 +618,18 @@ void Game::startMission(int n) {
         director_.begin(d, battle_);           // targets, allies (player must already be placed)
         director_.update(*mission_, battle_);  // waves owned by the first objective
     } else if (n == 2) {
-        p.fm->resetAirborne({rw.center.x + 2000.0, 1250.0, rw.center.z}, 0.0, 200.0, 0.62);
-        mission_ = makeMission02();
+        double off = campVariant_.climbOffset;
+        p.fm->resetAirborne({rw.center.x + 2000.0, 1250.0 + off, rw.center.z}, 0.0, 200.0, 0.62);
+        mission_ = makeMission02(off);
         camMode_ = CameraMode::Chase;
     } else if (n == 3) {
-        Vec3 th = rw.threshold();
-        double d = 4800.0;   // stays inside the 32 km map (threshold is 5.5 km from the west edge)
-        p.fm->resetAirborne({th.x - d, rw.center.y + glidePathHeight(d), th.z}, 0.0, 95.0, 0.45);
-        p.fm->mutableState().q = Quat::fromEuler(0.0, 2.0 * kDeg, 0.0);
-        p.fm->mutableState().vel = Quat::fromEuler(0.0, -3.0 * kDeg, 0.0).forward() * 95.0;
-        mission_ = makeMission03();
+        Mission03Approach ap = mission03Approach(terrain_);
+        Vec3 th = landingThreshold(rw, ap.dir);
+        double d = ap.dist, hdg = ap.dir > 0 ? 0.0 : kPi;
+        p.fm->resetAirborne({th.x - ap.dir * d, rw.center.y + glidePathHeight(d), th.z}, hdg, 95.0, 0.45);
+        p.fm->mutableState().q = Quat::fromEuler(hdg, 2.0 * kDeg, 0.0);
+        p.fm->mutableState().vel = Quat::fromEuler(hdg, -3.0 * kDeg, 0.0).forward() * 95.0;
+        mission_ = makeMission03(ap.dir);
         camMode_ = CameraMode::Cockpit;
     } else {
         p.fm->resetOnRunway(false);
@@ -647,12 +653,12 @@ void Game::startMission(int n) {
     killerName_.clear();
 
     applySettings();
-    // the operations briefing comes first over the radio (queueBriefing), then these calls
+    // the briefing comes first over the radio (queueBriefing), then these calls
     radioQueue_.clear();
     if (campaignDef_ && campaignDef_->carrier) queueRadio(Speaker::Tower, lines::kCarrierCat);
     else if (n == 1) queueRadio(Speaker::Tower, lines::kTowerStartup);
     else if (n == 2) queueRadio(Speaker::Instructor, lines::kInstructorStart);
-    else if (n == 3) queueRadio(Speaker::Tower, lines::kTowerLanding);
+    else if (n == 3) queueRadio(Speaker::Tower, campVariant_.runway27 ? lines::kTowerLanding27 : lines::kTowerLanding);
     audio_.play(Sfx::Radio);
 }
 
@@ -663,7 +669,7 @@ void Game::queueRadio(Speaker who, const std::string& text, bool front) {
 
 void Game::queueBriefing(int missionNo) {
     // the pilot is already in the cockpit; operations briefs over the radio, in short calls
-    Briefing br = missionNo > 200 ? operationBriefing(opsLocation_, missionNo - 200) : makeBriefing(missionNo);
+    Briefing br = makeBriefing(missionNo, missionNo > 0 ? &campVariant_ : nullptr);
     for (auto it = br.parts.rbegin(); it != br.parts.rend(); ++it) queueRadio(Speaker::Captain, *it, true);
     camMode_ = CameraMode::Cockpit;
     chaseInit_ = false;
@@ -795,7 +801,7 @@ void Game::frame(double dt, bool render) {
         bool toAcademy = academyAfterSwitch_;
         pendingTraining_ = 0;
         academyAfterSwitch_ = false;
-        if (mission > 0) { if (ok) startMissionBriefed(mission); else { startTitle(); screen_ = Screen::CampaignSelect; } }
+        if (mission > 0) { if (ok) startMissionBriefed(mission); else { startTitle(); screen_ = Screen::Campaign; } }
         else if (training > 0) { if (ok) startTraining(training); else openAcademy(); }
         else if (toAcademy) openAcademy();
         else if (ok) { startTitle(); screen_ = Screen::Locations; }
@@ -826,7 +832,7 @@ void Game::frame(double dt, bool render) {
         case Screen::Hangar: updateTitleScene(dt); break;
         case Screen::Briefing: updateBriefing(dt); break;
         case Screen::Locations: titleTime_ += dt; updateTitleScene(dt); break;
-        case Screen::Academy: case Screen::CampaignSelect: titleTime_ += dt; updateTitleScene(dt); break;
+        case Screen::Academy: titleTime_ += dt; updateTitleScene(dt); break;
         default: break;
     }
     updateCamera(dt);
@@ -865,7 +871,7 @@ void Game::updateTitleScene(double dt) {
     // fly the lead aircraft straight and level; wingmen hold echelon positions
     int n = stepper_.advance(dt);
     for (int i = 0; i < n; ++i) battle_.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
-    if ((screen_ == Screen::Title || screen_ == Screen::Locations || screen_ == Screen::Academy || screen_ == Screen::CampaignSelect) && battle_.jets().size() >= 3) {
+    if ((screen_ == Screen::Title || screen_ == Screen::Locations || screen_ == Screen::Academy) && battle_.jets().size() >= 3) {
         const FlightState& lead = battle_.player().fm->state();
         const Vec3 offs[2] = {{-28, -4, 24}, {-56, -8, 48}};
         for (int k = 0; k < 2; ++k) {
@@ -967,11 +973,6 @@ void Game::updatePlaying(double dt) {
         if (in.barrelRoll != 0 && rollDir_ == 0 && !fm.state().onGround) { rollDir_ = in.barrelRoll; rollDone_ = 0; }
     }
     if (mode_ == GameMode::Training && trainingDone_ && in.confirm) { openAcademy(); return; }
-    if (mode_ == GameMode::Mission01 && missionDone_ && in.confirm && isOperation()) {
-        if (missionNo_ - 200 < kOperationMissions) startMissionBriefed(missionNo_ + 1);
-        else { startTitle(); screen_ = Screen::CampaignSelect; opsLoc_ = opsLocation_; nav_.focus = 0; }
-        return;
-    }
     if (mode_ == GameMode::Mission01 && missionDone_ && in.confirm) {
         if (missionNo_ < kCampaignMissions) {
             startMissionBriefed(missionNo_ + 1);
@@ -1006,8 +1007,7 @@ void Game::updatePlaying(double dt) {
         }
         if (mission_->status() == MissionStatus::Complete && !missionDone_) {
             missionDone_ = true;
-            if (isOperation()) markOperationCompleted(settings_, opsLocation_, missionNo_ - 200);
-            else settings_.markCompleted(missionNo_);
+            markCampaignCompletedAt(settings_, terrain_.info().id, missionNo_);
             settings_.save(settingsPath_);
             if (campaignDef_) radio(Speaker::Awacs, campaignDef_->debrief, 9);
             else if (missionNo_ == 1) radio(Speaker::Tower, lines::kTowerDone1, 9);
@@ -1397,16 +1397,7 @@ void Game::renderFrame() {
         hc.deathReason = deathReason_;
         hc.respawnTimer = respawnTimer_;
         hc.missionDone = missionDone_;
-        if (isOperation()) {
-            int k = missionNo_ - 200;
-            if (k < kOperationMissions) {
-                std::string t = operationTemplates()[k].title;
-                for (char& ch : t) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-                hc.missionNext = "PRESS ENTER FOR OPERATION " + std::to_string(k + 1) + ": " + t;
-            } else {
-                hc.missionNext = "OPERATIONS COMPLETE  -  PRESS ENTER";
-            }
-        } else if (missionNo_ < kCampaignMissions) {
+        if (missionNo_ < kCampaignMissions) {
             const auto& cat = campaignCatalogue();
             std::string nextTitle = cat[missionNo_].title;
             for (char& ch : nextTitle) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
@@ -1417,6 +1408,7 @@ void Game::renderFrame() {
             hc.missionNext = "CAMPAIGN COMPLETE  -  PRESS ENTER";
         }
         hc.runway = terrain_.runway();
+        hc.approachDir = campVariant_.runway27 ? -1 : 1;
         hc.deck = terrain_.deck();
         hc.campaign = campaignDef_;
         hc.showGlidePath = (mission_ && mission_->id() == "M03") ||
@@ -1479,7 +1471,6 @@ void Game::drawMenus() {
         case Screen::Briefing: drawBriefing(); break;
         case Screen::Locations: drawLocations(); break;
         case Screen::Academy: drawAcademy(); break;
-        case Screen::CampaignSelect: drawCampaignSelect(); break;
         default: break;
     }
 }
@@ -1493,7 +1484,7 @@ void Game::drawTitle() {
     ui::logo(70 * s, 70 * s, s, titleTime_);
     nav_.begin(7, in.up, in.down, in.confirm, in.left, in.right);
     float x = 70 * s, y = 222 * s, bw = 430 * s, bh = 48 * s, gap = 8 * s;
-    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "The original 61 missions, or Operations on any world location")) { audio_.play(Sfx::Click); screen_ = Screen::CampaignSelect; opsLoc_.clear(); nav_.focus = 0; return; }
+    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "61 missions over any world location, your aircraft and paint")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; locStatus_.clear(); nav_.focus = 0; return; }
     y += bh + gap;
     if (ui::button(nav_, 1, {x, y, bw, bh}, "TRAINING ACADEMY", "10 graded courses with an instructor: medals and scores")) { audio_.play(Sfx::Click); openAcademy(); return; }
     y += bh + gap;
@@ -1501,7 +1492,7 @@ void Game::drawTitle() {
     y += bh + gap;
     if (ui::button(nav_, 3, {x, y, bw, bh}, "WORLD LOCATIONS", "Real terrain: Himalaya, Alps, Sahara, Andes, Rio...")) { audio_.play(Sfx::Click); screen_ = Screen::Locations; locStatus_.clear(); nav_.focus = 0; return; }
     y += bh + gap;
-    if (ui::button(nav_, 4, {x, y, bw, bh}, "HANGAR", "8 aircraft, 8 camouflage schemes")) { audio_.play(Sfx::Click); hangarSel_ = settings_.aircraft; startHangar(); nav_.focus = hangarSel_; return; }
+    if (ui::button(nav_, 4, {x, y, bw, bh}, "HANGAR", "8 aircraft, 16 paint schemes")) { audio_.play(Sfx::Click); hangarSel_ = settings_.aircraft; startHangar(); nav_.focus = hangarSel_; return; }
     y += bh + gap;
     if (ui::button(nav_, 5, {x, y, bw, bh}, "SETTINGS", "Audio, graphics, controls")) { audio_.play(Sfx::Click); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 0; return; }
     y += bh + gap;
@@ -1509,6 +1500,21 @@ void Game::drawTitle() {
     ui::text("v0.7  -  C++20 / raylib  -  fictional simulation, illustrative aircraft data", 70 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Left, false);
     ui::text("ENTER select   ARROWS navigate", w - 30 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Right, false);
 }
+
+namespace {
+std::string upperStr(std::string v) {
+    for (char& c : v) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return v;
+}
+}  // namespace
+
+std::string Game::campaignLocation() const {
+    auto it = settings_.extra.find("campaign_location");
+    if (it == settings_.extra.end() || !findLocation(it->second)) return "desert";
+    return it->second;
+}
+
+void Game::setCampaignLocation(const std::string& id) { settings_.extra["campaign_location"] = id; }
 
 void Game::drawCampaign() {
     const InputState& in = input_.state();
@@ -1518,12 +1524,16 @@ void Game::drawCampaign() {
     ui::title("CAMPAIGN", 50 * s, 26 * s, 34 * s);
     const auto& cat = campaignCatalogue();
     const int n = static_cast<int>(cat.size());
-    int done = 0;
-    for (int i = 1; i <= n; ++i) if (settings_.missionCompleted(i)) ++done;
-    char prog[64];
-    std::snprintf(prog, sizeof prog, "%d / %d COMPLETE", done, n);
+    const std::string loc = campaignLocation();
+    const LocationDef* locDef = findLocation(loc);
+    const std::string locName = locDef ? locDef->name : "Skyfall Desert";
+    int done = campaignCountAt(settings_, loc);
+    char prog[96];
+    std::snprintf(prog, sizeof prog, "%d / %d COMPLETE OVER %s", done, n, upperStr(locName).c_str());
     ui::text(prog, w - 50 * s, 40 * s, 15 * s, Color{150, 255, 205, 230}, Align::Right);
-    nav_.begin(n + 1, in.up, in.down, in.confirm, in.left, in.right);
+    // missions 0..n-1, then location, aircraft, paint, back
+    const int kLoc = n, kAc = n + 1, kSkin = n + 2, kBack = n + 3;
+    nav_.begin(n + 4, in.up, in.down, in.confirm, in.left, in.right);
     // six chapters: 1-10, 11-20, 21-30, 31-40, 41-51, 52-61 (carrier)
     static const int starts[] = {0, 10, 20, 30, 40, 51, 61};
     const int nc = 6;
@@ -1552,11 +1562,50 @@ void Game::drawCampaign() {
         }
         if (ui::button(nav_, i, r, label, "", true)) {
             audio_.play(Sfx::Click);
+            locStatus_.clear();
             startMissionBriefed(m.number);
             return;
         }
-        if (settings_.missionCompleted(m.number))
+        if (campaignCompletedAt(settings_, loc, m.number))
             ui::text("+", r.x + r.width - 10 * s, r.y + r.height / 2 - 9 * s, 18 * s, Color{120, 240, 160, 255}, Align::Right);
+    }
+    // ---- where, in what, and how it is painted ----
+    const float selY = h - 172 * s, selH = 46 * s;
+    const float selW = (w - 100 * s - 16 * s) / 3.0f;
+    {
+        const auto& L = locations();
+        int li = 0;
+        for (int i = 0; i < static_cast<int>(L.size()); ++i) if (L[i].id == loc) li = i;
+        bool avail = locationAvailable(loc);
+        int d = ui::selector(nav_, kLoc, {50 * s, selY, selW, selH}, "LOCATION", upperStr(locName), avail ? "" : "NOT DOWNLOADED");
+        if (d != 0) {
+            li = (li + d + static_cast<int>(L.size())) % static_cast<int>(L.size());
+            setCampaignLocation(L[li].id);
+            settings_.save(settingsPath_);
+            locStatus_.clear();
+            audio_.play(Sfx::Click, 0.5f);
+        }
+    }
+    {
+        const auto& all = allProfiles();
+        int ac = settings_.aircraft;
+        int d = ui::selector(nav_, kAc, {50 * s + selW + 8 * s, selY, selW, selH}, "AIRCRAFT", all[ac].name);
+        if (d != 0) {
+            settings_.aircraft = (ac + d + 8) % 8;
+            settings_.save(settingsPath_);
+            audio_.play(Sfx::Click, 0.5f);
+        }
+    }
+    {
+        int ac = settings_.aircraft;
+        int sk = settings_.skinFor(ac);
+        int d = ui::selector(nav_, kSkin, {50 * s + 2 * (selW + 8 * s), selY, selW, selH}, "PAINT", skin(sk).name,
+                                 std::to_string(sk + 1) + " / " + std::to_string(kSkinCount));
+        if (d != 0) {
+            settings_.setSkin(ac, (sk + d + kSkinCount) % kSkinCount);
+            settings_.save(settingsPath_);
+            audio_.play(Sfx::Click, 0.5f);
+        }
     }
     // briefing for the focused mission
     if (nav_.focus < n) {
@@ -1567,11 +1616,16 @@ void Game::drawCampaign() {
         std::snprintf(head, sizeof head, "MISSION %02d", m.number);
         ui::text(head, b.x + 14 * s, b.y + 9 * s, 12 * s, Color{255, 176, 60, 230});
         ui::text(m.summary, b.x + 14 * s, b.y + 29 * s, 17 * s, WHITE, Align::Left, false);
+    } else {
+        Rectangle b = {50 * s, h - 118 * s, w - 100 * s - 230 * s, 64 * s};
+        ui::panel(b, Color{0, 0, 0, 150}, Color{255, 255, 255, 40});
+        std::string txt = locStatus_.empty() ? std::string("The 61 missions are laid out on the terrain of the chosen location. Progress is kept per location.") : locStatus_;
+        ui::text(locDef ? upperStr(locDef->region) : "PROCEDURAL", b.x + 14 * s, b.y + 9 * s, 12 * s, Color{255, 176, 60, 230});
+        ui::text(txt, b.x + 14 * s, b.y + 29 * s, 15 * s, locStatus_.empty() ? WHITE : Color{255, 170, 120, 240}, Align::Left, false);
     }
-    if (ui::button(nav_, n, {w - 50 * s - 210 * s, h - 118 * s, 210 * s, 64 * s}, "BACK") || in.back) {
+    if (ui::button(nav_, kBack, {w - 50 * s - 210 * s, h - 118 * s, 210 * s, 64 * s}, "BACK") || in.back) {
         if (mode_ != GameMode::None) startTitle();
-        screen_ = Screen::CampaignSelect;
-        opsLoc_.clear();
+        screen_ = Screen::Title;
         nav_.focus = 0;
     }
 }
@@ -2037,7 +2091,7 @@ int Game::runCapture() {
     }
     if (set == "flow") {
         // end-to-end menu / mode flow through the real frame loop (no rendering): academy,
-        // crash and checkpoint retry, completion and progress, operations, location switches
+        // crash and checkpoint retry, completion and progress, the campaign over other locations
         int fails = 0;
         auto expect = [&](bool ok, const char* what) { std::printf("flow: %s %s\n", ok ? "PASS" : "FAIL", what); if (!ok) ++fails; std::fflush(stdout); };
         auto run = [&](int frames) { for (int i = 0; i < frames; ++i) frame(1.0 / 60.0, false); };
@@ -2068,14 +2122,14 @@ int Game::runCapture() {
         std::printf("flow: level 1 record medal %d best %.0f attempts %d\n", rec.medal, rec.best, rec.attempts);
         openAcademy();
         expect(screen_ == Screen::Academy && mode_ == GameMode::None, "back to the academy");
-        // an operation at the loaded location
-        startOperation("desert", 1);
-        run(30);
-        expect(mode_ == GameMode::Mission01 && campaignDef_ == &opsDef_ && missionNo_ == 201, "desert operation 1 starts");
-        expect(!opsDef_.objectives.empty(), "operation has objectives");
-        mission_->skipTo(opsDef_.objectives.size());
+        // the campaign in the desert: the original mission, completion saved
+        setCampaignLocation("desert");
+        startMission(5);
         run(10);
-        expect(missionDone_ && operationCompleted(settings_, "desert", 1), "operation completion is saved");
+        expect(terrain_.info().id == "desert" && missionNo_ == 5 && campaignDef_ == &campDef_ && campDef_.location == "desert", "desert mission 5 starts");
+        mission_->skipTo(campDef_.objectives.size());
+        run(10);
+        expect(missionDone_ && campaignCompletedAt(settings_, "desert", 5), "desert completion is saved");
         // a level at another location: the world is switched first
         if (locationAvailable("fuji")) {
             acLocation_ = "fuji";
@@ -2085,18 +2139,34 @@ int Game::runCapture() {
             run(120);
             expect(!playerDead_, "level 5 runs");
         }
+        // the campaign over another location: the world is switched first, progress kept apart
         if (locationAvailable("guilin")) {
-            markOperationCompleted(settings_, "guilin", 1);
-            markOperationCompleted(settings_, "guilin", 2);
-            startOperation("guilin", 3);
+            setCampaignLocation("guilin");
+            startMission(14);
             run(5);
-            expect(terrain_.info().id == "guilin" && missionNo_ == 203 && opsLocation_ == "guilin", "Guilin operation 3 (location switch)");
+            expect(terrain_.info().id == "guilin" && missionNo_ == 14 && campDef_.location == "guilin", "mission 14 over Guilin (location switch)");
             run(120);
+            expect(!playerDead_ && battle_.player().fm->state().pos.y > terrain_.surfaceHeight(battle_.player().fm->state().pos.x, battle_.player().fm->state().pos.z), "mission 14 runs");
+            mission_->skipTo(campDef_.objectives.size());
+            run(10);
+            expect(campaignCompletedAt(settings_, "guilin", 14) && !campaignCompletedAt(settings_, "desert", 14), "Guilin progress kept apart");
         }
-        // the original campaign still switches back to the desert
-        startMission(5);
-        run(5);
-        expect(terrain_.info().id == "desert" && missionNo_ == 5 && campaignDef_ == campaignMission(5), "original mission 5 back in the desert");
+        // a carrier mission over a map with sea and over one without
+        if (locationAvailable("musandam")) {
+            setCampaignLocation("musandam");
+            startMission(52);
+            run(5);
+            expect(terrain_.info().id == "musandam" && campDef_.carrier && terrain_.deck().active && battle_.player().fm->state().catArmed, "mission 52 from the carrier at Musandam");
+        }
+        if (locationAvailable("matterhorn")) {
+            setCampaignLocation("matterhorn");
+            startMission(52);
+            run(5);
+            expect(terrain_.info().id == "matterhorn" && !campDef_.carrier && !terrain_.deck().active && !battle_.player().fm->state().onGround, "mission 52 airborne over the Matterhorn");
+            run(120);
+            expect(!playerDead_, "mission 52 runs over the Matterhorn");
+        }
+        setCampaignLocation("desert");
         // carrier level at Musandam
         if (locationAvailable("musandam")) {
             acLocation_ = "musandam";
@@ -2112,7 +2182,7 @@ int Game::runCapture() {
         return fails == 0 ? 0 : 1;
     }
     if (set == "academy") {
-        // menus: title, academy (route preview), campaign selection, a location's operations
+        // menus: title, academy (route preview), the campaign screen
         hideHud_ = true;
         const char* locEnv = std::getenv("SKYFALL_LOC");
         std::string loc = locEnv ? locEnv : "desert";
@@ -2124,10 +2194,9 @@ int Game::runCapture() {
             openAcademy(); acLevel_ = lv; nav_.focus = lv - 1;
             snap("academy_01_menu_l" + std::to_string(lv), 2);
         }
-        startTitle(); screen_ = Screen::CampaignSelect; opsLoc_.clear(); nav_.focus = 2;
-        snap("academy_02_campaign_select", 2);
-        opsLoc_ = loc; nav_.focus = 2;
-        snap("academy_03_operations", 2);
+        setCampaignLocation(loc);
+        startTitle(); screen_ = Screen::Campaign; nav_.focus = 13;
+        snap("academy_02_campaign", 2);
         // in flight: level 4 (obstacles) and level 10 (carrier) at this location
         hideHud_ = false;
         for (int lv : {4, 9, 10}) {

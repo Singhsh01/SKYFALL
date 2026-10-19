@@ -495,7 +495,8 @@ in vec4 vColor;      // rgb = part tint x baked ambient occlusion, a = material 
 uniform vec3 uPaintA;
 uniform vec3 uPaintB;
 uniform vec3 uPaintC;
-uniform float uCamo;        // pattern: 0 two-tone, 1 splinter, 2 woodland, 3 digital, 4 stripes
+uniform float uCamo;        // pattern: 0 two-tone, 1 splinter, 2 woodland, 3 digital, 4 stripes,
+                            // 5 counter-shaded, 6 shard, 7 demo sweep, 8 polished metal, 9 carbon
 uniform float uRoughness;
 uniform float uHitFlash;
 uniform float uDamage;
@@ -532,7 +533,43 @@ void main() {
     float metal, rough, coat;
     if (mat > 0.75) {
         vec3 paint = uPaintA;
-        if (uCamo > 3.5) {
+        if (uCamo > 8.5) {
+            // carbon: fine twill weave in two near-blacks, an accent pinstripe along the spine
+            vec2 q = vObj.xz * 9.0 + vObj.y * 3.0;
+            float tw = step(0.5, fract((floor(q.x) + floor(q.y)) * 0.5 + fract(q.x) * 0.5));
+            paint = mix(uPaintA, uPaintB, tw * 0.8);
+            float spine = (1.0 - smoothstep(0.10, 0.16, abs(vObj.z))) * step(0.0, vObj.y);
+            paint = mix(paint, uPaintC, spine);
+        } else if (uCamo > 7.5) {
+            // polished metal: brushed bands along the airframe, panels in slightly different alloys
+            float brush = texture(uNoise, vec2(vObj.x * 0.02, vObj.z * 3.0 + vObj.y * 2.0)).r;
+            float panel = texture(uNoise, floor(vObj.xz * vec2(0.5, 0.7)) / 23.0).g;
+            paint = mix(uPaintA, uPaintB, panel * 0.7) * (0.92 + 0.12 * brush);
+        } else if (uCamo > 6.5) {
+            // demonstration team: a bold chevron sweep from the nose, wingtip flashes, pinlines
+            float d = abs(fract(vObj.x * 0.16 + abs(vObj.z) * 0.22 + 0.15) - 0.5) - 0.11;
+            float band = 1.0 - smoothstep(-0.006, 0.006, d);
+            float tip = smoothstep(0.62, 0.70, abs(vObj.z) / 6.5);
+            paint = mix(uPaintA, uPaintB, max(band, tip));
+            float pin = 1.0 - smoothstep(0.004, 0.012, abs(d - 0.02));
+            paint = mix(paint, uPaintC, pin);
+        } else if (uCamo > 5.5) {
+            // shards: angular three-tone fragments (modern stealth-fighter schemes): two rotated
+            // grids of cells, each cell hashed to a tone, the darker fragment wins
+            vec2 p = vObj.xz * 0.55 + vec2(vObj.y * 0.7, 0.0);
+            vec2 r1 = vec2(dot(p, vec2(0.866, 0.5)), dot(p, vec2(-0.5, 0.866)));
+            vec2 r2 = vec2(dot(p, vec2(0.259, -0.966)), dot(p, vec2(0.966, 0.259))) * 1.35;
+            float a = fract(sin(dot(floor(r1), vec2(12.9898, 78.233))) * 43758.5453);
+            float b = fract(sin(dot(floor(r2), vec2(39.3468, 11.135))) * 24634.6345);
+            paint = a < 0.45 ? uPaintA : (a < 0.78 ? uPaintC : uPaintB);
+            if (b < 0.3) paint = uPaintB;
+        } else if (uCamo > 4.5) {
+            // counter-shaded low visibility: dark above, light below, soft transition
+            float up = smoothstep(-0.6, 0.9, vObj.y + (texture(uNoise, vObj.xz / 15.0).r - 0.5) * 0.5);
+            paint = mix(uPaintA, uPaintB, up);
+            // soft darker shading on the leading edges and the spine
+            paint = mix(paint, uPaintC, (1.0 - smoothstep(0.0, 0.35, abs(vObj.z))) * step(0.3, vObj.y) * 0.35);
+        } else if (uCamo > 3.5) {
             // tiger stripes: wavy bands across the airframe
             float w = vObj.x * 0.55 + 2.2 * texture(uNoise, vObj.xz / 23.0 + vObj.y * 0.1).r + vObj.y * 0.4;
             float band = smoothstep(0.62, 0.70, abs(fract(w * 0.5) - 0.5) * 2.0);
@@ -577,7 +614,7 @@ void main() {
         base *= (0.93 + 0.12 * mott) * (0.95 + 0.1 * panelId) * (1.0 - 0.12 * smoothstep(0.55, 0.85, streak));
         // exhaust soot towards the tail
         base *= mix(1.0, 0.72, smoothstep(-6.0, -9.5, vObj.x));
-        metal = 0.12;
+        metal = uCamo > 7.5 && uCamo < 8.5 ? 0.55 : 0.12;
         rough = uRoughness * (0.85 + 0.3 * mott) * (0.85 + 0.3 * panelId) + 0.12 * smoothstep(0.55, 0.85, streak);
         coat = 0.35 * (1.0 - 0.6 * smoothstep(0.55, 0.85, streak));
         // normal map: panel grooves and rivet bumps, by screen-space derivatives (bump mapping)

@@ -62,6 +62,7 @@ struct HudContext {
     const LossReport* loss = nullptr;
     // missions
     RunwayInfo runway{};
+    int approachDir = 1;          // mission 3 glide path: +1 runway 09, -1 runway 27
     DeckInfo deck{};                 // aircraft carrier (inactive unless a carrier mission)
     const CampaignMissionDef* campaign = nullptr;
     bool showGlidePath = false;

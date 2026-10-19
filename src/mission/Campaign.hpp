@@ -25,6 +25,7 @@ struct TargetDef {
     double railFraction = 0;  // Railway: position along the line (0..1); x/z ignored
     double railSpeed = 0;     // Railway: m/s (trains move; wagons follow the locomotive)
     int index = 0;            // Industrial: which factory slot
+    int bridge = -1;          // Bridge: which bridge of the layout (-1 = the longest, rail first)
 };
 
 struct WaveDef {
@@ -87,7 +88,28 @@ struct CampaignMissionDef {
     bool carrier = false;        // start on the aircraft carrier's catapult
     bool rain = false;           // rain and low overcast
     int tactics = -1;            // enemy tactics level (see BattleConfig::tactics); -1 = by mission number
+    DeckInfo deck;               // the aircraft carrier (carrier missions)
+    double homeX = -10500, homeZ = 3000;   // the runway threshold the landing objectives point at
+    std::string location = "desert";       // world location the definition is laid out for
 };
+
+/// What a world location offers the campaign: open sea (boats, oil rigs), room for the carrier,
+/// a railway, and how much higher the airfield's training heights are (mission 2).
+struct CampaignVariant {
+    bool sea = true, carrier = true, rail = true;
+    double climbOffset = 0;
+    bool runway27 = false;   // mission 3 lands on runway 27 (terrain blocks the approach from the west)
+};
+/// The variant of a location (the Skyfall Desert is the original: everything, no offset).
+CampaignVariant campaignVariantFor(const Terrain& t, const WorldLayout& L);
+/// Height added to mission 2's altitudes on this location (0 in the desert).
+double mission02Offset(const Terrain& t);
+/// Titles, labels and target kinds of a mission as flown in a variant (no geometry): boats become
+/// vehicles without sea, trains truck convoys without a railway, the catapult start an airborne
+/// start without a carrier.
+CampaignMissionDef retitleCampaignMission(const CampaignMissionDef& def, const CampaignVariant& v);
+/// The mission laid out on a location's terrain (see CampaignWorld.cpp). The desert returns `def`.
+CampaignMissionDef adaptCampaignMission(const CampaignMissionDef& def, const Terrain& t, const WorldLayout& L);
 
 /// The aircraft carrier used by the carrier missions: off the east coast, bow to the north.
 DeckInfo campaignCarrierDeck();

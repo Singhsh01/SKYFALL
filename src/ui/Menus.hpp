@@ -20,6 +20,9 @@ bool button(MenuNav& nav, int idx, Rectangle r, const std::string& label, const 
 bool slider(MenuNav& nav, int idx, Rectangle r, const std::string& label, double& value, double lo = 0, double hi = 1, bool percent = true);
 bool toggle(MenuNav& nav, int idx, Rectangle r, const std::string& label, bool& value, const char* on = "ON", const char* off = "OFF");
 bool cycle(MenuNav& nav, int idx, Rectangle r, const std::string& label, int& value, const std::vector<std::string>& options);
+/// "< value >" picker with a small label: returns -1 / +1 when changed (arrows, Enter, or a
+/// click on the left / right half), else 0.
+int selector(MenuNav& nav, int idx, Rectangle r, const std::string& label, const std::string& value, const std::string& note = "");
 void title(const std::string& text, float x, float y, float size);
 void logo(float x, float y, float scale, double time);
 

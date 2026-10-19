@@ -115,6 +115,7 @@ void carrierStart(CampaignMissionDef& m) {
     DeckInfo d = campaignCarrierDeck();
     Vec3 c = d.catapultStart();
     m.carrier = true;
+    m.deck = d;
     m.rain = true;
     m.timeOfDay = 3;
     m.startX = c.x; m.startZ = c.z; m.startAlt = d.center.y; m.startSpeed = 0; m.startHeading = d.heading;
@@ -874,7 +875,7 @@ const CampaignMissionDef* campaignMission(int number) {
 
 bool objectivePoint(const CampaignMissionDef& def, const ObjectiveDef& o, const Battle* battle, Vec3& out) {
     if (o.kind == ObjectiveKind::Waypoint) { out = {o.x, 0, o.z}; return true; }
-    if (o.kind == ObjectiveKind::Touchdown || o.kind == ObjectiveKind::Stop) { out = {-10500, 0, 3000}; return true; }
+    if (o.kind == ObjectiveKind::Touchdown || o.kind == ObjectiveKind::Stop) { out = {def.homeX, 0, def.homeZ}; return true; }
     if ((o.kind == ObjectiveKind::Rendezvous || o.kind == ObjectiveKind::Refuel) && battle && battle->tanker().active) {
         out = battle->tanker().pos;
         return true;
@@ -887,7 +888,6 @@ bool objectivePoint(const CampaignMissionDef& def, const ObjectiveDef& o, const 
         out = sum * (1.0 / n);
         return true;
     }
-    (void)def;
     return false;
 }
 
@@ -1070,7 +1070,8 @@ void CampaignDirector::begin(const CampaignMissionDef& def, Battle& battle, unsi
             Vec3 p = L->railway.at(g.railS);
             t.x = p.x; t.z = p.z;
         } else if (t.anchor == TargetDef::Anchor::Bridge) {
-            int bi = L ? L->largestBridge(true) : -1;
+            int bi = L && t.bridge >= 0 && t.bridge < static_cast<int>(L->bridges.size()) ? t.bridge : -1;
+            if (bi < 0) bi = L ? L->largestBridge(true) : -1;
             if (bi < 0 && L) bi = L->largestBridge(false);
             if (bi < 0) continue;
             const Bridge& b = L->bridges[bi];

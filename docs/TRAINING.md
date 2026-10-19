@@ -1,8 +1,8 @@
-# Training Academy and Location Operations
+# Training Academy and the Campaign on Every Location
 
 Two additions to SKYFALL v0.8: a **Training Academy** of ten graded courses with a live
-instructor, and an **Operations** campaign of ten missions for every world location. The original
-61-mission campaign is unchanged and still plays in the Skyfall Desert.
+instructor, and the **61-mission campaign over any world location** (with your choice of aircraft
+and paint scheme). In the Skyfall Desert the campaign is exactly the original.
 
 ## Where to find them
 
@@ -10,9 +10,9 @@ instructor, and an **Operations** campaign of ten missions for every world locat
   optional corridor markers, level details, a route preview drawn on the map of the loaded
   location, your record for the chosen aircraft (best score, medal, attempts, best time) and the
   medals of all eight aircraft, then **LAUNCH**.
-* Title → **CAMPAIGN**: **ORIGINAL CAMPAIGN** (the 61 missions) or **<LOCATION> OPERATIONS** for
-  any of the 14 locations. Aircraft and handling mode are chosen on the same screen. Progress is
-  saved per location.
+* Title → **CAMPAIGN**: the 61-mission grid of earlier releases, with **LOCATION**, **AIRCRAFT**
+  and **PAINT** pickers below it (arrow keys, Enter, or click the left / right half). Completed
+  missions are ticked per location.
 
 ## The ten levels
 
@@ -82,16 +82,33 @@ discipline, terrain clearance, stability / control, refuelling, landing. Medals:
 silver 78, gold 90. A crash shows the replay and then **R retries from the last checkpoint** (the
 start of the section, with the aircraft state saved there). History is kept per level and per
 aircraft (best score, best medal, attempts, best time); a medal on level N unlocks level N+1.
-Operations unlock one after the other per location.
 
-## Location Operations (`src/mission/Operations.cpp`)
+## The campaign on every location (`src/mission/CampaignWorld.cpp`)
 
-Ten mission templates are built from each location's terrain: Valley Patrol, Ridge Radar (low
-ingress), The Pass (SAM site in the valley), Convoy Interdiction, Supply Line (the generated
-railway or trucks, then a fuel depot), Strike Force (hangars, or patrol boats on coastal maps),
-Long Reach (tanker first), Peak Hunter (relays on the peaks), Mountain Dogfight (two low waves)
-and Final Operation (air defences, headquarters, last wave, then land at the airfield). Targets
-are kept within reach of the airfield's height; waves spawn inside the map.
+The 61 missions are written for the Skyfall Desert (sea to the east, airfield in the west). All
+maps are 32 x 32 km, so a mission keeps its layout and is fitted to the location:
+
+* **Orientation** — the whole mission is mirrored or rotated about the map centre (one of the 8
+  symmetries of the square), whichever puts most ships and rigs on water, ground targets on
+  reachable ground and waypoints over lower terrain.
+* **Targets** — each target group moves as a whole by the smallest offset that puts its members on
+  suitable ground: dry, gentle, off the runway, no more than 1800 m above the airfield, and with no
+  wall towering over it within 1.2 km (room for an attack run). Ships and their sailing circles go
+  on water (smaller circles in narrow water). Bridge strikes use the longest reachable bridge
+  (rail first), not one at the bottom of a deep canyon.
+* **Heights** — enemy waves, the start and the tanker keep the clearance they had above the desert
+  floor, measured from the local terrain (never below 450 m above the highest ground nearby). The
+  tanker orbit goes over the lowest ground in reach of where it was.
+* **Carrier** — on a map with real sea (Skyfall Desert, Musandam, Rio de Janeiro) the carrier is
+  placed on open water with an approach and climb-out over water. Elsewhere the carrier missions
+  start in the air over the airfield (the catapult, gear and climb objectives are dropped) and
+  end with a low pass over the runway.
+* **No sea / no railway** — boats become armoured vehicles and oil rigs fuel tanks; trains become
+  truck convoys near a town; factories are built where the map has no industrial zone. Objective
+  titles change with them ("DESTROY 3 PATROL VEHICLES"); every variant is in the voice pack.
+* **Landings** — the approach gate is on the side of the runway with the clearer glide path.
+  Mission 2's heights are raised on a high airfield ("CLIMB 750 METRES"), and mission 3 lands on
+  runway 27 where the terrain blocks the approach to runway 09 (Matterhorn, Musandam, Aconcagua).
 
 ## Tests (`tests/training_tests.cpp`, `skyfall_training_tests`)
 
@@ -106,16 +123,21 @@ are kept within reach of the airfield's height; waves spawn inside the map.
 * `every_training_radio_call_is_in_the_voice_vocabulary` — every call heard in 40 real flights is
   in the voice pack's line list.
 * `academy_progress_medals_history_and_unlocks`.
-* `operations_are_built_on_every_location` — all 140 operations: valid placement, tanker clear of
-  the ground, objective logic completes, briefings in the vocabulary.
-* `operations_are_winnable_by_the_combat_bot` — the combat bot that proves the hard desert
-  missions flies the operations against the full AI (5 locations by default, `SKY_OPS_ALL=1` for
-  all 14).
+* `campaign_is_laid_out_on_every_location` — all 61 missions on all 14 locations (812 mission
+  layouts): targets on suitable ground / water, waves, start and tanker clear of the terrain and
+  on the map, the carrier on open water, the landing on the runway, every objective group
+  populated, every title and briefing in the voice pack, the objective logic completes; missions
+  2 and 3 start clear of the terrain. The desert layouts are checked to be the originals.
+* `campaign_is_winnable_over_other_locations` — the combat bot that proves the hard desert
+  missions flies missions 4-61 against the full AI over other locations and is compared with
+  itself in the desert (desert, Matterhorn, Musandam, Aconcagua by default; `SKY_CAMP_ALL=1` for
+  all 14, `SKY_CAMP_LOC=<id>` for one).
 * Debug tools: `course_report`, `course_dump` (`LOC=`, `LV=`, `ALL=1`), `bot_flies_one_course`
   (`LOC LV AC MODE`, `TRACE=<section kind>`, `SECT=1`, `RADIO=1`), `bot_sweep_over_every_location`
   (`SKY_SWEEP=<aircraft>,<mode>`).
 * `skyfall --capture <dir>` with `SKYFALL_SET=flow` drives the real game loop through the Academy,
-  a crash and checkpoint retry, completion and progress, operations and location switches;
+  a crash and checkpoint retry, completion and progress, the campaign over Guilin, Musandam
+  (carrier) and the Matterhorn (airborne start), and location switches;
   `SKYFALL_SET=academy` captures the new screens.
 
 ## Known limits
@@ -127,9 +149,14 @@ are kept within reach of the airfield's height; waves spawn inside the map.
   127, F-16 assisted 125, F-16 simulation 122, Su-30 assisted 124, F-35 simulation 120; most
   failures are on Everest-like high terrain (Everest itself is in the sweep but not the Academy).
 * Everest is not offered in the Academy (5-8 km terrain: the low-level obstacle work exceeds
-  several jets' performance in that air). Its Operations exist; the combat bot does not win
-  operations 7, 9 and 10 there, nor operation 10 at Aconcagua.
+  several jets' performance in that air). The campaign does fly there.
 * Level 10 needs open sea: only Skyfall Desert, Musandam and Rio de Janeiro.
 * The estimate is 15.5-20 min; a fast, clean flight (like the bot's, especially in arcade mode)
   takes less, about 12-17 minutes.
-* The original 61-mission campaign stays in the Skyfall Desert.
+* Campaign over other locations: the combat bot (assisted, F-22, up to 3 attempts) wins 48 of
+  missions 4-61 in the desert itself (it cannot fly mission 5's aerobatics, the low-level route of
+  mission 6, and loses some of the big dogfights of missions 27-40). Over the 12 other real
+  locations it wins 46-53 of 58 (Everest 41); the missions it wins in the desert but loses
+  elsewhere are at most 4 per location (mostly dogfights decided by luck) except Everest, where
+  it loses 8 more (ground attacks between 8 km peaks). Over all 14 maps: 689 of 812. Without sea, the story text of the briefings still speaks of boats
+  and the sea where the mission had them; only the objectives change.

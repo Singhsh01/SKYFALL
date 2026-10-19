@@ -30,13 +30,13 @@ copyrighted models, textures, sounds or code from commercial games.
 | ![Cockpit](docs/screenshots/cockpit_air.jpg) | ![Radio briefing in the cockpit](docs/screenshots/briefing.jpg) |
 | ![Gun line](docs/screenshots/gun_line.jpg) | ![Hangar](docs/screenshots/hangar.jpg) |
 | ![Refuelling](docs/screenshots/refuelling.jpg) | ![Dogfight arena](docs/screenshots/arena_chase.jpg) |
-| ![Town and railway](docs/screenshots/scenery_town.jpg) | ![Camouflage schemes](docs/screenshots/skins.jpg) |
+| ![Town and railway](docs/screenshots/scenery_town.jpg) | ![Modern paint schemes](docs/screenshots/skins_modern.jpg) |
 | ![Carrier deck in the rain](docs/screenshots/carrier_deck.jpg) | ![On the catapult in full afterburner](docs/screenshots/catapult_afterburner.jpg) |
 | ![Afterburner climb-out in a storm](docs/screenshots/afterburner_rain.jpg) | ![Campaign: 61 missions](docs/screenshots/campaign_menu.jpg) |
 | ![Everest, real elevation data](docs/screenshots/real_everest.jpg) | ![Geirangerfjord, real elevation data](docs/screenshots/real_geiranger.jpg) |
 | ![High-G wing condensation](docs/screenshots/wing_vapour.jpg) | ![Gear, wheels and landing light](docs/screenshots/gear_lights.jpg) |
 | ![Forested valleys and fields, Glen Coe](docs/screenshots/landscape_glencoe.jpg) | ![Patchwork farmland below Mount Fuji](docs/screenshots/landscape_farmland.jpg) |
-| ![Training Academy: levels, record and route preview](docs/screenshots/academy_menu.jpg) | ![Campaign: the original 61 missions or any location's Operations](docs/screenshots/campaign_select.jpg) |
+| ![Training Academy: levels, record and route preview](docs/screenshots/academy_menu.jpg) | ![Campaign: 61 missions over any location, aircraft and paint](docs/screenshots/campaign_location.jpg) |
 | ![Academy level 4: pillar slalom with the instructor](docs/screenshots/academy_pillars.jpg) | ![Academy level 10: carrier approach guidance](docs/screenshots/academy_carrier_approach.jpg) |
 
 > Screenshots are captured from the running executable (`skyfall --capture`) on a Linux
@@ -60,12 +60,17 @@ copyrighted models, textures, sounds or code from commercial games.
   category scores, bronze / silver / gold medals, checkpoint retries after a crash (`R`),
   history per aircraft and progressive unlocks. The menu shows each level's route on the map,
   your record and the medals of every aircraft. Details: [docs/TRAINING.md](docs/TRAINING.md).
-* **A campaign on every world location** (title → CAMPAIGN) — choose the **original 61-mission
-  campaign** (unchanged, in the Skyfall Desert) or the ten **Operations** of any location, built
-  from its terrain: patrols down its valleys, a radar on its ridge, a SAM site in its pass,
-  convoys in its basins, its railway, patrol boats on coastal maps, a tanker-supported deep
-  strike, relays on its peaks, a low-level dogfight and a final operation that ends with a
-  landing at its airfield. Progress is saved per location; pick the aircraft before you start.
+* **The 61-mission campaign over any world location** (title → CAMPAIGN) — the campaign screen
+  of earlier releases, with three pickers under the mission grid: **location** (the Skyfall Desert
+  or any of the 13 real-terrain maps), **aircraft** and **paint scheme**. In the desert the
+  missions are exactly the originals. Elsewhere each mission keeps its layout and is fitted to the
+  terrain: it is mirrored or rotated to suit the map (sea targets onto water), every target group
+  moves to the nearest reachable ground with room for an attack run, enemy waves, the start and
+  the tanker orbit keep their height above the local terrain, the carrier is placed on open water,
+  and the landings use the location's runway. Maps without sea turn boats into armoured vehicles
+  and oil rigs into fuel tanks, and the carrier missions start in the air over the airfield;
+  maps without a railway turn the trains into truck convoys. The objective names and briefings
+  change with them, all in the neural voice. Progress is saved per location.
 
 * **Carrier operations (missions 52-61)** — ten missions that start on the catapult of an aircraft
   carrier in a rainstorm: push the throttle into afterburner (blue-white flame with shock
@@ -112,7 +117,7 @@ copyrighted models, textures, sounds or code from commercial games.
   diamonds change with speed and altitude.
 * **Cockpit** — sharper multifunction displays (rendered at twice the resolution), windscreen
   frame, backlit switches and annunciators, master caution / warning lights.
-* **Camouflage everywhere** — the scheme you paint in the Hangar is what you fly.
+* **Paint everywhere** — the scheme you choose in the Hangar or on the campaign screen is what you fly.
 
 * **World locations with real terrain** (title → WORLD LOCATIONS): Everest & Khumbu, Matterhorn,
   Geirangerfjord, Glen Coe, Erg Chebbi (Sahara), Wadi Rum, Musandam fjords, Grand Canyon,
@@ -126,8 +131,11 @@ copyrighted models, textures, sounds or code from commercial games.
   embankments and bridges, a railway with viaducts and a freight train, an industrial zone with
   smoking chimneys, wind farms with turning rotors.
 * **All eight aircraft are flyable** (Hangar → select → FLY): F-22, F-35, Rafale, Su-57, Su-35,
-  MiG-29, Su-30, F-16, each with **eight camouflage schemes** (factory, desert, woodland, arctic,
-  naval, digital urban, night, tiger) — ← / → on an aircraft in the Hangar. Choices are saved.
+  MiG-29, Su-30, F-16, each with **sixteen paint schemes**: eight camouflages (factory, desert,
+  woodland, arctic, naval, digital urban, night, tiger) and eight modern ones (ghost grey and sand
+  ghost counter-shading, stealth and polar shard splinters, midnight neon and demo red display
+  liveries, bare polished metal, carbon) — ← / → on an aircraft in the Hangar, or PAINT on the
+  campaign screen. Choices are saved.
 * **Briefings over the radio, in the cockpit** — no briefing board: every campaign mission and the
   Dogfight Arena starts with you strapped in, and Operations briefs you over the radio ("Captain,
   mission 55, Coastal Radar…"), reads the objectives and signs off with "Good luck, Captain."
@@ -189,8 +197,7 @@ buildings/roads are generated (not OpenStreetMap), so they are plausible rather 
 
 ## Voice
 
-All spoken lines (`assets/voice/*.mp3`, about 800 lines: campaign, Academy instructor and every
-location's Operations) are synthesised offline with
+All spoken lines (`assets/voice/*.mp3`, about 630 lines: the campaign with its location variants and the Academy instructor) are synthesised offline with
 [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) through
 [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (MIT): `bf_isabella` (British English) for the captain,
 AWACS and instructor, `bf_emma` for the tower, `af_bella` for your wingman. The game lists its own lines
@@ -249,7 +256,7 @@ Useful flags: `--mode arena` / `--mode m01` (skip the menu), `--size 1440x900`, 
 | `Q` / `1` / `2` | swap / select ATA (air-to-air) or ATS (air-to-surface) missiles | double-tap `←`/`→` | aileron roll |
 | `Enter` / `Space` | skip the crash replay | | |
 | `U` | HUD style (minimal / full) | `Cmd+Q` | quit immediately |
-| Hangar `←` / `→` | change camouflage | | |
+| Hangar `←` / `→` | change paint scheme | | |
 | `C` | camera: cockpit → chase → external | right-drag, `I J K L` | look / orbit, wheel = zoom |
 | `R` | reset / respawn (Academy: retry from the last checkpoint) | `H` | help overlay |
 | `F3` | telemetry (p50/p95/p99 frame times, physics) | `F5` | time of day |
@@ -285,10 +292,12 @@ X gear, Y camera, d-pad yaw.
 * `src/mission/Training` — Training Academy: course generation from real terrain (valley A*,
   Dubins joins, turn-radius and g limits, obstacle placement and clearance, approach selection),
   the session (gates, tasks, formation, refuelling, landing / trap, scoring, checkpoints) and the
-  instructor; `src/mission/Operations` — the per-location campaign; `src/mission/Progress`.
-* `tests/` — 54 simulation / campaign tests (`skyfall_tests`) and 7 Academy / Operations tests (plus course-debugging tools)
-  (`skyfall_training_tests`), including an autopilot that flies all 240 level / aircraft / mode
-  combinations and the combat bot on every location's operations (`ctest`).
+  instructor; `src/mission/CampaignWorld` — the 61 missions fitted to any location's terrain;
+  `src/mission/Progress`.
+* `tests/` — 54 simulation / campaign tests (`skyfall_tests`) and 7 Academy / campaign-location
+  tests (plus course-debugging tools) (`skyfall_training_tests`), including an autopilot that flies
+  all 240 level / aircraft / mode combinations, a check of all 61 missions on all 14 locations and
+  the combat bot flying the campaign over other locations (`ctest`).
 
 Read more: [Architecture](docs/ARCHITECTURE.md) · [Physics](docs/PHYSICS.md) ·
 [Aircraft data](docs/AIRCRAFT.md) · [Roadmap & checklist](docs/ROADMAP.md) ·
@@ -302,8 +311,8 @@ documented rate-command approximation rather than a full moment model; terrain i
 procedural and fictional. Aircraft are original procedural meshes (not licensed models), so they
 are clean silhouettes rather than photoreal assets. OpenGL is deprecated on macOS; a Metal renderer
 is a roadmap item. The Computer
-Vision Laboratory is planned, not implemented yet. Academy and Operations limits (Everest, sea
-for level 10, the few combinations the test bots do not complete) are listed in
+Vision Laboratory is planned, not implemented yet. Academy and campaign-location limits (Everest,
+sea for level 10, the missions and combinations the test bots do not complete) are listed in
 [docs/TRAINING.md](docs/TRAINING.md#known-limits).
 
 ## License

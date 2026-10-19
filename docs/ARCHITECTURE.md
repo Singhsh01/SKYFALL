@@ -17,7 +17,7 @@
           |  mission/   Mission FSM, |        |  audio/   procedural synth  |
           |             Campaign,    |        |                             |
           |             Training,    |        |                             |
-          |             Operations   |        |                             |
+          |             CampaignWorld|        |                             |
           +-------------+------------+        +-------------+---------------+
                         |                                   |
                         +-----------------+-----------------+
@@ -59,7 +59,7 @@
 * **Scene resolution is decoupled from window pixels**: the 3D scene renders at the window size
   in points × quality scale; the HUD is drawn at native Retina resolution.
 
-## Training Academy and Operations
+## Training Academy and the campaign on every location
 
 * `mission/Training` builds a `Course` (sections, gates, obstacles, tanker, formation loop,
   approach) from a `Terrain` + `WorldLayout`, deterministically; `TrainingSession` runs it once
@@ -68,8 +68,11 @@
   predicates read the session, so the HUD and menus treat it like any other mission.
 * `Terrain::setObstacles` installs the course's pillars / arches / masts / deck: the flight model
   collides with them and the renderer rebuilds their meshes when the obstacle version changes.
-* `mission/Operations` turns ten templates into `CampaignMissionDef`s for the loaded location, run
-  by the same `CampaignDirector` as the desert campaign (mission numbers 201-210).
-* `app/Academy.cpp` holds the Academy and campaign-selection screens and the training glue
+* `mission/CampaignWorld` fits a desert `CampaignMissionDef` to the loaded location
+  (`adaptCampaignMission`: symmetry, target placement, heights, tanker, carrier or airborne start,
+  landing) and describes what the location offers (`CampaignVariant`: sea, carrier, railway,
+  mission 2 / 3 variants). `retitleCampaignMission` applies only the text and kind changes, so the
+  voice pack can list every variant's lines. The same `CampaignDirector` runs it.
+* `app/Academy.cpp` holds the Academy screen and the training glue
   (radio routing by priority, gate markers, retries, debrief); progress lives in `Settings`
   (`mission/Progress`).

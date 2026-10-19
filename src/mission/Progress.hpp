@@ -1,5 +1,5 @@
 // Player progress for the Training Academy (best medal / score / attempts per level and aircraft,
-// progressive unlocks) and the location Operations campaigns (completed missions per location).
+// progressive unlocks) and the campaign on each world location (completed missions per location).
 // Stored in the settings file's free-form key/value section, so older builds keep it intact.
 #pragma once
 
@@ -26,10 +26,10 @@ int academyBestMedal(const Settings& s, int level);
 /// Level 1 is open; level n opens with at least a bronze medal on level n-1 (any aircraft).
 bool academyUnlocked(const Settings& s, int level);
 
-bool operationCompleted(const Settings& s, const std::string& locationId, int k);
-void markOperationCompleted(Settings& s, const std::string& locationId, int k);
-int operationsCompleted(const Settings& s, const std::string& locationId);
-/// Mission 1 is open; mission k opens when k-1 is complete.
-bool operationUnlocked(const Settings& s, const std::string& locationId, int k);
+/// Campaign missions completed on a world location (the Skyfall Desert keeps the original
+/// campaign_done record).
+bool campaignCompletedAt(const Settings& s, const std::string& locationId, int n);
+void markCampaignCompletedAt(Settings& s, const std::string& locationId, int n);
+int campaignCountAt(const Settings& s, const std::string& locationId);
 
 }  // namespace sky

@@ -35,8 +35,16 @@ struct Settings {
     int aircraft = 0;
     std::string location = "desert";   // world location (see sim/Locations.hpp)
     std::string skins = std::string(8, '0');   // camouflage per aircraft (digit = skin index)
-    int skinFor(int aircraftId) const { return aircraftId >= 0 && aircraftId < static_cast<int>(skins.size()) ? skins[aircraftId] - '0' : 0; }
-    void setSkin(int aircraftId, int skin) { if (aircraftId >= 0 && aircraftId < static_cast<int>(skins.size())) skins[aircraftId] = static_cast<char>('0' + skin); }  // AircraftId of the player's jet (hangar selection)  // 0 Arcade (default), 1 Assisted, 2 Simulation
+    // one character per aircraft: '0'-'9' then 'a'-'z' (skin index 0-35)
+    int skinFor(int aircraftId) const {
+        if (aircraftId < 0 || aircraftId >= static_cast<int>(skins.size())) return 0;
+        char c = skins[aircraftId];
+        return c >= '0' && c <= '9' ? c - '0' : (c >= 'a' && c <= 'z' ? 10 + (c - 'a') : 0);
+    }
+    void setSkin(int aircraftId, int skin) {
+        if (aircraftId >= 0 && aircraftId < static_cast<int>(skins.size()) && skin >= 0 && skin < 36)
+            skins[aircraftId] = static_cast<char>(skin < 10 ? '0' + skin : 'a' + (skin - 10));
+    }
     // Audio (0..1)
     double master = 0.8, music = 0.5, engine = 0.85, radio = 0.65, effects = 0.9;
     bool musicEnabled = false;  // background music OFF by default (listen to your own)

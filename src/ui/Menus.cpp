@@ -108,6 +108,26 @@ bool cycle(MenuNav& nav, int idx, Rectangle r, const std::string& label, int& va
     return changed;
 }
 
+int selector(MenuNav& nav, int idx, Rectangle r, const std::string& label, const std::string& value, const std::string& note) {
+    bool hov = hovered(r);
+    if (hov && (GetMouseDelta().x != 0 || GetMouseDelta().y != 0)) nav.focus = idx;
+    bool focused = nav.focus == idx;
+    frame(r, focused);
+    float s = r.height / 46.0f;
+    text(label, r.x + 12 * s, r.y + 6 * s, 11 * s, Color{255, 176, 60, 220});
+    if (!note.empty()) text(note, r.x + r.width - 12 * s, r.y + 6 * s, 11 * s, Color{170, 190, 185, 220}, Align::Right, false);
+    text("<", r.x + 12 * s, r.y + r.height - 25 * s, 17 * s, kAccent);
+    text(">", r.x + r.width - 12 * s, r.y + r.height - 25 * s, 17 * s, kAccent, Align::Right);
+    std::string v = value;
+    while (v.size() > 3 && measure(v + "..", 16 * s, true) > r.width - 64 * s) v.pop_back();
+    if (v != value) v += "..";
+    text(v, r.x + r.width / 2, r.y + r.height - 26 * s, 16 * s, WHITE, Align::Center);
+    if (hov && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) return GetMousePosition().x < r.x + r.width / 2 ? -1 : 1;
+    if (focused && (nav.confirm || nav.right)) return 1;
+    if (focused && nav.left) return -1;
+    return 0;
+}
+
 void title(const std::string& t, float x, float y, float size) {
     textShadow(t, x, y, size, WHITE);
     DrawRectangle(static_cast<int>(x), static_cast<int>(y + size + 6), 60, 3, kAccent);

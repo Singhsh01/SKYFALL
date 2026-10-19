@@ -2,7 +2,8 @@
 // validated (clearance, turn radius, duration, obstacles, voice coverage) and flown end to end by
 // an autopilot bot for every level, aircraft and handling mode.
 #include "mission/Training.hpp"
-#include "mission/Operations.hpp"
+#include "mission/Campaign.hpp"
+#include "mission/Voice.hpp"
 #include "mission/Progress.hpp"
 #include "app/Settings.hpp"
 #include "CombatBot.hpp"
@@ -819,7 +820,7 @@ TEST(courses_are_valid_on_every_location) {
         for (int lv = 1; lv <= kTrainingLevels; ++lv) {
             Course c = buildCourse(lv, *w.terrain, *w.layout);
             if (lv == 10 && !c.error.empty()) {
-                CHECK_MSG(!locationIsCoastal(id), "%s L10: %s", id.c_str(), c.error.c_str());
+                CHECK_MSG(!academyLocationAllowed(id, 10), "%s L10: %s", id.c_str(), c.error.c_str());
                 continue;
             }
             CHECK_MSG(c.error.empty(), "%s L%d: %s", id.c_str(), lv, c.error.c_str());
@@ -977,98 +978,174 @@ TEST(academy_progress_medals_history_and_unlocks) {
     // medals from the scores
     CHECK(medalFor(95) == Medal::Gold);
     CHECK(medalFor(10) == Medal::None);
-    // operations progress is per location
-    CHECK(operationUnlocked(s, "fuji", 1));
-    CHECK(!operationUnlocked(s, "fuji", 2));
-    markOperationCompleted(s, "fuji", 1);
-    CHECK(operationCompleted(s, "fuji", 1));
-    CHECK(operationUnlocked(s, "fuji", 2));
-    CHECK(!operationCompleted(s, "rio", 1));
-    CHECK(operationsCompleted(s, "fuji") == 1);
+    // campaign progress is per location (the desert keeps the original record)
+    CHECK(!campaignCompletedAt(s, "fuji", 7));
+    markCampaignCompletedAt(s, "fuji", 7);
+    CHECK(campaignCompletedAt(s, "fuji", 7));
+    CHECK(!campaignCompletedAt(s, "desert", 7) && !campaignCompletedAt(s, "rio", 7));
+    markCampaignCompletedAt(s, "desert", 3);
+    CHECK(s.missionCompleted(3) && campaignCompletedAt(s, "desert", 3));
+    CHECK(campaignCountAt(s, "fuji") == 1);
 }
 
-TEST(operations_are_built_on_every_location) {
-    // ten missions per location, from its own terrain: objectives exist, every target and wave
-    // is on the map, ground targets stand on dry land (ships on water), the tanker orbit is clear
-    // of the ground, and the objective logic completes when the objectives are met.
+/// Mutable terrain of a location with (or without) the carrier deck of a mission.
+Terrain& deckTerrain(World& w, const CampaignMissionDef& d) {
+    if (d.carrier) w.terrain->setDeck(d.deck);
+    else w.terrain->clearDeck();
+    return *w.terrain;
+}
+
+TEST(campaign_is_laid_out_on_every_location) {
+    // All 61 missions on every location: every target on suitable ground (ships and rigs on
+    // water), every wave, start and tanker orbit clear of the terrain and on the map, the carrier
+    // on open water (or an airborne start where there is none), the landing on the runway, every
+    // objective group populated, every title and briefing in the voice pack, and the objective
+    // logic completes.
+    std::set<std::string> vocab;
+    for (const VoiceLine& l : allVoiceLines()) vocab.insert(voiceKey(l.who, l.text));
     int checked = 0;
     for (const std::string& id : allLocationIds()) {
         World& w = world(id);
-        for (int k = 1; k <= kOperationMissions; ++k) {
-            CampaignMissionDef d = buildOperation(k, *w.terrain, *w.layout);
-            CHECK(d.number == 200 + k);
+        const Terrain& t = *w.terrain;
+        CampaignVariant v = campaignVariantFor(t, *w.layout);
+        std::printf("    %-13s sea %d carrier %d rail %d climb+%.0f\n", id.c_str(), v.sea, v.carrier, v.rail, v.climbOffset);
+        const RunwayInfo& rw = t.runway();
+        // missions 1-3: the solo flight starts clear of the hills, the landing approach is open
+        double off = mission02Offset(t);
+        CHECK_MSG(1250.0 + off > maxSurfaceAround(t, rw.center.x + 2000.0, rw.center.z, 3000.0) + 300.0, "%s mission 2 starts too low", id.c_str());
+        {
+            // mission 3 starts on a clear glide path (runway 27 where the terrain blocks 09)
+            Mission03Approach ap = mission03Approach(t);
+            Vec3 th = landingThreshold(rw, ap.dir);
+            double c = segmentClearance(t, {th.x - ap.dir * ap.dist, rw.center.y + glidePathHeight(ap.dist), th.z},
+                                        {th.x - ap.dir * 1000.0, rw.center.y + glidePathHeight(1000.0), th.z});
+            CHECK_MSG(c > 25.0, "%s mission 3: glide path only %.0f m above the terrain", id.c_str(), c);
+            CHECK(v.runway27 == (ap.dir < 0));
+            if (id == "desert") CHECK(ap.dir == 1 && ap.dist == 4800.0);
+        }
+        for (int n = 1; n <= 3; ++n)
+            for (const auto& p : makeBriefing(n, &v).parts) CHECK_MSG(vocab.count(voiceKey(Speaker::Captain, p)) == 1, "%s M%d briefing not voiced", id.c_str(), n);
+        for (int n = 4; n <= kCampaignMissions; ++n) {
+            const CampaignMissionDef& src = *campaignMission(n);
+            CampaignMissionDef d = adaptCampaignMission(src, t, *w.layout);
+            const bool orig = id == "desert";   // the original layout: its geometry is the reference
+            if (orig) CHECK(d.targets.size() == src.targets.size() && d.startX == src.startX && d.objectives.size() == src.objectives.size());
             CHECK(!d.objectives.empty());
-            CHECK(!d.title.empty() && !d.briefing.empty());
-            CHECK_MSG(insideMapXZ({d.startX, 0, d.startZ}, 1000.0), "%s ops %d start off the map", id.c_str(), k);
-            CHECK(d.startAlt > w.terrain->surfaceHeight(d.startX, d.startZ) + 300.0);
-            for (const TargetDef& t : d.targets) {
-                if (t.anchor == TargetDef::Anchor::Railway) continue;
-                CHECK_MSG(insideMapXZ({t.x, 0, t.z}, 800.0), "%s ops %d target %s off the map", id.c_str(), k, t.label.c_str());
-                bool water = w.terrain->isWater(t.x, t.z);
-                if (t.kind == GroundKind::Ship) CHECK_MSG(water, "%s ops %d ship on land", id.c_str(), k);
+            CHECK_MSG(insideMapXZ({d.startX, 0, d.startZ}, 1000.0), "%s M%d start off the map", id.c_str(), n);
+            if (d.carrier) {
+                CHECK_MSG(d.deck.active && t.height(d.deck.center.x, d.deck.center.z) < -6.0, "%s M%d carrier not on open water", id.c_str(), n);
+            } else if (!orig) {
+                CHECK_MSG(d.startAlt > maxSurfaceAround(t, d.startX, d.startZ, 1500.0) + 250.0, "%s M%d starts %.0f m above the ground", id.c_str(), n,
+                          d.startAlt - t.surfaceHeight(d.startX, d.startZ));
+            }
+            CHECK_MSG(src.carrier == d.carrier || !v.carrier, "%s M%d lost its carrier", id.c_str(), n);
+            std::set<int> groups;
+            for (const TargetDef& td : d.targets) {
+                if (td.anchor == TargetDef::Anchor::Railway) { CHECK(!w.layout->railway.pts.empty()); groups.insert(td.group); continue; }
+                if (td.anchor == TargetDef::Anchor::Bridge) { CHECK(!w.layout->bridges.empty()); groups.insert(td.group); continue; }
+                if (td.anchor == TargetDef::Anchor::Industrial) { CHECK(td.index < static_cast<int>(w.layout->factories.size())); groups.insert(td.group); continue; }
+                groups.insert(td.group);
+                CHECK_MSG(insideMapXZ({td.x, 0, td.z}, 800.0), "%s M%d target %s off the map", id.c_str(), n, td.label.c_str());
+                double h = t.height(td.x, td.z);
+                if (td.kind == GroundKind::Ship || td.kind == GroundKind::OilRig) {
+                    CHECK_MSG(h < -3.0, "%s M%d %s on land", id.c_str(), n, td.label.c_str());
+                    for (int k = 0; k < 8 && td.pathRadius > 0; ++k)
+                        CHECK_MSG(t.isWater(td.x + std::cos(k * kPi / 4) * td.pathRadius, td.z + std::sin(k * kPi / 4) * td.pathRadius),
+                                  "%s M%d %s sails onto land", id.c_str(), n, td.label.c_str());
+                } else {
+                    CHECK_MSG(h > 0.0 && !t.onRunway(td.x, td.z, 100.0), "%s M%d %s in the water or on the runway", id.c_str(), n, td.label.c_str());
+                    CHECK_MSG(orig || h < rw.center.y + 1900.0, "%s M%d %s %.0f m above the airfield", id.c_str(), n, td.label.c_str(), h - rw.center.y);
+                }
+            }
+            for (const ObjectiveDef& o : d.objectives) {
+                if (o.kind == ObjectiveKind::DestroyGroup) CHECK_MSG(groups.count(o.group), "%s M%d group %d empty", id.c_str(), n, o.group);
+                if (o.kind == ObjectiveKind::Waypoint) CHECK_MSG(insideMapXZ({o.x, 0, o.z}, 900.0), "%s M%d waypoint %s off the map", id.c_str(), n, o.title.c_str());
             }
             for (const WaveDef& wv : d.waves) {
-                CHECK(insideMapXZ({wv.x, 0, wv.z}, 500.0));
-                CHECK_MSG(wv.altitude > w.terrain->surfaceHeight(wv.x, wv.z) + 200.0, "%s ops %d wave below the ground", id.c_str(), k);
+                CHECK(insideMapXZ({wv.x, 0, wv.z}, 2000.0));
+                CHECK_MSG(orig || (wv.altitude > maxSurfaceAround(t, wv.x, wv.z, wv.radius) + 300.0 && wv.altitude < 12500.0), "%s M%d wave at %.0f m", id.c_str(), n, wv.altitude);
             }
             if (d.tanker) {
                 double top = -1e9;
                 for (int a = 0; a < 72; ++a)
-                    top = std::max(top, w.terrain->surfaceHeight(d.tankerX + std::cos(a * kPi / 36) * d.tankerRadius, d.tankerZ + std::sin(a * kPi / 36) * d.tankerRadius));
-                CHECK_MSG(d.tankerAlt > top + 500.0, "%s ops %d tanker orbit only %.0f m above the ground", id.c_str(), k, d.tankerAlt - top);
-                CHECK_MSG(d.tankerAlt <= 11000.0, "%s ops %d tanker at %.0f m", id.c_str(), k, d.tankerAlt);
+                    top = std::max(top, t.surfaceHeight(d.tankerX + std::cos(a * kPi / 36) * d.tankerRadius, d.tankerZ + std::sin(a * kPi / 36) * d.tankerRadius));
+                CHECK_MSG(d.tankerAlt > top + 600.0 && d.tankerAlt < 11500.0, "%s M%d tanker orbit %.0f m above the ground", id.c_str(), n, d.tankerAlt - top);
+                CHECK(insideMapXZ({d.tankerX, 0, d.tankerZ}, d.tankerRadius + 1000.0));
             }
-            if (k == kOperationMissions) CHECK(d.objectives.back().kind == ObjectiveKind::Stop);
-            CampaignPlaythrough pt(d, *w.terrain, w.layout.get());
-            bool ok = pt.run(400.0);
-            CHECK_MSG(ok, "%s ops %d stuck at objective %zu (%s)", id.c_str(), k, pt.mission.stepIndex() + 1, pt.mission.current() ? pt.mission.current()->title.c_str() : "-");
-            Briefing b = operationBriefing(id, k);
-            CHECK(b.speech.find("Good luck, Captain.") != std::string::npos);
+            for (const ObjectiveDef& o : d.objectives)
+                if (o.kind == ObjectiveKind::Touchdown) CHECK_MSG(t.onRunway(d.homeX, d.homeZ, 10.0), "%s M%d landing not on the runway", id.c_str(), n);
+            // titles and briefing in the voice pack
+            Mission m = buildCampaignMission(d);
+            for (size_t i = 1; i < m.steps().size(); ++i)
+                if (!(d.carrier && m.steps()[i].title == "GEAR UP"))
+                    CHECK_MSG(vocab.count(voiceKey(Speaker::Awacs, nextObjectiveLine(m.steps()[i].title))) == 1, "%s M%d '%s' not voiced", id.c_str(), n, m.steps()[i].title.c_str());
+            for (const auto& p : makeBriefing(n, &v).parts) CHECK_MSG(vocab.count(voiceKey(Speaker::Captain, p)) == 1, "%s M%d briefing not voiced", id.c_str(), n);
+            // the objective logic completes
+            CampaignPlaythrough pt(d, deckTerrain(w, d), w.layout.get());
+            bool ok = pt.run(500.0);
+            CHECK_MSG(ok, "%s M%d stuck at objective %zu (%s)", id.c_str(), n, pt.mission.stepIndex() + 1, pt.mission.current() ? pt.mission.current()->title.c_str() : "-");
+            w.terrain->clearDeck();
             ++checked;
         }
     }
-    std::printf("    %d operations checked\n", checked);
-    // every briefing part and objective call is in the voice vocabulary
-    std::set<std::string> vocab;
-    for (const VoiceLine& l : operationVoiceLines()) vocab.insert(voiceKey(l.who, l.text));
-    for (const std::string& id : allLocationIds())
-        for (int k = 1; k <= kOperationMissions; ++k)
-            for (const auto& p : operationBriefing(id, k).parts) CHECK(vocab.count(voiceKey(Speaker::Captain, p)) == 1);
+    std::printf("    %d missions checked\n", checked);
 }
 
-TEST(operations_are_winnable_by_the_combat_bot) {
-    // the same combat pilot that proves the 61 desert missions flies every location's
-    // operations (enemy AI fully enabled), assisted mode, F-22. SKY_OPS_ALL=1: all locations.
-    bool all = std::getenv("SKY_OPS_ALL") != nullptr;
-    std::vector<std::string> ids = all ? allLocationIds() : std::vector<std::string>{"desert", "matterhorn", "musandam", "aconcagua", "guilin"};
+TEST(campaign_is_winnable_over_other_locations) {
+    // The combat pilot that proves the desert campaign flies missions 4-61 over other locations
+    // (enemy AI fully enabled), assisted mode, F-22, up to 3 attempts each, and is compared with
+    // the same pilot in the Skyfall Desert: the bot is not a perfect pilot (it cannot fly the
+    // aerobatics of mission 5 and loses some of the big dogfights even in the desert), so the
+    // test counts the missions it wins in the desert but loses on the location. By default the
+    // desert and a sample (a high Alpine map without sea, a coastal map without a railway, the
+    // highest Academy map); SKY_CAMP_ALL=1 flies every location, SKY_CAMP_LOC=<id> one more.
+    const char* one = std::getenv("SKY_CAMP_LOC");
+    std::vector<std::string> ids = std::getenv("SKY_CAMP_ALL") ? allLocationIds()
+                                 : std::vector<std::string>{"desert", "matterhorn", "musandam", "aconcagua"};
+    if (one && std::string(one) != "desert") ids = {"desert", one};
+    std::set<int> desertWins;
     int won = 0, flown = 0;
     for (const std::string& id : ids) {
         World& w = world(id);
         std::printf("    %-13s", id.c_str());
-        for (int k = 1; k <= kOperationMissions; ++k) {
-            CampaignMissionDef d = buildOperation(k, *w.terrain, *w.layout);
+        std::vector<int> extra;
+        int locWon = 0;
+        for (int n = 4; n <= kCampaignMissions; ++n) {
+            CampaignMissionDef d = adaptCampaignMission(*campaignMission(n), *w.terrain, *w.layout);
+            Terrain& t = deckTerrain(w, d);
             int wins = 0;
             for (unsigned seed = 0; seed < 3 && wins == 0; ++seed) {
-                CombatBot bot(d, HandlingMode::Assisted, *w.terrain, w.layout.get(), -1, seed);
+                CombatBot bot(d, HandlingMode::Assisted, t, w.layout.get(), -1, seed);
                 if (bot.run(900.0)) ++wins;
-                else if (std::getenv("SKY_OPS_VERBOSE")) {
+                else if (std::getenv("SKY_CAMP_VERBOSE")) {
                     const FlightState& fs = bot.battle.player().fm->state();
-                    std::printf("\n      seed %u lost at %s t=%.0f hull %.0f crash %d (%s) pos %.0f %.0f %.0f agl %.0f", seed,
+                    std::printf("\n      M%d seed %u lost at %s t=%.0f hull %.0f crash %d (%s) pos %.0f %.0f %.0f agl %.0f", n, seed,
                                 bot.mission.current() ? bot.mission.current()->title.c_str() : "-", bot.time, bot.battle.player().health, fs.crashed ? 1 : 0,
                                 crashReasonText(fs.crashReason), fs.pos.x, fs.pos.y, fs.pos.z, fs.agl);
                 }
             }
+            w.terrain->clearDeck();
             ++flown;
             won += wins > 0;
-            // the two highest maps: the bot's ground attacks and dogfights in 5-8 km air are not
-            // good enough for these three (listed; any other loss fails the test)
-            bool known = (id == "everest" && (k == 7 || k == 9 || k == 10)) || (id == "aconcagua" && k == 10);
-            std::printf(" %d:%s", k, wins ? "won" : (known ? "lost(known)" : "LOST"));
-            if (!known) CHECK_MSG(wins > 0, "%s operation %d not won in 3 attempts", id.c_str(), k);
+            locWon += wins > 0;
+            if (id == "desert" && wins) desertWins.insert(n);
+            if (id != "desert" && !wins && desertWins.count(n)) extra.push_back(n);
+            std::printf("%s", wins ? "." : "X");
+            std::fflush(stdout);
+        }
+        std::printf("  %d/58", locWon);
+        if (!extra.empty()) {
+            std::printf("  lost beyond the desert:");
+            for (int n : extra) std::printf(" %d", n);
         }
         std::printf("\n");
+        if (id == "desert") continue;
+        // Everest (5-8.6 km terrain, not offered in the Academy) has its ground attacks between
+        // the highest peaks on Earth; listed in the README
+        const size_t allowed = id == "everest" ? 8 : 4;
+        CHECK_MSG(extra.size() <= allowed, "%s: %zu missions lost that the bot wins in the desert", id.c_str(), extra.size());
     }
-    std::printf("    %d/%d operations won\n", won, flown);
+    std::printf("    %d/%d missions won\n", won, flown);
 }
 
 TEST(bot_sweep_over_every_location) {
@@ -1079,7 +1156,7 @@ TEST(bot_sweep_over_every_location) {
     int ok = 0, n = 0;
     for (const std::string& id : allLocationIds())
         for (int lv = 1; lv <= kTrainingLevels; ++lv) {
-            if (lv == 10 && !locationIsCoastal(id)) continue;
+            if (lv == 10 && !academyLocationAllowed(id, 10)) continue;
             TrainingBot bot(world(id), lv, static_cast<AircraftId>(ac), static_cast<HandlingMode>(md));
             bool r = bot.run(40 * 60);
             ++n; ok += r;

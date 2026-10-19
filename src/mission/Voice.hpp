@@ -36,13 +36,16 @@ struct Briefing {
     std::vector<std::string> parts;       // the radio transmissions it is spoken in
     std::vector<std::string> objectives;  // HUD titles
 };
-Briefing makeBriefing(int missionNo);
+struct CampaignVariant;
+/// `v`: the world location's variant of the campaign (nullptr = the Skyfall Desert original).
+Briefing makeBriefing(int missionNo, const CampaignVariant* v = nullptr);
 
 /// Fixed radio calls.
 namespace lines {
 extern const char* const kTowerStartup;
 extern const char* const kInstructorStart;
 extern const char* const kTowerLanding;
+extern const char* const kTowerLanding27;
 extern const char* const kArenaStart;
 extern const char* const kRespawn;
 extern const char* const kTowerEngine;

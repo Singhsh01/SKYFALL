@@ -1,5 +1,7 @@
 #include "Mission.hpp"
 
+#include <cstdio>
+
 #include <algorithm>
 #include <cmath>
 
@@ -101,11 +103,12 @@ Mission makeMission01() {
     return Mission("M01", "COLD START & TAKEOFF", std::move(st));
 }
 
-Mission makeMission02() {
+Mission makeMission02(double off) {
+    // `off`: every height raised by this much on a high airfield (0 in the Skyfall Desert)
     std::vector<MissionStep> st;
     auto e = [](const MissionContext& c) { return toEuler(c.flight->q); };
     st.push_back({"STRAIGHT & LEVEL", "Wings level, hold altitude within 60 m for 4 seconds.", "",
-                  [e](const MissionContext& c) { return std::fabs(e(c).bank) < 8 * kDeg && std::fabs(c.flight->vel.y) < 4.0 && c.flight->pos.y > 900; }, 4.0, nullptr});
+                  [e, off](const MissionContext& c) { return std::fabs(e(c).bank) < 8 * kDeg && std::fabs(c.flight->vel.y) < 4.0 && c.flight->pos.y > 900 + off; }, 4.0, nullptr});
     st.push_back({"BANK LEFT 45", "Roll left to about 45 degrees of bank and hold it.", "LEFT ARROW",
                   [e](const MissionContext& c) { double b = e(c).bank / kDeg; return b < -35 && b > -60; }, 3.0,
                   [e](const MissionContext& c) { return clampd(-e(c).bank / (40 * kDeg), 0.0, 1.0); }});
@@ -118,11 +121,17 @@ Mission makeMission02() {
                       return std::fabs(h - 270.0) < 10.0 && std::fabs(e(c).bank) < 15 * kDeg;
                   }, 3.0,
                   [](const MissionContext& c) { return clampd(1.0 - std::fabs(compassHeadingDeg(c.flight->q) - 270.0) / 180.0, 0.0, 1.0); }});
-    st.push_back({"CLIMB TO 2000 M", "Pitch up and add power to climb through 2000 m.", "DOWN ARROW / W",
-                  [](const MissionContext& c) { return c.flight->pos.y >= 2000.0; }, 0.0,
-                  [](const MissionContext& c) { return clampd((c.flight->pos.y - 1200.0) / 800.0, 0.0, 1.0); }});
-    st.push_back({"LEVEL OFF", "Level off between 1900 and 2300 m: vertical speed under 3 m/s for 4 s.", "",
-                  [](const MissionContext& c) { return std::fabs(c.flight->vel.y) < 3.0 && c.flight->pos.y > 1900 && c.flight->pos.y < 2300; }, 4.0, nullptr});
+    const double top = 2000.0 + off;
+    char climbTitle[48], climbText[96], levelText[112];
+    if (off > 0) std::snprintf(climbTitle, sizeof climbTitle, "CLIMB 750 METRES");
+    else std::snprintf(climbTitle, sizeof climbTitle, "CLIMB TO 2000 M");
+    std::snprintf(climbText, sizeof climbText, "Pitch up and add power to climb through %.0f m.", top);
+    std::snprintf(levelText, sizeof levelText, "Level off between %.0f and %.0f m: vertical speed under 3 m/s for 4 s.", top - 100.0, top + 300.0);
+    st.push_back({climbTitle, climbText, "DOWN ARROW / W",
+                  [top](const MissionContext& c) { return c.flight->pos.y >= top; }, 0.0,
+                  [top](const MissionContext& c) { return clampd((c.flight->pos.y - (top - 800.0)) / 800.0, 0.0, 1.0); }});
+    st.push_back({"LEVEL OFF", levelText, "",
+                  [top](const MissionContext& c) { return std::fabs(c.flight->vel.y) < 3.0 && c.flight->pos.y > top - 100 && c.flight->pos.y < top + 300; }, 4.0, nullptr});
     st.push_back({"CRUISE POWER", "Set 60-80% throttle and hold 180-260 m/s for 3 s.", "W / S",
                   [](const MissionContext& c) { return c.flight->throttle > 0.54 && c.flight->throttle < 0.72 && c.flight->airspeed > 180 && c.flight->airspeed < 260; }, 3.0, nullptr});
     return Mission("M02", "FIRST SOLO FLIGHT", std::move(st));
@@ -130,9 +139,40 @@ Mission makeMission02() {
 
 double glidePathHeight(double d) { return std::max(0.0, d) * std::tan(3.0 * kDeg); }
 
-Mission makeMission03() {
+namespace {
+double segmentClearanceSimple(const Terrain& t, Vec3 a, Vec3 b) {
+    double len = std::hypot(b.x - a.x, b.z - a.z), worst = 1e9;
+    int n = std::max(2, static_cast<int>(len / 50.0));
+    for (int i = 0; i <= n; ++i) {
+        Vec3 p = a + (b - a) * (static_cast<double>(i) / n);
+        worst = std::min(worst, p.y - t.surfaceHeight(p.x, p.z));
+    }
+    return worst;
+}
+}  // namespace
+
+Vec3 landingThreshold(const RunwayInfo& rw, int dir) {
+    Vec3 f{std::cos(rw.heading) * dir, 0, std::sin(rw.heading) * dir};
+    return rw.center - f * (rw.length * 0.5 - 120.0);
+}
+
+Mission03Approach mission03Approach(const Terrain& t) {
+    const RunwayInfo& rw = t.runway();
+    // runway 09 (from the west) as in the desert; runway 27 where the terrain blocks it; the
+    // start moves closer in where the terrain cuts the glide path further out
+    for (int dir : {1, -1})
+        for (double d : {4800.0, 4000.0, 3200.0, 2500.0}) {
+            Vec3 th = landingThreshold(rw, dir);
+            Vec3 a{th.x - dir * d, rw.center.y + glidePathHeight(d), th.z};
+            Vec3 b{th.x - dir * 1000.0, rw.center.y + glidePathHeight(1000.0), th.z};
+            if (std::fabs(a.x) < 15500.0 && segmentClearanceSimple(t, a, b) > 25.0) return {dir, d};
+        }
+    return {1, 2500.0};
+}
+
+Mission makeMission03(int dir) {
     std::vector<MissionStep> st;
-    auto dist = [](const MissionContext& c) { return c.terrain->runway().threshold().x - c.flight->pos.x; };
+    auto dist = [dir](const MissionContext& c) { return (landingThreshold(c.terrain->runway(), dir).x - c.flight->pos.x) * dir; };
     st.push_back({"GEAR DOWN", "Lower the landing gear for the approach.", "G",
                   [](const MissionContext& c) { return c.flight->gearPos >= 1.0; }, 0.0,
                   [](const MissionContext& c) { return c.flight->gearPos; }});

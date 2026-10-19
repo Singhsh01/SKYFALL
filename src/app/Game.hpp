@@ -10,7 +10,6 @@
 #include "TerrainDownload.hpp"
 #include "../mission/Campaign.hpp"
 #include "../mission/Mission.hpp"
-#include "../mission/Operations.hpp"
 #include "../mission/Training.hpp"
 #include "../render/Lighting.hpp"
 #include "../render/Renderer.hpp"
@@ -40,7 +39,7 @@ struct Options {
     int quality = -1;
 };
 
-enum class Screen { Title, Campaign, Hangar, Settings, Playing, Paused, Help, Briefing, Locations, Academy, CampaignSelect };
+enum class Screen { Title, Campaign, Hangar, Settings, Playing, Paused, Help, Briefing, Locations, Academy };
 enum class GameMode { None, Mission01, Arena, Training };
 
 class Game {
@@ -137,14 +136,12 @@ private:
     std::string terrainPath(const std::string& id);
     double safeAltitude(Vec3 a, Vec3 b, double margin) const;
     void drawLocations();
-    const CampaignMissionDef* campaignDef_ = nullptr;   // missions 04-61, or a location operation
-    // ---- campaign selection: the original 61 missions or a location's Operations (Academy.cpp) ----
-    std::string opsLoc_;              // location whose operations list is open ("" = location list)
-    std::string opsLocation_;         // location of the running operation
-    CampaignMissionDef opsDef_;       // the running operation (built from the loaded terrain)
-    void drawCampaignSelect();
-    void startOperation(const std::string& loc, int k);
-    bool isOperation() const { return missionNo_ > 200; }
+    const CampaignMissionDef* campaignDef_ = nullptr;   // missions 04-61 (points at campDef_)
+    // ---- the campaign over any world location ----
+    CampaignMissionDef campDef_;      // the running mission, laid out on the loaded location
+    CampaignVariant campVariant_;     // what the loaded location offers (sea, carrier, railway)
+    std::string campaignLocation() const;          // chosen on the campaign screen ("desert" by default)
+    void setCampaignLocation(const std::string& id);
     // ---- Training Academy (Academy.cpp) ----
     TrainingSession training_;
     int acLevel_ = 1;                 // level focused in the academy menu

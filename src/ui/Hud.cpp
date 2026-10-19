@@ -1328,10 +1328,11 @@ void Hud::glidePath(const HudContext& c) {
     const FlightState& st = c.player->fm->state();
     const RunwayInfo& rw = c.runway;   // never construct a Terrain here: that rebuilds the whole eroded world
     float s = c.h / 720.0f;
-    double d = rw.threshold().x - st.pos.x;
+    const int dir = c.approachDir;
+    double d = (landingThreshold(rw, dir).x - st.pos.x) * dir;
     double hAbove = st.pos.y - rw.center.y;
     double dev = hAbove - glidePathHeight(d);          // + = above the path
-    double lat = st.pos.z - rw.center.z;               // + = right of centreline (south)
+    double lat = (st.pos.z - rw.center.z) * dir;       // + = right of centreline
     float cx = c.w * 0.5f, cy = c.h * 0.5f;
     float sx = cx + 150 * s, top = cy - 90 * s, hgt = 180 * s;
     for (int k = -2; k <= 2; ++k) DrawCircleLines(static_cast<int>(sx), static_cast<int>(cy + k * hgt / 4), 4 * s, kHudDim);

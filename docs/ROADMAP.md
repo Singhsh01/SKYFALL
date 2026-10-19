@@ -24,11 +24,12 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 | Camera shake slider, G-blackout toggle, FOV, UI scale, captions | ✅ | |
 | Virtual cockpit with moving stick/throttle, live displays | ✅ | 5 displays + conformal HUD |
 
-## Training Academy and location campaigns (v0.8)
+## Training Academy and the campaign on every location (v0.8)
 
 | Requirement | Status | Notes |
 |---|---|---|
-| Campaign selection: original 61 missions or any location's Operations | ✅ | 10 terrain-built missions per location, progress per location |
+| The 61-mission campaign over any location, with aircraft and paint choice | ✅ | fitted to each map's terrain; progress per location; bot-tested (see TRAINING.md) |
+| Modern paint schemes | ✅ | 16 schemes: 8 camouflages + 8 modern (counter-shaded, shard, display, metal, carbon) |
 | Academy: 10 levels, 8 aircraft, 3 handling modes, ~17 min (15.5-20 by estimate) | ✅ | Everest excluded; level 10 needs sea |
 | Briefing → takeoff → navigation → terrain → skills → refuel → landing / trap → debrief | ✅ | level 10 ends with a carrier trap |
 | No teleports; routes flyable by every aircraft | ✅ | autopilot test: 239 / 240 on the recommended locations |

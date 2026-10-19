@@ -1,6 +1,6 @@
 #include "Progress.hpp"
 
-#include "Operations.hpp"
+#include "Mission.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -14,7 +14,7 @@ std::string academyKey(int level, int aircraft) {
     std::snprintf(b, sizeof b, "academy_l%02d_a%d", level, aircraft);
     return b;
 }
-std::string opsKey(const std::string& loc) { return "ops_" + loc; }
+std::string campKey(const std::string& loc) { return "campaign_" + loc; }
 }  // namespace
 
 AcademyRecord academyRecord(const Settings& s, int level, int aircraft) {
@@ -62,24 +62,24 @@ bool academyUnlocked(const Settings& s, int level) {
     return academyBestMedal(s, level - 1) >= static_cast<int>(Medal::Bronze);
 }
 
-bool operationCompleted(const Settings& s, const std::string& loc, int k) {
-    auto it = s.extra.find(opsKey(loc));
-    if (it == s.extra.end() || k < 1 || k > static_cast<int>(it->second.size())) return false;
-    return it->second[k - 1] == '1';
+bool campaignCompletedAt(const Settings& s, const std::string& loc, int n) {
+    if (loc.empty() || loc == "desert") return s.missionCompleted(n);
+    auto it = s.extra.find(campKey(loc));
+    if (it == s.extra.end() || n < 1 || n > static_cast<int>(it->second.size())) return false;
+    return it->second[n - 1] == '1';
 }
 
-void markOperationCompleted(Settings& s, const std::string& loc, int k) {
-    std::string& v = s.extra[opsKey(loc)];
-    if (v.size() < static_cast<size_t>(kOperationMissions)) v.resize(kOperationMissions, '0');
-    if (k >= 1 && k <= kOperationMissions) v[k - 1] = '1';
+void markCampaignCompletedAt(Settings& s, const std::string& loc, int n) {
+    if (loc.empty() || loc == "desert") { s.markCompleted(n); return; }
+    std::string& v = s.extra[campKey(loc)];
+    if (v.size() < static_cast<size_t>(kCampaignMissions)) v.resize(kCampaignMissions, '0');
+    if (n >= 1 && n <= kCampaignMissions) v[n - 1] = '1';
 }
 
-int operationsCompleted(const Settings& s, const std::string& loc) {
-    int n = 0;
-    for (int k = 1; k <= kOperationMissions; ++k) n += operationCompleted(s, loc, k) ? 1 : 0;
-    return n;
+int campaignCountAt(const Settings& s, const std::string& loc) {
+    int c = 0;
+    for (int n = 1; n <= kCampaignMissions; ++n) c += campaignCompletedAt(s, loc, n) ? 1 : 0;
+    return c;
 }
-
-bool operationUnlocked(const Settings& s, const std::string& loc, int k) { return k <= 1 || operationCompleted(s, loc, k - 1); }
 
 }  // namespace sky
