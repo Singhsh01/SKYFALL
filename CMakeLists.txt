@@ -107,7 +107,14 @@ if(SKYFALL_BUILD_GAME)
     # (older Emscripten HTML minifiers are fragile).
     set_target_properties(skyfall PROPERTIES SUFFIX ".js")
     file(READ ${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html SKYFALL_SHELL)
-    string(REPLACE "{{{ SCRIPT }}}" "<script async src=\"skyfall.js\"></script>" SKYFALL_SHELL "${SKYFALL_SHELL}")
+    # build version (git commit, else the configure time) appended to the file URLs: cache busting
+    execute_process(COMMAND git rev-parse --short HEAD WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                    OUTPUT_VARIABLE SKYFALL_WEB_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(NOT SKYFALL_WEB_VERSION)
+      string(TIMESTAMP SKYFALL_WEB_VERSION "%Y%m%d%H%M%S")
+    endif()
+    string(REPLACE "{{{ SCRIPT }}}" "<script async src=\"skyfall.js?v=${SKYFALL_WEB_VERSION}\"></script>" SKYFALL_SHELL "${SKYFALL_SHELL}")
+    string(REPLACE "{{{ VERSION }}}" "${SKYFALL_WEB_VERSION}" SKYFALL_SHELL "${SKYFALL_SHELL}")
     file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/index.html "${SKYFALL_SHELL}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html)
     target_link_options(skyfall PRIVATE
