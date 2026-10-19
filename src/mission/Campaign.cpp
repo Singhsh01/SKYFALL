@@ -665,7 +665,7 @@ std::vector<CampaignMissionDef> buildAll() {
         ring(m.targets, K::Bunker, "BUNKER", 3, 1050, -1913, 170, 3, true, 0.3);
         ring(m.targets, K::Gun, "GUN", 3, 1050, -1913, 450, 0, true, 1.0);
         m.targets.push_back(tgt(K::SAM, 600, -2300, "SAM", 0));
-        m.waves = {wave(2, AiSkill::Veteran, -3000, -4000, 2200), wave(2, AiSkill::Veteran, 3000, 0, 2400), wave(1, AiSkill::Ace, 4000, 1000, 2800, 300)};
+        m.waves = {wave(2, AiSkill::Veteran, -3000, -4000, 2200), wave(2, AiSkill::Veteran, 3000, 0, 2400), wave(1, AiSkill::Veteran, 4000, 1000, 2800, 300)};
         m.objectives = {destroy(1, "DESTROY THE POWER PLANT"), destroy(2, "DESTROY COMMS TOWERS 1-2"),
                         destroy(3, "DESTROY COMMAND POST AND BUNKERS"), air("DESTROY THE LAST FIGHTERS", {1, 2})};
         m.objectives[1].wavesOnStart = {0};

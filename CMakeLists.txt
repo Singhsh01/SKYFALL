@@ -35,6 +35,11 @@ add_library(skyfall_core STATIC
   src/app/Settings.cpp
 )
 target_include_directories(skyfall_core PUBLIC src)
+# Same floating-point results on every compiler: Clang (macOS, arm64) would otherwise fuse
+# multiply-adds where GCC does not, and the simulation (bots, replays) would drift apart.
+if(NOT MSVC)
+  target_compile_options(skyfall_core PUBLIC -ffp-contract=off)
+endif()
 find_package(Threads REQUIRED)
 target_link_libraries(skyfall_core PUBLIC Threads::Threads)
 if(MSVC)
