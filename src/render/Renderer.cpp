@@ -326,6 +326,8 @@ void Renderer::shutdown() {
     for (Mesh* m : {&gun_, &artillery_, &oilRig_, &fuelTank_, &hangar_, &command_, &ship_, &powerPlant_, &refinery_, &bridgeDeck_,
                     &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_, &carrier_})
         UnloadMesh(*m);
+    if (obstacleMeshValid_) UnloadMesh(obstacleMesh_);
+    if (ringMesh_.vertexCount) { UnloadMesh(ringMesh_); UnloadMesh(beaconMesh_); }
     for (Prog* p : {&sky_, &terrain_p_, &water_, &lit_, &jet_, &flameP_, &cloud_, &runway_, &particle_, &bright_, &blur_, &composite_})
         UnloadShader(p->sh);
     freeTarget(scene_); freeTarget(bloomA_); freeTarget(bloomB_); freeTarget(bloomC_); freeTarget(bloomD_);
@@ -692,8 +694,14 @@ void Renderer::buildCarrier() {
     }
     // foul line and arresting-wire area
     stripe({-90, -24}, {-60, 24}, 0.35f, yellow);
-    for (int w = 0; w < 4; ++w) stripe(Vector2Add(Vector2Lerp(la0, la1, 0.18f + w * 0.035f), Vector2Scale(nx, 11)),
-                                       Vector2Subtract(Vector2Lerp(la0, la1, 0.18f + w * 0.035f), Vector2Scale(nx, 11)), 0.15f, {20, 20, 20, 255});
+    {
+        const DeckInfo wires;   // the arresting wires at the same distances the flight model uses
+        float len = Vector2Length(Vector2Subtract(la1, la0));
+        for (int w = 0; w < 4; ++w) {
+            float f = static_cast<float>(wires.wireT[w]) / len;
+            stripe(Vector2Add(Vector2Lerp(la0, la1, f), Vector2Scale(nx, 11)), Vector2Subtract(Vector2Lerp(la0, la1, f), Vector2Scale(nx, 11)), 0.15f, {20, 20, 20, 255});
+        }
+    }
     // bow catapults (cat 1 is the player's: on the deck axis), shuttle tracks and hold-back lines
     for (float cz : {0.0f, -13.0f}) {
         stripe({40, cz}, {150, cz}, 0.35f, {24, 24, 26, 255});
@@ -748,6 +756,188 @@ void Renderer::drawCarrier(const FrameParams& f) {
         Matrix L = MatrixMultiply(MatrixRotateY(sp[2]), MatrixTranslate(sp[0], 2.35f, sp[1]));
         drawJetModel(AirframeStyle::StealthSingle, MatrixMultiply(L, M), {0.32f, 0.34f, 0.36f}, {0.26f, 0.28f, 0.30f}, 0, 1, 0, 0, 0, 0, 0, f, true);
     }
+}
+
+// ------------------------------------------------------------------------------------------
+// Training Academy: course obstacles (rock pillars, natural arches, lattice masts, a suspension
+// bridge) built as one static mesh that matches the collision shapes in Terrain, and gate rings
+// ------------------------------------------------------------------------------------------
+void Renderer::rebuildObstacles() {
+    if (obstacleMeshValid_) { UnloadMesh(obstacleMesh_); obstacleMeshValid_ = false; }
+    mastLights_.clear();
+    obstacleVer_ = terrain_ ? terrain_->obstacleVersion() : -1;
+    if (!terrain_ || terrain_->obstacles().empty()) return;
+    MeshBuilder m;
+    const std::string& locId = terrain_->info().id;
+    const bool redRock = locId == "grand_canyon";
+    const bool karst = locId == "guilin";
+    auto rockCol = [&](unsigned seed, int k, Biome b) {
+        Rng r(seed * 977u + k * 131u + 7u);
+        int v = static_cast<int>(r.range(-14, 14));
+        Color base = b == Biome::Desert || redRock ? Color{176, 120, 82, 255} : karst ? Color{150, 152, 140, 255}
+                                                                              : Color{122, 118, 110, 255};
+        return Color{static_cast<unsigned char>(std::clamp(base.r + v, 0, 255)), static_cast<unsigned char>(std::clamp(base.g + v, 0, 255)),
+                     static_cast<unsigned char>(std::clamp(base.b + v, 0, 255)), 255};
+    };
+    Biome biome = terrain_->info().biome;
+    for (const Obstacle& o : terrain_->obstacles()) {
+        Vector3 base = toRl(o.pos);
+        switch (o.kind) {
+            case Obstacle::Kind::Pillar: {
+                // stacked, slightly offset rock drums that taper like the collision cylinder
+                const int seg = 7;
+                Rng r(o.seed + 11u);
+                float y0 = -60.0f;
+                for (int k = 0; k < seg; ++k) {
+                    float y1 = static_cast<float>(o.height) * (k + 1) / seg;
+                    float t0 = std::clamp(y0 / static_cast<float>(o.height), 0.0f, 1.0f), t1 = y1 / static_cast<float>(o.height);
+                    float r0 = static_cast<float>(o.radius) * (1.0f - 0.22f * t0), r1 = static_cast<float>(o.radius) * (1.0f - 0.22f * t1);
+                    float jx = static_cast<float>(r.range(-0.06, 0.06) * o.radius), jz = static_cast<float>(r.range(-0.06, 0.06) * o.radius);
+                    m.cylinder({base.x + jx, base.y + y0, base.z + jz}, r0 * 1.02f, y1 - y0, 14, rockCol(o.seed, k, biome), MatrixIdentity(), r1 * 1.02f);
+                    y0 = y1;
+                }
+                // a cap of scrub on top
+                m.cylinder({base.x, base.y + static_cast<float>(o.height), base.z}, static_cast<float>(o.radius) * 0.8f, 6.0f, 12, Color{70, 96, 52, 255},
+                           MatrixIdentity(), static_cast<float>(o.radius) * 0.3f);
+                break;
+            }
+            case Obstacle::Kind::Arch: {
+                float c = std::cos(static_cast<float>(o.heading)), sn = std::sin(static_cast<float>(o.heading));
+                float half = static_cast<float>(o.span) * 0.5f, rad = static_cast<float>(o.radius);
+                for (int side = -1; side <= 1; side += 2) {
+                    Vector3 leg = {base.x + c * half * side, base.y - 60.0f, base.z + sn * half * side};
+                    m.cylinder(leg, rad * 1.05f, static_cast<float>(o.height) + 60.0f - static_cast<float>(o.thickness) * 0.5f, 14, rockCol(o.seed, side + 3, biome),
+                               MatrixIdentity(), rad * 0.85f);
+                }
+                // the span: a box along the span axis at the top (collision: |u| <= half + r, |v| <= 0.9 r)
+                Matrix R = MatrixRotateY(-static_cast<float>(o.heading));
+                Matrix T = MatrixTranslate(base.x, base.y + static_cast<float>(o.height - o.thickness * 0.5), base.z);
+                m.box({0, 0, 0}, {2.0f * (half + rad), static_cast<float>(o.thickness), 1.8f * rad}, rockCol(o.seed, 9, biome), MatrixMultiply(R, T));
+                m.box({0, static_cast<float>(o.thickness) * 0.5f + 3.0f, 0}, {2.0f * (half + rad) * 0.8f, 6.0f, 1.5f * rad}, Color{74, 98, 56, 255}, MatrixMultiply(R, T));
+                break;
+            }
+            case Obstacle::Kind::Mast: {
+                // red/white banded lattice mast with guy-wire anchors and a beacon on top
+                const int bands = 8;
+                float H = static_cast<float>(o.height), rad = static_cast<float>(o.radius);
+                for (int k = 0; k < bands; ++k) {
+                    float y0 = H * k / bands - (k == 0 ? 60.0f : 0.0f), y1 = H * (k + 1) / bands;
+                    Color col = (k % 2 == 0) ? Color{205, 64, 52, 255} : Color{232, 232, 228, 255};
+                    m.cylinder({base.x, base.y + y0, base.z}, rad, y1 - y0, 4, col, MatrixIdentity(), rad);
+                }
+                for (int k = 0; k < 3; ++k) {
+                    float a = 2.0f * PI * k / 3.0f;
+                    m.box({base.x + std::cos(a) * H * 0.35f, base.y + 1.0f, base.z + std::sin(a) * H * 0.35f}, {3, 2, 3}, Color{140, 140, 136, 255});
+                }
+                mastLights_.push_back({base.x, base.y + H + 2.0f, base.z});
+                break;
+            }
+            case Obstacle::Kind::Deck: {
+                // suspension bridge: deck slab (collision box) between two towers
+                Matrix R = MatrixRotateY(-static_cast<float>(o.heading));
+                float half = static_cast<float>(o.span) * 0.5f;
+                Matrix T = MatrixTranslate(base.x, base.y + static_cast<float>(o.height + o.thickness * 0.5), base.z);
+                m.box({0, 0, 0}, {static_cast<float>(o.span), static_cast<float>(o.thickness), static_cast<float>(o.width)}, Color{150, 146, 138, 255}, MatrixMultiply(R, T));
+                m.box({0, static_cast<float>(o.thickness) * 0.5f + 0.6f, 0}, {static_cast<float>(o.span), 1.2f, static_cast<float>(o.width) * 0.8f}, Color{60, 60, 62, 255},
+                      MatrixMultiply(R, T));
+                float topY = static_cast<float>(o.height + o.thickness) + 70.0f;
+                float c = std::cos(static_cast<float>(o.heading)), sn = std::sin(static_cast<float>(o.heading));
+                for (int side = -1; side <= 1; side += 2) {
+                    Vector3 tw = {base.x + c * half * side, base.y - 60.0f, base.z + sn * half * side};
+                    m.cylinder(tw, static_cast<float>(o.radius), topY + 60.0f, 8, Color{190, 70, 52, 255}, MatrixIdentity(), static_cast<float>(o.radius) * 0.7f);
+                    mastLights_.push_back({tw.x, base.y + topY + 2.0f, tw.z});
+                }
+                // main cables: sagging chain of thin boxes from tower top to tower top
+                const int n = 16;
+                for (int k = 0; k < n; ++k) {
+                    float u0 = -half + o.span * k / n, u1 = -half + o.span * (k + 1) / n;
+                    auto ch = [&](float u) { float t = u / half; return static_cast<float>(o.height + o.thickness) + 4.0f + 66.0f * t * t; };
+                    for (int lane = -1; lane <= 1; lane += 2) {
+                        float v = static_cast<float>(o.width) * 0.5f * lane;
+                        Vector3 a = {base.x + c * u0 - sn * v, base.y + ch(u0), base.z + sn * u0 + c * v};
+                        Vector3 b = {base.x + c * u1 - sn * v, base.y + ch(u1), base.z + sn * u1 + c * v};
+                        Vector3 mid = Vector3Scale(Vector3Add(a, b), 0.5f);
+                        Vector3 d = Vector3Subtract(b, a);
+                        float L = Vector3Length(d);
+                        Matrix RR = MatrixMultiply(MatrixRotateZ(std::atan2(d.y, std::hypot(d.x, d.z))), MatrixRotateY(-std::atan2(d.z, d.x)));
+                        m.box({0, 0, 0}, {L, 0.8f, 0.8f}, Color{60, 60, 64, 255}, MatrixMultiply(RR, MatrixTranslate(mid.x, mid.y, mid.z)));
+                    }
+                }
+                break;
+            }
+        }
+    }
+    obstacleMesh_ = m.build();
+    obstacleMeshValid_ = true;
+}
+
+void Renderer::drawObstacles(const FrameParams& f) {
+    if (!terrain_) return;
+    if (terrain_->obstacleVersion() != obstacleVer_) rebuildObstacles();
+    if (!obstacleMeshValid_) return;
+    setAtmosphere(lit_, f);
+    lit_.setF("uEmissive", 0.0f);
+    lit_.setF("uSpecular", 0.12f);
+    lit_.setF("uFogOn", 1.0f);
+    litMat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    drawMeshC(obstacleMesh_, litMat_, MatrixIdentity());
+    ++drawCalls_;
+    // aircraft-warning beacons on masts and bridge towers (blinking)
+    bool on = std::fmod(f.time, 1.4) < 0.7;
+    if (on)
+        for (const Vector3& p : mastLights_)
+            if (Vector3Distance(p, f.cam.position) < 15000.0f) lights_.push_back({p, 5.0f, Color{255, 60, 40, 255}});
+}
+
+void Renderer::drawGates(const FrameParams& f) {
+    if (!f.gates || f.gates->empty()) return;
+    if (ringMesh_.vertexCount == 0) {
+        // unit ring in the YZ plane (normal +X): square-section torus
+        MeshBuilder m;
+        const int seg = 48;
+        const float r0 = 0.94f, r1 = 1.0f, hw = 0.03f;
+        for (int i = 0; i < seg; ++i) {
+            float a0 = 2 * PI * i / seg, a1 = 2 * PI * (i + 1) / seg;
+            auto P = [&](float a, float r, float x) { return Vector3{x, std::cos(a) * r, std::sin(a) * r}; };
+            Color c = WHITE;
+            m.quad(P(a0, r1, -hw), P(a1, r1, -hw), P(a1, r1, hw), P(a0, r1, hw), c);   // outer
+            m.quad(P(a0, r0, hw), P(a1, r0, hw), P(a1, r0, -hw), P(a0, r0, -hw), c);   // inner
+            m.quad(P(a0, r0, -hw), P(a1, r0, -hw), P(a1, r1, -hw), P(a0, r1, -hw), c); // back face
+            m.quad(P(a0, r1, hw), P(a1, r1, hw), P(a1, r0, hw), P(a0, r0, hw), c);     // front face
+        }
+        ringMesh_ = m.build();
+        MeshBuilder b;
+        b.box({0, 0, 0}, {1, 1, 1}, WHITE);
+        beaconMesh_ = b.build();
+    }
+    setAtmosphere(lit_, f);
+    lit_.setF("uSpecular", 0.0f);
+    lit_.setF("uFogOn", 0.0f);
+    for (const GateMarker& g : *f.gates) {
+        float r = std::max(g.radius, 12.0f);
+        // keep the ring visibly thick at distance (at least ~2 px)
+        float dist = Vector3Distance(toRl(g.pos), f.cam.position);
+        float thick = std::max(1.0f, dist / (r * 380.0f));
+        Matrix S = MatrixScale(thick, r, r);
+        Matrix R = MatrixRotateY(-static_cast<float>(std::atan2(g.dir.z, g.dir.x)));
+        Matrix T = MatrixTranslate(static_cast<float>(g.pos.x), static_cast<float>(g.pos.y), static_cast<float>(g.pos.z));
+        lit_.setF("uEmissive", g.glow);
+        litMat_.maps[MATERIAL_MAP_DIFFUSE].color = g.color;
+        drawMeshC(ringMesh_, litMat_, MatrixMultiply(MatrixMultiply(S, R), T));
+        ++drawCalls_;
+    }
+    if (f.corridor) {
+        lit_.setF("uEmissive", 1.6f);
+        litMat_.maps[MATERIAL_MAP_DIFFUSE].color = Color{255, 220, 120, 255};
+        for (const Vec3& p : *f.corridor) {
+            float dist = Vector3Distance(toRl(p), f.cam.position);
+            float k = std::clamp(dist / 110.0f, 2.5f, 30.0f);   // a few pixels at any range
+            drawMeshC(beaconMesh_, litMat_, MatrixMultiply(MatrixScale(k, k, k), MatrixTranslate(static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z))));
+        }
+    }
+    lit_.setF("uEmissive", 0.0f);
+    lit_.setF("uFogOn", 1.0f);
+    litMat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
 }
 
 void Renderer::drawRain(const FrameParams& f) {
@@ -1509,6 +1699,7 @@ void Renderer::renderWorld(const FrameParams& f) {
     drawStatics(f);
     if (pm) profMark("scenery");
     drawCarrier(f);
+    drawObstacles(f);
     drawGroundTargets(f);
     if (pm) profMark("targets");
     if (f.battle) {
@@ -1564,6 +1755,7 @@ void Renderer::renderWorld(const FrameParams& f) {
     if (f.battle)
         effects_.draw(f.cam, *f.battle, f.L, particle_.sh, particle_.loc("uIntensity"), world_.edgeLights, f.showRunwayLights);
     if (pm) profMark("particles");
+    drawGates(f);
     drawLightSprites(f);
     drawRain(f);
     EndMode3D();

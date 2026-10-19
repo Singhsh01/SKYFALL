@@ -1,4 +1,6 @@
 #include "Voice.hpp"
+#include "Operations.hpp"
+#include "Training.hpp"
 
 #include "../sim/Locations.hpp"
 #include "Campaign.hpp"
@@ -169,6 +171,9 @@ std::vector<VoiceLine> allVoiceLines() {
     add(Speaker::Wingman, kMissileSix);
     for (const char* t : kKills) add(Speaker::Wingman, t);
     for (const auto& l : locations()) add(Speaker::Tower, freeFlightLine(l.name));
+    // Training Academy instructor / tower / lead / tanker, and every location's Operations
+    for (const VoiceLine& l : trainingVoiceLines()) add(l.who, l.text);
+    for (const VoiceLine& l : operationVoiceLines()) add(l.who, l.text);
     return v;
 }
 

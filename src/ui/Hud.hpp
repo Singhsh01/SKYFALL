@@ -9,6 +9,7 @@
 #include "../combat/Combat.hpp"
 #include "../mission/Campaign.hpp"
 #include "../mission/Mission.hpp"
+#include "../mission/Training.hpp"
 #include "../telemetry/FrameStats.hpp"
 #include "raylib.h"
 
@@ -64,6 +65,13 @@ struct HudContext {
     DeckInfo deck{};                 // aircraft carrier (inactive unless a carrier mission)
     const CampaignMissionDef* campaign = nullptr;
     bool showGlidePath = false;
+    // Training Academy
+    const TrainingSession* training = nullptr;
+    bool trainingDone = false;
+    const ScoreCard* trainingResult = nullptr;
+    bool trainingNewBest = false;
+    std::string trainingTitle;          // "LEVEL 4  OBSTACLE MANOEUVRING"
+    std::string trainingNext;           // prompt under the debrief card
 };
 
 class Hud {
@@ -87,6 +95,10 @@ private:
     void glidePath(const HudContext& c);
     void objectiveMarkers(const HudContext& c);
     void refuelCues(const HudContext& c);
+    void trainingPanel(const HudContext& c);
+    void trainingMarkers(const HudContext& c);
+    void trainingApproach(const HudContext& c);
+    void trainingDebrief(const HudContext& c);
     void minimalSymbology(const HudContext& c);
     void hintsBar(const HudContext& c);
     void pipPanel(const HudContext& c);

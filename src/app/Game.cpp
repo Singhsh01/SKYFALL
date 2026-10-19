@@ -3,6 +3,7 @@
 #endif
 #include "Game.hpp"
 #include "../sim/Locations.hpp"
+#include "../mission/Progress.hpp"
 #include "../render/Skins.hpp"
 
 #include "../render/Convert.hpp"
@@ -467,7 +468,7 @@ void Game::drawLocations() {
     }
     if (ui::button(nav_, n + 2, {ax, ay + 108 * s, aw, 40 * s}, "BACK") || in.back) {
         if (locReturn_ == Screen::Settings) { screen_ = Screen::Settings; nav_.focus = 21; locReturn_ = Screen::Title; return; }
-        startTitle(); nav_.focus = 2; return;
+        startTitle(); nav_.focus = 3; return;
     }
     // map downloads
     int missing = 0;
@@ -548,6 +549,9 @@ void Game::startTitle() {
     mode_ = GameMode::None;
     mission_.reset();
     terrain_.clearDeck();
+    terrain_.clearObstacles();
+    gateMarkers_.clear();
+    corridor_.clear();
     rain_ = false;
     tod_ = TimeOfDay::GoldenHour;
     lighting_ = Lighting::preset(tod_);
@@ -569,7 +573,10 @@ void Game::startTitle() {
 
 void Game::startMission(int n) {
     TraceLog(LOG_INFO, "SKYFALL: start mission %d", n);
-    if (terrain_.info().id != "desert") {
+    terrain_.clearObstacles();
+    gateMarkers_.clear();
+    corridor_.clear();
+    if (n <= kCampaignMissions && terrain_.info().id != "desert") {
         // the campaign is set in the Skyfall Desert: switch first (next frame), then start
         switchTo_ = "desert";
         switchMission_ = n;
@@ -580,6 +587,12 @@ void Game::startMission(int n) {
     mode_ = GameMode::Mission01;   // "guided mission" mode
     missionNo_ = n;
     campaignDef_ = n >= 4 ? campaignMission(n) : nullptr;
+    if (n > 200) {
+        // a location operation: built from the terrain that is loaded now
+        opsLocation_ = terrain_.info().id;
+        opsDef_ = buildOperation(n - 200, terrain_, layout_);
+        campaignDef_ = &opsDef_;
+    }
     director_ = CampaignDirector{};
     tod_ = n == 3 ? TimeOfDay::Noon : TimeOfDay::Morning;
     if (campaignDef_) tod_ = campaignDef_->timeOfDay == 1 ? TimeOfDay::GoldenHour : campaignDef_->timeOfDay == 2 ? TimeOfDay::Noon
@@ -650,7 +663,7 @@ void Game::queueRadio(Speaker who, const std::string& text, bool front) {
 
 void Game::queueBriefing(int missionNo) {
     // the pilot is already in the cockpit; operations briefs over the radio, in short calls
-    Briefing br = makeBriefing(missionNo);
+    Briefing br = missionNo > 200 ? operationBriefing(opsLocation_, missionNo - 200) : makeBriefing(missionNo);
     for (auto it = br.parts.rbegin(); it != br.parts.rend(); ++it) queueRadio(Speaker::Captain, *it, true);
     camMode_ = CameraMode::Cockpit;
     chaseInit_ = false;
@@ -674,6 +687,9 @@ void Game::updateRadioQueue() {
 void Game::startArena(bool keepPlayerState) {
     screen_ = Screen::Playing;
     mode_ = GameMode::Arena;
+    terrain_.clearObstacles();
+    gateMarkers_.clear();
+    corridor_.clear();
     if (!keepPlayerState) {
         terrain_.clearDeck();
         rain_ = false;
@@ -775,7 +791,13 @@ void Game::frame(double dt, bool render) {
         switchTo_.clear();
         switchMission_ = 0;
         bool ok = loadLocation(id, true);
-        if (mission > 0) { startMissionBriefed(mission); }
+        int training = pendingTraining_;
+        bool toAcademy = academyAfterSwitch_;
+        pendingTraining_ = 0;
+        academyAfterSwitch_ = false;
+        if (mission > 0) { if (ok) startMissionBriefed(mission); else { startTitle(); screen_ = Screen::CampaignSelect; } }
+        else if (training > 0) { if (ok) startTraining(training); else openAcademy(); }
+        else if (toAcademy) openAcademy();
         else if (ok) { startTitle(); screen_ = Screen::Locations; }
     }
     time_ += dt;
@@ -804,6 +826,7 @@ void Game::frame(double dt, bool render) {
         case Screen::Hangar: updateTitleScene(dt); break;
         case Screen::Briefing: updateBriefing(dt); break;
         case Screen::Locations: titleTime_ += dt; updateTitleScene(dt); break;
+        case Screen::Academy: case Screen::CampaignSelect: titleTime_ += dt; updateTitleScene(dt); break;
         default: break;
     }
     updateCamera(dt);
@@ -842,7 +865,7 @@ void Game::updateTitleScene(double dt) {
     // fly the lead aircraft straight and level; wingmen hold echelon positions
     int n = stepper_.advance(dt);
     for (int i = 0; i < n; ++i) battle_.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
-    if ((screen_ == Screen::Title || screen_ == Screen::Locations) && battle_.jets().size() >= 3) {
+    if ((screen_ == Screen::Title || screen_ == Screen::Locations || screen_ == Screen::Academy || screen_ == Screen::CampaignSelect) && battle_.jets().size() >= 3) {
         const FlightState& lead = battle_.player().fm->state();
         const Vec3 offs[2] = {{-28, -4, 24}, {-56, -8, 48}};
         for (int k = 0; k < 2; ++k) {
@@ -892,6 +915,7 @@ void Game::simulate(double dt, bool withPlayerInput) {
             else ci.roll = rollDir_;
         }
         if (mission_) {
+            if (mode_ == GameMode::Training) training_.update(missionContext(), battle_, mission_->stepIndex(), FlightModel::kDt);
             mission_->update(missionContext(), FlightModel::kDt);
             if (campaignDef_) director_.update(*mission_, battle_);
         }
@@ -908,6 +932,11 @@ void Game::updatePlaying(double dt) {
     if (in.help) showHelp_ = !showHelp_;
     if (in.camera) { camMode_ = nextCamera(camMode_); chaseInit_ = false; headYaw_ = headPitch_ = 0; }
     if (in.reset) {
+        if (mode_ == GameMode::Training) {
+            if (trainingDone_) startTraining(trainingLevel_);   // fly the level again
+            else retryTraining();
+            return;
+        }
         if (mode_ == GameMode::Mission01 && !missionDone_) { startMission(missionNo_); return; }
         respawnPlayer();
     }
@@ -937,6 +966,12 @@ void Game::updatePlaying(double dt) {
         }
         if (in.barrelRoll != 0 && rollDir_ == 0 && !fm.state().onGround) { rollDir_ = in.barrelRoll; rollDone_ = 0; }
     }
+    if (mode_ == GameMode::Training && trainingDone_ && in.confirm) { openAcademy(); return; }
+    if (mode_ == GameMode::Mission01 && missionDone_ && in.confirm && isOperation()) {
+        if (missionNo_ - 200 < kOperationMissions) startMissionBriefed(missionNo_ + 1);
+        else { startTitle(); screen_ = Screen::CampaignSelect; opsLoc_ = opsLocation_; nav_.focus = 0; }
+        return;
+    }
     if (mode_ == GameMode::Mission01 && missionDone_ && in.confirm) {
         if (missionNo_ < kCampaignMissions) {
             startMissionBriefed(missionNo_ + 1);
@@ -953,9 +988,10 @@ void Game::updatePlaying(double dt) {
         simMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     }
     processEvents();
+    if (mode_ == GameMode::Training) updateTrainingFrame(dt);
 
     // mission narration / completion
-    if (mission_) {
+    if (mission_ && mode_ == GameMode::Mission01) {
         size_t idx = mission_->stepIndex();
         if (missionNo_ != 1) radioStage_ = 99;
         if (radioStage_ == 0 && idx >= 1) { radio(Speaker::Tower, lines::kTowerEngine, 5); audio_.play(Sfx::Radio); radioStage_ = 1; }
@@ -970,7 +1006,8 @@ void Game::updatePlaying(double dt) {
         }
         if (mission_->status() == MissionStatus::Complete && !missionDone_) {
             missionDone_ = true;
-            settings_.markCompleted(missionNo_);
+            if (isOperation()) markOperationCompleted(settings_, opsLocation_, missionNo_ - 200);
+            else settings_.markCompleted(missionNo_);
             settings_.save(settingsPath_);
             if (campaignDef_) radio(Speaker::Awacs, campaignDef_->debrief, 9);
             else if (missionNo_ == 1) radio(Speaker::Tower, lines::kTowerDone1, 9);
@@ -992,6 +1029,7 @@ void Game::updatePlaying(double dt) {
     if (!p.alive && !playerDead_) {
         playerDead_ = true;
         deathReason_ = fm.state().crashReason == CrashReason::Destroyed ? "SHOT DOWN" : crashReasonText(fm.state().crashReason);
+        if (mode_ == GameMode::Training && !trainingCrashNoted_) { training_.notifyCrash(); trainingCrashNoted_ = true; }
         if (mode_ == GameMode::Mission01) {
             deathReason_ = "MISSION FAILED: " + deathReason_;
             if (!capturing_) speech_.say(Speaker::Awacs, lines::kLost, true);
@@ -1251,6 +1289,10 @@ FrameParams Game::makeFrameParams() {
     f.bloom = settings_.bloom;
     f.quality = settings_.quality;
     f.shadowFocus = toRl(battle_.player().fm->state().pos);
+    if (mode_ == GameMode::Training && (screen_ == Screen::Playing || screen_ == Screen::Paused)) {
+        f.gates = &gateMarkers_;
+        if (corridorOn()) f.corridor = &corridor_;
+    }
     if (rain_) {
         f.rain = 1.0f;
         Vec3 v = battle_.player().fm->state().vel;
@@ -1355,7 +1397,16 @@ void Game::renderFrame() {
         hc.deathReason = deathReason_;
         hc.respawnTimer = respawnTimer_;
         hc.missionDone = missionDone_;
-        if (missionNo_ < kCampaignMissions) {
+        if (isOperation()) {
+            int k = missionNo_ - 200;
+            if (k < kOperationMissions) {
+                std::string t = operationTemplates()[k].title;
+                for (char& ch : t) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+                hc.missionNext = "PRESS ENTER FOR OPERATION " + std::to_string(k + 1) + ": " + t;
+            } else {
+                hc.missionNext = "OPERATIONS COMPLETE  -  PRESS ENTER";
+            }
+        } else if (missionNo_ < kCampaignMissions) {
             const auto& cat = campaignCatalogue();
             std::string nextTitle = cat[missionNo_].title;
             for (char& ch : nextTitle) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
@@ -1380,6 +1431,17 @@ void Game::renderFrame() {
         hc.replayT = replayT_; hc.replayFrom = replayFrom_; hc.replayTo = replayTo_; hc.deathTime = deathTime_;
         hc.loss = &lossReport_;
         hc.gamepad = input_.gamepadConnected();
+        if (mode_ == GameMode::Training && mission_) {
+            hc.training = &training_;
+            hc.trainingDone = trainingDone_;
+            hc.trainingResult = &trainingResult_;
+            hc.trainingNewBest = trainingNewBest_;
+            hc.trainingTitle = "LEVEL " + std::to_string(trainingLevel_) + "  " + trainingLevel(trainingLevel_).title;
+            for (char& ch : hc.trainingTitle) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            hc.trainingNext = "ENTER  BACK TO THE ACADEMY      R  FLY IT AGAIN";
+            hc.campaign = nullptr;
+            hc.showGlidePath = false;
+        }
         auto th = std::chrono::steady_clock::now();
         hud_.draw(hc);
         renderer_.profMark("hud");
@@ -1416,6 +1478,8 @@ void Game::drawMenus() {
         case Screen::Paused: drawPause(); break;
         case Screen::Briefing: drawBriefing(); break;
         case Screen::Locations: drawLocations(); break;
+        case Screen::Academy: drawAcademy(); break;
+        case Screen::CampaignSelect: drawCampaignSelect(); break;
         default: break;
     }
 }
@@ -1427,19 +1491,21 @@ void Game::drawTitle() {
     // left gradient for legibility
     DrawRectangleGradientH(0, 0, static_cast<int>(w * 0.55f), static_cast<int>(h), Color{0, 0, 0, 170}, Color{0, 0, 0, 0});
     ui::logo(70 * s, 70 * s, s, titleTime_);
-    nav_.begin(6, in.up, in.down, in.confirm, in.left, in.right);
-    float x = 70 * s, y = 236 * s, bw = 430 * s, bh = 50 * s, gap = 9 * s;
-    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "61 missions: training, strikes, refuelling, carrier ops")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; nav_.focus = 0; return; }
+    nav_.begin(7, in.up, in.down, in.confirm, in.left, in.right);
+    float x = 70 * s, y = 222 * s, bw = 430 * s, bh = 48 * s, gap = 8 * s;
+    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "The original 61 missions, or Operations on any world location")) { audio_.play(Sfx::Click); screen_ = Screen::CampaignSelect; opsLoc_.clear(); nav_.focus = 0; return; }
     y += bh + gap;
-    if (ui::button(nav_, 1, {x, y, bw, bh}, "DOGFIGHT ARENA", "Bandit waves over " + terrain_.info().name)) { audio_.play(Sfx::Click); startArenaBriefed(); return; }
+    if (ui::button(nav_, 1, {x, y, bw, bh}, "TRAINING ACADEMY", "10 graded courses with an instructor: medals and scores")) { audio_.play(Sfx::Click); openAcademy(); return; }
     y += bh + gap;
-    if (ui::button(nav_, 2, {x, y, bw, bh}, "WORLD LOCATIONS", "Real terrain: Himalaya, Alps, Sahara, Andes, Rio...")) { audio_.play(Sfx::Click); screen_ = Screen::Locations; locStatus_.clear(); nav_.focus = 0; return; }
+    if (ui::button(nav_, 2, {x, y, bw, bh}, "DOGFIGHT ARENA", "Bandit waves over " + terrain_.info().name)) { audio_.play(Sfx::Click); startArenaBriefed(); return; }
     y += bh + gap;
-    if (ui::button(nav_, 3, {x, y, bw, bh}, "HANGAR", "8 aircraft, 8 camouflage schemes")) { audio_.play(Sfx::Click); hangarSel_ = settings_.aircraft; startHangar(); nav_.focus = hangarSel_; return; }
+    if (ui::button(nav_, 3, {x, y, bw, bh}, "WORLD LOCATIONS", "Real terrain: Himalaya, Alps, Sahara, Andes, Rio...")) { audio_.play(Sfx::Click); screen_ = Screen::Locations; locStatus_.clear(); nav_.focus = 0; return; }
     y += bh + gap;
-    if (ui::button(nav_, 4, {x, y, bw, bh}, "SETTINGS", "Audio, graphics, controls")) { audio_.play(Sfx::Click); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 0; return; }
+    if (ui::button(nav_, 4, {x, y, bw, bh}, "HANGAR", "8 aircraft, 8 camouflage schemes")) { audio_.play(Sfx::Click); hangarSel_ = settings_.aircraft; startHangar(); nav_.focus = hangarSel_; return; }
     y += bh + gap;
-    if (ui::button(nav_, 5, {x, y, bw, bh}, "QUIT")) { quit_ = true; return; }
+    if (ui::button(nav_, 5, {x, y, bw, bh}, "SETTINGS", "Audio, graphics, controls")) { audio_.play(Sfx::Click); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 0; return; }
+    y += bh + gap;
+    if (ui::button(nav_, 6, {x, y, bw, bh}, "QUIT")) { quit_ = true; return; }
     ui::text("v0.7  -  C++20 / raylib  -  fictional simulation, illustrative aircraft data", 70 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Left, false);
     ui::text("ENTER select   ARROWS navigate", w - 30 * s, h - 34 * s, 13 * s, Color{255, 255, 255, 120}, Align::Right, false);
 }
@@ -1503,7 +1569,9 @@ void Game::drawCampaign() {
         ui::text(m.summary, b.x + 14 * s, b.y + 29 * s, 17 * s, WHITE, Align::Left, false);
     }
     if (ui::button(nav_, n, {w - 50 * s - 210 * s, h - 118 * s, 210 * s, 64 * s}, "BACK") || in.back) {
-        if (mode_ == GameMode::None) screen_ = Screen::Title; else startTitle();
+        if (mode_ != GameMode::None) startTitle();
+        screen_ = Screen::CampaignSelect;
+        opsLoc_.clear();
         nav_.focus = 0;
     }
 }
@@ -1666,13 +1734,21 @@ void Game::drawPause() {
     if (IsKeyPressed(KEY_Q) && (IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER) || IsKeyDown(KEY_LEFT_CONTROL))) { quit_ = true; return; }
     y += bh + gap;
     if (resume) { screen_ = Screen::Playing; audio_.setPaused(false); stepper_.accumulator = 0; return; }
-    if (ui::button(nav_, 1, {x, y, bw, bh}, "RESTART")) { if (mode_ == GameMode::Mission01) startMission(missionNo_); else startArena(false); return; }
+    if (ui::button(nav_, 1, {x, y, bw, bh}, mode_ == GameMode::Training ? "RESTART THE COURSE" : "RESTART")) {
+        if (mode_ == GameMode::Training) startTraining(trainingLevel_);
+        else if (mode_ == GameMode::Mission01) startMission(missionNo_);
+        else startArena(false);
+        return;
+    }
     y += bh + gap;
     if (ui::button(nav_, 2, {x, y, bw, bh}, "SETTINGS")) { settingsReturn_ = Screen::Paused; screen_ = Screen::Settings; nav_.focus = 0; return; }
     y += bh + gap;
     if (ui::button(nav_, 3, {x, y, bw, bh}, "CONTROLS")) { showHelp_ = true; screen_ = Screen::Playing; audio_.setPaused(false); return; }
     y += bh + gap;
-    if (ui::button(nav_, 4, {x, y, bw, bh}, "MAIN MENU")) { startTitle(); return; }
+    if (ui::button(nav_, 4, {x, y, bw, bh}, mode_ == GameMode::Training ? "TRAINING ACADEMY" : "MAIN MENU")) {
+        if (mode_ == GameMode::Training) openAcademy(); else startTitle();
+        return;
+    }
     y += bh + gap;
     if (ui::button(nav_, 5, {x, y, bw, bh}, "QUIT TO DESKTOP")) { quit_ = true; return; }
 }
@@ -1692,11 +1768,13 @@ void Game::scriptedStep(double seconds, const std::function<void(double)>& pilot
             battle_.update(FlightModel::kDt, ci, pendingCmd_);
             pendingCmd_ = PlayerCommands{};
             if (mission_) {
+                if (mode_ == GameMode::Training) training_.update(missionContext(), battle_, mission_->stepIndex(), FlightModel::kDt);
                 mission_->update(missionContext(), FlightModel::kDt);
                 if (campaignDef_) director_.update(*mission_, battle_);
             }
         }
         time_ += chunk;
+        if (mode_ == GameMode::Training) updateTrainingFrame(chunk);
         damagePulse_ = std::max(0.0, damagePulse_ - chunk * 1.8);
         processEvents();
         if (screen_ == Screen::Playing && mode_ != GameMode::None) updatePip(chunk);
@@ -1955,6 +2033,154 @@ int Game::runCapture() {
                 snap(std::string("gear_") + (cm == CameraMode::Chase ? "chase_" : "cockpit_") + std::to_string(k));
             }
         }
+        return 0;
+    }
+    if (set == "flow") {
+        // end-to-end menu / mode flow through the real frame loop (no rendering): academy,
+        // crash and checkpoint retry, completion and progress, operations, location switches
+        int fails = 0;
+        auto expect = [&](bool ok, const char* what) { std::printf("flow: %s %s\n", ok ? "PASS" : "FAIL", what); if (!ok) ++fails; std::fflush(stdout); };
+        auto run = [&](int frames) { for (int i = 0; i < frames; ++i) frame(1.0 / 60.0, false); };
+        loadLocation("desert", false);
+        openAcademy();
+        expect(screen_ == Screen::Academy, "academy opens");
+        acLocation_ = "desert";
+        startTraining(1);
+        run(60);
+        expect(mode_ == GameMode::Training && screen_ == Screen::Playing && mission_.has_value(), "level 1 starts at the desert");
+        expect(academyRecord(settings_, 1, settings_.aircraft).attempts >= 1, "attempt recorded");
+        // fly a little (engine start), then crash and retry from the checkpoint
+        battle_.player().fm->requestEngineStart();
+        run(400);
+        size_t before = mission_->stepIndex();
+        battle_.player().fm->forceCrash(CrashReason::Terrain);
+        run(240);
+        expect(playerDead_, "crash detected");
+        retryTraining();
+        run(30);
+        expect(!playerDead_ && battle_.player().alive && mission_->status() == MissionStatus::Running, "retry from the checkpoint");
+        expect(mission_->stepIndex() <= before + 1, "retry resumes at the checkpoint section");
+        // complete the course: debrief, score stored
+        mission_->skipTo(training_.course().sections.size());
+        run(30);
+        expect(trainingDone_, "course completion shows the debrief");
+        AcademyRecord rec = academyRecord(settings_, 1, settings_.aircraft);
+        std::printf("flow: level 1 record medal %d best %.0f attempts %d\n", rec.medal, rec.best, rec.attempts);
+        openAcademy();
+        expect(screen_ == Screen::Academy && mode_ == GameMode::None, "back to the academy");
+        // an operation at the loaded location
+        startOperation("desert", 1);
+        run(30);
+        expect(mode_ == GameMode::Mission01 && campaignDef_ == &opsDef_ && missionNo_ == 201, "desert operation 1 starts");
+        expect(!opsDef_.objectives.empty(), "operation has objectives");
+        mission_->skipTo(opsDef_.objectives.size());
+        run(10);
+        expect(missionDone_ && operationCompleted(settings_, "desert", 1), "operation completion is saved");
+        // a level at another location: the world is switched first
+        if (locationAvailable("fuji")) {
+            acLocation_ = "fuji";
+            startTraining(5);
+            run(5);
+            expect(terrain_.info().id == "fuji" && mode_ == GameMode::Training && trainingLevel_ == 5, "level 5 at Mount Fuji (location switch)");
+            run(120);
+            expect(!playerDead_, "level 5 runs");
+        }
+        if (locationAvailable("guilin")) {
+            markOperationCompleted(settings_, "guilin", 1);
+            markOperationCompleted(settings_, "guilin", 2);
+            startOperation("guilin", 3);
+            run(5);
+            expect(terrain_.info().id == "guilin" && missionNo_ == 203 && opsLocation_ == "guilin", "Guilin operation 3 (location switch)");
+            run(120);
+        }
+        // the original campaign still switches back to the desert
+        startMission(5);
+        run(5);
+        expect(terrain_.info().id == "desert" && missionNo_ == 5 && campaignDef_ == campaignMission(5), "original mission 5 back in the desert");
+        // carrier level at Musandam
+        if (locationAvailable("musandam")) {
+            acLocation_ = "musandam";
+            startTraining(10);
+            run(5);
+            expect(terrain_.info().id == "musandam" && mode_ == GameMode::Training && training_.course().carrier && terrain_.deck().active, "level 10 with the carrier at Musandam");
+        }
+        // L10 refuses a location without sea
+        acLocation_ = "matterhorn";
+        expect(academyLocationFor(10) == "musandam", "level 10 keeps a sea location");
+        startTitle();
+        std::printf("flow: %d failures\n", fails);
+        return fails == 0 ? 0 : 1;
+    }
+    if (set == "academy") {
+        // menus: title, academy (route preview), campaign selection, a location's operations
+        hideHud_ = true;
+        const char* locEnv = std::getenv("SKYFALL_LOC");
+        std::string loc = locEnv ? locEnv : "desert";
+        loadLocation(loc, false);
+        startTitle(); nav_.focus = 1;
+        snap("academy_00_title", 2);
+        acLocation_ = loc;
+        for (int lv : {1, 4, 9}) {
+            openAcademy(); acLevel_ = lv; nav_.focus = lv - 1;
+            snap("academy_01_menu_l" + std::to_string(lv), 2);
+        }
+        startTitle(); screen_ = Screen::CampaignSelect; opsLoc_.clear(); nav_.focus = 2;
+        snap("academy_02_campaign_select", 2);
+        opsLoc_ = loc; nav_.focus = 2;
+        snap("academy_03_operations", 2);
+        // in flight: level 4 (obstacles) and level 10 (carrier) at this location
+        hideHud_ = false;
+        for (int lv : {4, 9, 10}) {
+            if (!academyLocationAllowed(loc, lv)) continue;
+            startTraining(lv);
+            if (mode_ != GameMode::Training) continue;
+            const Course& c = training_.course();
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            scriptedStep(2.0, [&](double) { updateRadioQueue(); });
+            snap("academy_1" + std::to_string(lv % 10) + "_runway", 2);
+            // jump to the obstacle section (or the approach) and fly it a few seconds
+            size_t target = 0;
+            for (size_t k = 0; k < c.sections.size(); ++k) {
+                const Section& sec = c.sections[k];
+                bool obstacle = sec.style == RouteStyle::Obstacles && sec.gateEnd > sec.gateBegin;
+                bool landing = sec.kind == SectionKind::Landing || sec.kind == SectionKind::CarrierLanding;
+                if ((lv == 10 && landing) || (lv != 10 && obstacle)) { target = k; break; }
+            }
+            if (target == 0) continue;
+            const Section& sec = c.sections[target];
+            int g0 = (sec.kind == SectionKind::Landing || sec.kind == SectionKind::CarrierLanding) ? sec.gateStart : sec.gateBegin;
+            const Gate& g = c.gates[g0];
+            Jet& p = battle_.player();
+            Vec3 at = g.pos - g.dir * 1500.0;
+            at.y = g.pos.y + (lv == 10 ? 1500.0 * std::tan(c.glideDeg * kDeg) : 0.0);
+            if (p.fm->state().onGround || true) p.fm->resetAirborne(at, std::atan2(g.dir.z, g.dir.x), lv == 10 ? p.fm->profile().approachSpeedMs : 180.0, 0.6);
+            if (lv == 10 && !p.fm->state().gearDown) p.fm->toggleGear();
+            mission_->skipTo(target);
+            scriptedStep(1.5, [&](double) { setInput(0, 0, 0, 0); updateRadioQueue(); });
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            snap("academy_1" + std::to_string(lv % 10) + "_section", 3);
+            camMode_ = CameraMode::Cockpit;
+            snap("academy_1" + std::to_string(lv % 10) + "_cockpit", 3);
+            if (lv == 4) {
+                settings_.extra["academy_corridor"] = "1";
+                camMode_ = CameraMode::Chase; chaseInit_ = false;
+                scriptedStep(0.2, [&](double) { setInput(0, 0, 0, 0); });
+                snap("academy_14_corridor", 2);
+                hideHud_ = true;
+                std::printf("academy capture: %zu gate markers, %zu corridor beads, corridor %d\n", gateMarkers_.size(), corridor_.size(), corridorOn() ? 1 : 0);
+                snap("academy_14_corridor_nohud", 2);
+                hideHud_ = false;
+                settings_.extra["academy_corridor"] = "0";
+            }
+        }
+        // the debrief card
+        if (mode_ == GameMode::Training && mission_) {
+            mission_->skipTo(training_.course().sections.size());
+            scriptedStep(0.5, [&](double) { updateRadioQueue(); });
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            snap("academy_20_debrief", 2);
+        }
+        startTitle();
         return 0;
     }
     if (set == "menus") {

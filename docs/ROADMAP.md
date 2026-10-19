@@ -24,6 +24,20 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 | Camera shake slider, G-blackout toggle, FOV, UI scale, captions | ✅ | |
 | Virtual cockpit with moving stick/throttle, live displays | ✅ | 5 displays + conformal HUD |
 
+## Training Academy and location campaigns (v0.8)
+
+| Requirement | Status | Notes |
+|---|---|---|
+| Campaign selection: original 61 missions or any location's Operations | ✅ | 10 terrain-built missions per location, progress per location |
+| Academy: 10 levels, 8 aircraft, 3 handling modes, ~17 min (15.5-20 by estimate) | ✅ | Everest excluded; level 10 needs sea |
+| Briefing → takeoff → navigation → terrain → skills → refuel → landing / trap → debrief | ✅ | level 10 ends with a carrier trap |
+| No teleports; routes flyable by every aircraft | ✅ | autopilot test: 239 / 240 on the recommended locations |
+| Continuous context-aware instructor, neural voice, subtitles, fallback speech | ✅ | every call checked against the voice vocabulary |
+| Obstacles with collision and LOD, gate rings, corridor option | ✅ | pillars, arches, bridge deck, masts, compound, viaduct |
+| Guided refuelling (no artificial fuel drain), glide-path guidance | ✅ | runway: straight / circling / steep; carrier: ball + line-up |
+| Scoring (7 categories), medals, checkpoint retry, per-aircraft history, unlocks | ✅ | `mission/Progress` |
+| Academy menu: aircraft, location, level details, route preview, previous scores, launch | ✅ | |
+
 ## Aircraft (E)
 
 | | Status |

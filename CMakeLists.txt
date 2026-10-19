@@ -20,11 +20,15 @@ add_library(skyfall_core STATIC
   src/sim/Terrain.cpp
   src/sim/WorldLayout.cpp
   src/sim/Locations.cpp
+  src/sim/TerrainAnalysis.cpp
   src/sim/FlightModel.cpp
   src/aircraft/AircraftProfile.cpp
   src/combat/Combat.cpp
   src/mission/Mission.cpp
   src/mission/Campaign.cpp
+  src/mission/Training.cpp
+  src/mission/Operations.cpp
+  src/mission/Progress.cpp
   src/mission/Voice.cpp
   src/telemetry/FrameStats.cpp
   src/telemetry/Replay.cpp
@@ -76,6 +80,7 @@ if(SKYFALL_BUILD_GAME)
   add_executable(skyfall
     src/main.cpp
     src/app/Game.cpp
+    src/app/Academy.cpp
     src/app/Cinematics.cpp
     src/app/TerrainDownload.cpp
     src/app/Input.cpp
@@ -124,6 +129,10 @@ if(SKYFALL_BUILD_TESTS)
   add_executable(skyfall_tests tests/sim_tests.cpp)
   target_link_libraries(skyfall_tests PRIVATE skyfall_core)
   add_test(NAME skyfall_tests COMMAND skyfall_tests)
+  add_executable(skyfall_training_tests tests/training_tests.cpp)
+  target_link_libraries(skyfall_training_tests PRIVATE skyfall_core)
+  target_compile_definitions(skyfall_training_tests PRIVATE SKYFALL_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+  add_test(NAME skyfall_training_tests COMMAND skyfall_training_tests)
   # lists every spoken line for tools/make_voice.py
   add_executable(skyfall_voicelines tools/voice_lines.cpp)
   target_link_libraries(skyfall_voicelines PRIVATE skyfall_core)

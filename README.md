@@ -36,13 +36,36 @@ copyrighted models, textures, sounds or code from commercial games.
 | ![Everest, real elevation data](docs/screenshots/real_everest.jpg) | ![Geirangerfjord, real elevation data](docs/screenshots/real_geiranger.jpg) |
 | ![High-G wing condensation](docs/screenshots/wing_vapour.jpg) | ![Gear, wheels and landing light](docs/screenshots/gear_lights.jpg) |
 | ![Forested valleys and fields, Glen Coe](docs/screenshots/landscape_glencoe.jpg) | ![Patchwork farmland below Mount Fuji](docs/screenshots/landscape_farmland.jpg) |
+| ![Training Academy: levels, record and route preview](docs/screenshots/academy_menu.jpg) | ![Campaign: the original 61 missions or any location's Operations](docs/screenshots/campaign_select.jpg) |
+| ![Academy level 4: pillar slalom with the instructor](docs/screenshots/academy_pillars.jpg) | ![Academy level 10: carrier approach guidance](docs/screenshots/academy_carrier_approach.jpg) |
 
 > Screenshots are captured from the running executable (`skyfall --capture`) on a Linux
 > container with Mesa's software rasteriser: they show the real renderer output, not macOS
 > performance. Measured on a MacBook Air (v0.3 build): 66 fps mean, p95 20 ms at 1680x1050 High.
 > See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
-## What you can do in this build (v0.7)
+## What you can do in this build (v0.8)
+
+* **Training Academy** (title → TRAINING ACADEMY) — ten graded courses, about 17 minutes each,
+  in any of the eight aircraft and all three handling modes, on any downloaded world location:
+  scramble and takeoff, mountain navigation, low-altitude flight, an obstacle course (rock
+  pillars, natural arches, under a bridge, a mast slalom, a compound), advanced aircraft control
+  (banked / climbing / descending turns, high G, loop, roll, unusual-attitude recovery),
+  precision terrain following, a high-speed canyon run, a mountain route to a tanker, a long
+  tactical flight with formation and refuelling, and a final qualification that ends with a
+  carrier trap. Each course is generated from the location's own terrain (routes follow the
+  valleys; nothing teleports you), briefed over the radio and coached the whole way by an
+  instructor in the neural voice (with captions). Gates are rings in the world, obstacles have
+  real collision, the approach has glide-path and line-up guidance, refuelling is guided. Seven
+  category scores, bronze / silver / gold medals, checkpoint retries after a crash (`R`),
+  history per aircraft and progressive unlocks. The menu shows each level's route on the map,
+  your record and the medals of every aircraft. Details: [docs/TRAINING.md](docs/TRAINING.md).
+* **A campaign on every world location** (title → CAMPAIGN) — choose the **original 61-mission
+  campaign** (unchanged, in the Skyfall Desert) or the ten **Operations** of any location, built
+  from its terrain: patrols down its valleys, a radar on its ridge, a SAM site in its pass,
+  convoys in its basins, its railway, patrol boats on coastal maps, a tanker-supported deep
+  strike, relays on its peaks, a low-level dogfight and a final operation that ends with a
+  landing at its airfield. Progress is saved per location; pick the aircraft before you start.
 
 * **Carrier operations (missions 52-61)** — ten missions that start on the catapult of an aircraft
   carrier in a rainstorm: push the throttle into afterburner (blue-white flame with shock
@@ -166,7 +189,8 @@ buildings/roads are generated (not OpenStreetMap), so they are plausible rather 
 
 ## Voice
 
-All spoken lines (`assets/voice/*.mp3`, about 200 lines) are synthesised offline with
+All spoken lines (`assets/voice/*.mp3`, about 800 lines: campaign, Academy instructor and every
+location's Operations) are synthesised offline with
 [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) through
 [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (MIT): `bf_isabella` (British English) for the captain,
 AWACS and instructor, `bf_emma` for the tower, `af_bella` for your wingman. The game lists its own lines
@@ -227,7 +251,7 @@ Useful flags: `--mode arena` / `--mode m01` (skip the menu), `--size 1440x900`, 
 | `U` | HUD style (minimal / full) | `Cmd+Q` | quit immediately |
 | Hangar `←` / `→` | change camouflage | | |
 | `C` | camera: cockpit → chase → external | right-drag, `I J K L` | look / orbit, wheel = zoom |
-| `R` | reset / respawn | `H` | help overlay |
+| `R` | reset / respawn (Academy: retry from the last checkpoint) | `H` | help overlay |
 | `F3` | telemetry (p50/p95/p99 frame times, physics) | `F5` | time of day |
 | `F12` | screenshot | `Esc` / `P` | pause menu (Esc again resumes) |
 
@@ -258,7 +282,13 @@ X gear, Y camera, d-pad yaw.
   virtual cockpit with five live displays and a conformal HUD in the combiner.
 * `src/audio` — fully procedural sound (no sample files).
 * `src/telemetry/Replay` — 30 Hz flight recorder and crash/shoot-down analysis.
-* `tests/` — 31 deterministic tests (`ctest`).
+* `src/mission/Training` — Training Academy: course generation from real terrain (valley A*,
+  Dubins joins, turn-radius and g limits, obstacle placement and clearance, approach selection),
+  the session (gates, tasks, formation, refuelling, landing / trap, scoring, checkpoints) and the
+  instructor; `src/mission/Operations` — the per-location campaign; `src/mission/Progress`.
+* `tests/` — 54 simulation / campaign tests (`skyfall_tests`) and 7 Academy / Operations tests (plus course-debugging tools)
+  (`skyfall_training_tests`), including an autopilot that flies all 240 level / aircraft / mode
+  combinations and the combat bot on every location's operations (`ctest`).
 
 Read more: [Architecture](docs/ARCHITECTURE.md) · [Physics](docs/PHYSICS.md) ·
 [Aircraft data](docs/AIRCRAFT.md) · [Roadmap & checklist](docs/ROADMAP.md) ·
@@ -272,7 +302,9 @@ documented rate-command approximation rather than a full moment model; terrain i
 procedural and fictional. Aircraft are original procedural meshes (not licensed models), so they
 are clean silhouettes rather than photoreal assets. OpenGL is deprecated on macOS; a Metal renderer
 is a roadmap item. The Computer
-Vision Laboratory is planned, not implemented yet.
+Vision Laboratory is planned, not implemented yet. Academy and Operations limits (Everest, sea
+for level 10, the few combinations the test bots do not complete) are listed in
+[docs/TRAINING.md](docs/TRAINING.md#known-limits).
 
 ## License
 

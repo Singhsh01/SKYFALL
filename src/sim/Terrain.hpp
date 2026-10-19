@@ -59,8 +59,28 @@ struct DeckInfo {
     double width = 42;        // m: the usable strip (the hull is wider; see Renderer)
     double catStart = 40;     // catapult start, m forward of the centre
     double catStroke = 100;   // m
+    // Angled landing deck: the landing line runs from (along -160, across -6) to (30, -36) in
+    // deck coordinates (along = towards the bow, across = towards starboard), 9 degrees to port.
+    // Four arresting wires lie across it at these distances from the start of the line (m).
+    double wireT[4] = {32.7, 44.7, 56.7, 68.7};   // 12 m apart, like a real carrier
     Vec3 forward() const;
     Vec3 catapultStart() const;
+    /// Position on the landing line: t = metres from its stern end, lateral = metres to starboard.
+    void landingLine(double x, double z, double& t, double& lateral) const;
+};
+
+/// A solid obstacle of the Training Academy courses (rock pillars, natural arches, lattice
+/// masts, bridge decks). Collidable: Terrain::obstacleHit() is checked by the flight model.
+struct Obstacle {
+    enum class Kind { Pillar, Arch, Mast, Deck } kind = Kind::Pillar;
+    Vec3 pos;                // base centre (y = ground)
+    double radius = 45;      // pillar / mast radius, arch leg radius
+    double height = 300;     // top above pos.y (arch: top of the beam; deck: deck underside above pos.y)
+    double heading = 0;      // radians: arch span axis / deck length axis (0 = +X)
+    double span = 160;       // arch: distance between the legs (centres); deck: length
+    double thickness = 35;   // arch beam depth; deck depth
+    double width = 14;       // deck width
+    unsigned seed = 1;       // shape variation for the renderer
 };
 
 class Terrain {
@@ -99,6 +119,16 @@ public:
     /// Distance along the deck axis from the centre (+ = towards the bow).
     double deckAlong(double x, double z) const;
 
+    /// Course obstacles (Training Academy). Replaces the current set; bumps obstacleVersion().
+    void setObstacles(std::vector<Obstacle> obs);
+    void clearObstacles() { setObstacles({}); }
+    const std::vector<Obstacle>& obstacles() const { return obstacles_; }
+    int obstacleVersion() const { return obstacleVersion_; }
+    /// True if the point is inside any obstacle (cheap: bucketed by 500 m cells).
+    bool obstacleHit(const Vec3& p) const;
+    /// Distance from the point to the nearest obstacle surface (horizontal), up to `maxRange`.
+    double obstacleDistance(const Vec3& p, double maxRange) const;
+
 private:
     double rawHeight(double x, double z) const;
     double applyModifiers(double x, double z, double h) const;
@@ -108,6 +138,9 @@ private:
     Vec3 town_;
     TerrainInfo info_;
     double outerBase_ = 300.0, outerRelief_ = 300.0;   // real maps: statistics for the land beyond the edge
+    std::vector<Obstacle> obstacles_;
+    std::vector<std::vector<int>> obstacleBuckets_;    // 64 x 64 cells of 500 m
+    int obstacleVersion_ = 0;
 };
 
 /// Deterministic value-noise helpers (also mirrored in the terrain shader for detail).

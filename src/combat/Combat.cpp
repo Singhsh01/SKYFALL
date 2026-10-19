@@ -700,7 +700,34 @@ ControlInputs Battle::aiPilot(Jet& j, double dt, PlayerCommands& out) {
     double agl = s.pos.y - terrain_->surfaceHeight(s.pos.x, s.pos.z);
     double horiz = std::sqrt(s.pos.x * s.pos.x + s.pos.z * s.pos.z);
 
-    if (minClear < 220.0 || agl < 260.0) {
+    if (!j.route.empty() && minClear >= 120.0 && agl >= 150.0) {
+        // scripted route: fly the waypoints (looping) at the commanded speed
+        j.ai = AiState::Patrol;
+        Vec3 tgt = j.route[std::min(j.routeIdx, j.route.size() - 1)];
+        Vec3 d = tgt - s.pos;
+        double hd = std::hypot(d.x, d.z);
+        // the training lead: a waypoint left abeam inside the turn circle counts as passed,
+        // or a slow jet in thin air could orbit it for ever
+        bool abeam = j.formationLead && hd < 2600.0 && dot(normalize(Vec3{d.x, 0, d.z}), s.q.forward()) < 0.35;
+        if (hd < 500.0 || (hd < 1500.0 && dot(d, s.q.forward()) < 0) || abeam) {
+            if (j.routeIdx + 1 < j.route.size()) ++j.routeIdx;
+            else if (j.routeLoop) j.routeIdx = 0;
+            tgt = j.route[std::min(j.routeIdx, j.route.size() - 1)];
+            d = tgt - s.pos;
+        }
+        desired = normalize(d);
+        if (j.formationLead && j.route.size() > 2) {
+            // fly the loop as a smooth curve: blend towards the leg after the waypoint as it nears
+            Vec3 nxt = j.route[(j.routeIdx + 1) % j.route.size()];
+            Vec3 leg = normalize(nxt - tgt);
+            double hd2 = std::hypot(d.x, d.z);
+            double wgt = clampd(1.0 - hd2 / 2600.0, 0.0, 1.0);
+            desired = normalize(desired * (1.0 - 0.5 * wgt) + leg * (0.5 * wgt));
+        }
+        desired.y = clampd(desired.y, -0.2, 0.25);
+        desired = normalize(desired);
+        desiredSpeed = j.routeSpeed;
+    } else if (minClear < 220.0 || agl < 260.0) {
         j.ai = AiState::Recover;
         Vec3 f = s.q.forward();
         desired = normalize(Vec3{f.x, 0, f.z} + Vec3{0, 1.3, 0});
@@ -853,6 +880,12 @@ ControlInputs Battle::aiPilot(Jet& j, double dt, PlayerCommands& out) {
     double leverTarget = V < desiredSpeed - 25 ? 1.0 : (V > desiredSpeed + 30 ? 0.55 : 0.85);
     in.throttleRate = clampd((leverTarget - s.throttle) * 6.0, -1.0, 1.0);
     in.airbrake = V > desiredSpeed + 120;
+    if (j.formationLead && j.ai == AiState::Patrol) {
+        // training lead: hold the commanded speed closely (a wingman has to be able to formate on it)
+        leverTarget = clampd(0.45 + (desiredSpeed - V) * 0.04, 0.03, 1.0);
+        in.throttleRate = clampd((leverTarget - s.throttle) * 6.0, -1.0, 1.0);
+        in.airbrake = V > desiredSpeed + 12.0;
+    }
     return in;
 }
 

@@ -23,7 +23,7 @@ namespace sky {
 // Assisted: force-based flight with a G-command fly-by-wire. Simulation: no limiter/assists.
 enum class HandlingMode { Arcade, Assisted, Simulation };
 enum class EngineState { Off, Starting, Running, Flameout };
-enum class CrashReason { None, HardLanding, WingStrike, BellyLanding, NoseFirst, Terrain, Water, Destroyed, TailStrike };
+enum class CrashReason { None, HardLanding, WingStrike, BellyLanding, NoseFirst, Terrain, Water, Destroyed, TailStrike, Obstacle };
 
 const char* crashReasonText(CrashReason r);
 
@@ -73,6 +73,18 @@ struct FlightState {
     double catTravel = 0;         // m along the stroke
     double launchAssist = 0;      // s of automatic rotation after the stroke (hands-off launch)
     bool launched = false;        // left the deck from a catapult shot
+    // Aircraft-carrier recovery (tailhook + arresting wires on the angled deck)
+    bool hookDown = false;        // lowered with the landing gear whenever a carrier deck exists
+    double hookT = -1e9;          // hook position along the landing line (m from its stern end)
+    double hookLateral = 0;       // hook offset from the landing line (m, + = starboard)
+    int wireCaught = 0;           // 1..4 once a wire is engaged
+    bool arresting = false;       // the wire is decelerating the jet
+    bool trapped = false;         // stopped on the wire
+    double arrestV0 = 0;          // speed when the wire was caught
+    int bolters = 0;              // touch-and-goes on the deck without catching a wire
+    bool deckTouch = false;       // wheels on the deck right now, not arrested
+    double touchdownSink = 0;     // sink rate at the last touchdown (m/s)
+    double touchdownTime = -1;    // sim time of the last touchdown
 };
 
 class FlightModel {
@@ -95,6 +107,9 @@ public:
     double catapultEndSpeed() const;
 
     void step(const ControlInputs& in, double dt = kDt);
+    struct LandingAxisDir { Vec3 dir; double heading; };
+    /// Direction of a carrier's angled landing deck.
+    static LandingAxisDir landingDir(const DeckInfo& d);
 
     // Discrete commands
     void requestEngineStart();

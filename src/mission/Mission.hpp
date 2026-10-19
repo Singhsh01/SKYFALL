@@ -40,6 +40,8 @@ public:
     void addFailCondition(std::function<std::string(const MissionContext&)> f) { failIf_.push_back(std::move(f)); }
     void fail(const std::string& why);
     void reset();
+    /// Restarts the mission at step `idx` (checkpoint retries): running again, earlier steps kept done.
+    void skipTo(size_t idx);
 
     MissionStatus status() const { return status_; }
     size_t stepIndex() const { return index_; }

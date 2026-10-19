@@ -14,13 +14,16 @@
           |             Terrain      |  (read |           Effects, Shaders  |
           |  aircraft/  Profiles x8  |   only)|  ui/      Hud, Cockpit,     |
           |  combat/    Battle, AI   |        |           Menus, Fonts      |
-          |  mission/   Mission FSM  |        |  audio/   procedural synth  |
+          |  mission/   Mission FSM, |        |  audio/   procedural synth  |
+          |             Campaign,    |        |                             |
+          |             Training,    |        |                             |
+          |             Operations   |        |                             |
           +-------------+------------+        +-------------+---------------+
                         |                                   |
                         +-----------------+-----------------+
                                           |
                           telemetry/ FrameStats (p50/p95/p99, CSV/JSON)
-                          tests/     24 deterministic tests (ctest)
+                          tests/     skyfall_tests + skyfall_training_tests (ctest)
 ```
 
 ## Frame
@@ -55,3 +58,18 @@
   8 GB machine. Licensed models can replace the procedural ones later behind the same interfaces.
 * **Scene resolution is decoupled from window pixels**: the 3D scene renders at the window size
   in points × quality scale; the HUD is drawn at native Retina resolution.
+
+## Training Academy and Operations
+
+* `mission/Training` builds a `Course` (sections, gates, obstacles, tanker, formation loop,
+  approach) from a `Terrain` + `WorldLayout`, deterministically; `TrainingSession` runs it once
+  per fixed step *before* `Mission::update` and owns gates, tasks, scoring, checkpoints and the
+  instructor's radio calls. Its `Mission` (one step per section) is an ordinary mission FSM whose
+  predicates read the session, so the HUD and menus treat it like any other mission.
+* `Terrain::setObstacles` installs the course's pillars / arches / masts / deck: the flight model
+  collides with them and the renderer rebuilds their meshes when the obstacle version changes.
+* `mission/Operations` turns ten templates into `CampaignMissionDef`s for the loaded location, run
+  by the same `CampaignDirector` as the desert campaign (mission numbers 201-210).
+* `app/Academy.cpp` holds the Academy and campaign-selection screens and the training glue
+  (radio routing by priority, gate markers, retries, debrief); progress lives in `Settings`
+  (`mission/Progress`).

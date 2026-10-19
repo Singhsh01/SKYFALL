@@ -56,6 +56,14 @@ struct JetPose {
     int id = 0;
 };
 
+/// A Training Academy gate drawn as a ring in the world.
+struct GateMarker {
+    Vec3 pos, dir;
+    float radius = 100;
+    Color color = {120, 255, 190, 255};
+    float glow = 1.0f;       // emissive strength
+};
+
 struct FrameParams {
     Camera3D cam{};
     float nearPlane = 0.5f, farPlane = 70000.0f;
@@ -76,6 +84,8 @@ struct FrameParams {
     Vector3 shadowFocus{0, 0, 0};
     float rain = 0;                 // 0..1 rain intensity
     Vector3 rainWind{0, 0, 0};      // rain velocity relative to the camera (m/s, without the fall speed)
+    const std::vector<GateMarker>* gates = nullptr;   // training gates (rings), current first
+    const std::vector<Vec3>* corridor = nullptr;      // optional corridor markers along the route
 };
 
 class Renderer {
@@ -160,6 +170,13 @@ private:
     Mesh powerPlant_{}, refinery_{}, bridgeDeck_{}, bridgePier_{}, commTower_{}, factory_{}, locomotive_{}, wagon_{},
          launcher_{}, ammo_{}, substation_{}, tanker_{}, drogue_{}, carrier_{};
     void buildCarrier();
+    void drawObstacles(const FrameParams& f);
+    void drawGates(const FrameParams& f);
+    void rebuildObstacles();
+    Mesh obstacleMesh_{}, ringMesh_{}, beaconMesh_{};
+    bool obstacleMeshValid_ = false;
+    int obstacleVer_ = -1;
+    std::vector<Vector3> mastLights_;
     struct LightSprite { Vector3 pos; float size; Color col; };
     std::vector<LightSprite> lights_;
     struct Spin { float angle = 0; double t = -1; };

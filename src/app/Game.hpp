@@ -10,6 +10,8 @@
 #include "TerrainDownload.hpp"
 #include "../mission/Campaign.hpp"
 #include "../mission/Mission.hpp"
+#include "../mission/Operations.hpp"
+#include "../mission/Training.hpp"
 #include "../render/Lighting.hpp"
 #include "../render/Renderer.hpp"
 #include "../telemetry/FrameStats.hpp"
@@ -38,8 +40,8 @@ struct Options {
     int quality = -1;
 };
 
-enum class Screen { Title, Campaign, Hangar, Settings, Playing, Paused, Help, Briefing, Locations };
-enum class GameMode { None, Mission01, Arena };
+enum class Screen { Title, Campaign, Hangar, Settings, Playing, Paused, Help, Briefing, Locations, Academy, CampaignSelect };
+enum class GameMode { None, Mission01, Arena, Training };
 
 class Game {
 public:
@@ -135,7 +137,37 @@ private:
     std::string terrainPath(const std::string& id);
     double safeAltitude(Vec3 a, Vec3 b, double margin) const;
     void drawLocations();
-    const CampaignMissionDef* campaignDef_ = nullptr;   // missions 04-40
+    const CampaignMissionDef* campaignDef_ = nullptr;   // missions 04-61, or a location operation
+    // ---- campaign selection: the original 61 missions or a location's Operations (Academy.cpp) ----
+    std::string opsLoc_;              // location whose operations list is open ("" = location list)
+    std::string opsLocation_;         // location of the running operation
+    CampaignMissionDef opsDef_;       // the running operation (built from the loaded terrain)
+    void drawCampaignSelect();
+    void startOperation(const std::string& loc, int k);
+    bool isOperation() const { return missionNo_ > 200; }
+    // ---- Training Academy (Academy.cpp) ----
+    TrainingSession training_;
+    int acLevel_ = 1;                 // level focused in the academy menu
+    std::string acLocation_;          // location chosen there ("" = the level's recommended one)
+    int trainingLevel_ = 0;           // level being flown
+    bool trainingDone_ = false, trainingNewBest_ = false, trainingCrashNoted_ = false;
+    ScoreCard trainingResult_;
+    std::string academyMsg_;          // status line in the academy menu
+    std::vector<GateMarker> gateMarkers_;
+    std::vector<Vec3> corridor_;
+    int pendingTraining_ = 0;         // level to start once a location switch is done
+    bool academyAfterSwitch_ = false; // after a location switch, go back to the academy menu
+    int previewLevel_ = 0;            // cached course for the menu's route preview
+    std::string previewLoc_;
+    Course preview_;
+    std::string academyLocationFor(int level) const;
+    void drawAcademy();
+    void openAcademy();
+    void startTraining(int level);
+    void retryTraining();
+    void updateTrainingFrame(double dt);
+    void buildGateMarkers();
+    bool corridorOn() const;
     CampaignDirector director_;
     // dynamic resolution: 3D scene scale chosen from measured frame times
     double dynScale_ = 1.0;

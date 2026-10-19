@@ -147,14 +147,21 @@ void Hud::draw(const HudContext& c) {
             else flightSymbology(c, false);
         }
         targets(c);
-        objectiveMarkers(c);
+        if (c.training) trainingMarkers(c);
+        else objectiveMarkers(c);
         weapons(c);
         minimap(c);
         warnings(c);
     }
     killFeed(c);
-    missionPanel(c);
-    if (c.showGlidePath && !c.dead) glidePath(c);
+    if (c.training) {
+        trainingPanel(c);
+        if (!c.dead) trainingApproach(c);
+        if (c.trainingDone) trainingDebrief(c);
+    } else {
+        missionPanel(c);
+    }
+    if (c.showGlidePath && !c.dead && !c.training) glidePath(c);
     radioPanel(c);
     popups(c);
     // hit marker
@@ -180,7 +187,8 @@ void Hud::draw(const HudContext& c) {
         if (c.respawnTimer > 0)
             ui::textShadow(fmt("RESPAWNING IN %.0f", std::ceil(c.respawnTimer)), c.w * 0.5f, c.h * 0.40f + 46 * s, 22 * s, WHITE, Align::Center);
         else
-            ui::textShadow("PRESS  R  TO RETRY     ESC  FOR MENU", c.w * 0.5f, c.h * 0.40f + 46 * s, 22 * s, WHITE, Align::Center);
+            ui::textShadow(c.training ? "PRESS  R  TO RETRY FROM THE LAST CHECKPOINT     ESC  FOR MENU" : "PRESS  R  TO RETRY     ESC  FOR MENU",
+                           c.w * 0.5f, c.h * 0.40f + 46 * s, 22 * s, WHITE, Align::Center);
     }
     if (c.pipActive) pipPanel(c);
     if (!c.dead && !c.showHelp) hintsBar(c);
@@ -1045,6 +1053,229 @@ void Hud::objectiveMarkers(const HudContext& c) {
         ui::textShadow(fmt2("AGL %d  /  MAX %d", static_cast<int>(ps.agl), static_cast<int>(o.maxAgl)), ctr.x, c.h * 0.28f, 15 * s,
                        ok ? Color{150, 255, 205, 255} : Color{255, 90, 70, 255}, Align::Center);
     }
+}
+
+// ------------------------------------------------------------------------------------------
+// Training Academy
+// ------------------------------------------------------------------------------------------
+namespace {
+const char* sectionWord(SectionKind k) {
+    switch (k) {
+        case SectionKind::Route: return "ROUTE";
+        case SectionKind::Landing: case SectionKind::CarrierLanding: return "APPROACH";
+        case SectionKind::Formation: return "FORMATION";
+        case SectionKind::Rendezvous: case SectionKind::Refuel: return "TANKER";
+        case SectionKind::ColdStart: case SectionKind::Lineup: case SectionKind::Takeoff: case SectionKind::GearUp: return "DEPARTURE";
+        case SectionKind::Climb: return "CLIMB";
+        default: return "MANOEUVRE";
+    }
+}
+}  // namespace
+
+void Hud::trainingPanel(const HudContext& c) {
+    if (!c.mission || !c.training) return;
+    const Mission& m = *c.mission;
+    const TrainingSession& t = *c.training;
+    const Course& course = t.course();
+    float s = c.h / 720.0f;
+    float w = 340 * s;
+    const MissionStep* cur = m.current();
+    std::vector<std::string> instr;
+    if (cur) instr = wrapText(cur->instruction, 13 * s, w - 24 * s);
+    // a window of the section list around the current one
+    const int n = static_cast<int>(m.stepCount());
+    const int idx = static_cast<int>(std::min(m.stepIndex(), m.stepCount() ? m.stepCount() - 1 : 0));
+    int first = std::clamp(idx - 2, 0, std::max(0, n - 6)), last = std::min(n, first + 6);
+    float lineH = 20 * s;
+    bool chip = cur && !cur->keyHint.empty();
+    float h = 56 * s + lineH * (last - first) + 30 * s + 17 * s * std::max<size_t>(1, instr.size()) + (chip ? 24 * s : 0) + 40 * s;
+    Rectangle r = {18 * s, 18 * s, w, h};
+    ui::panel(r, kPanel, kPanelBorder);
+    {
+        std::string tt = c.trainingTitle;   // keep clear of the section counter on the right
+        while (tt.size() > 8 && ui::measure(tt, 12 * s) > w - 140 * s) tt.pop_back();
+        if (tt.size() < c.trainingTitle.size()) tt += "..";
+        ui::text(tt, r.x + 12 * s, r.y + 8 * s, 12 * s, Color{150, 255, 205, 200});
+    }
+    ui::text(fmt2("SECTION %d / %d", idx + 1, n), r.x + w - 12 * s, r.y + 8 * s, 12 * s, Color{255, 255, 255, 150}, Align::Right);
+    ui::text(cur ? cur->title : "COURSE COMPLETE", r.x + 12 * s, r.y + 24 * s, 18 * s, WHITE);
+    float y = r.y + 54 * s;
+    for (int i = first; i < last; ++i) {
+        const MissionStep& st = m.steps()[i];
+        bool done = i < static_cast<int>(m.stepIndex());
+        bool now = i == static_cast<int>(m.stepIndex()) && m.status() == MissionStatus::Running;
+        Color col = done ? Color{120, 240, 160, 220} : now ? WHITE : Color{255, 255, 255, 90};
+        if (now) DrawRectangle(static_cast<int>(r.x + 4 * s), static_cast<int>(y - 3 * s), static_cast<int>(w - 8 * s), static_cast<int>(lineH), Color{150, 255, 205, 35});
+        ui::text(done ? "+" : now ? ">" : " ", r.x + 12 * s, y, 14 * s, col);
+        ui::text(st.title, r.x + 28 * s, y, 14 * s, col);
+        if (i < static_cast<int>(course.sections.size()))
+            ui::text(sectionWord(course.sections[i].kind), r.x + w - 12 * s, y + 2 * s, 10 * s, ui::withAlpha(col, 0.6f), Align::Right);
+        y += lineH;
+    }
+    if (chip) {
+        float kw = ui::measure(cur->keyHint, 12 * s) + 12 * s;
+        Rectangle kb = {r.x + 12 * s, y + 2 * s, kw, 18 * s};
+        DrawRectangleRec(kb, Color{255, 255, 255, 220});
+        ui::text(cur->keyHint, kb.x + kw / 2, kb.y + 3 * s, 12 * s, BLACK, Align::Center);
+        y += 24 * s;
+    }
+    y += 6 * s;
+    for (const std::string& l : instr) { ui::text(l, r.x + 12 * s, y, 13 * s, Color{220, 230, 230, 230}, Align::Left, false); y += 17 * s; }
+    if (cur && cur->progress && c.player) {
+        MissionContext ctx{&c.player->fm->state(), &c.player->fm->profile(), nullptr, 0, c.battle};
+        float pr = static_cast<float>(std::clamp(cur->progress(ctx), 0.0, 1.0));
+        DrawRectangle(static_cast<int>(r.x + 12 * s), static_cast<int>(y + 4 * s), static_cast<int>(w - 24 * s), static_cast<int>(4 * s), Color{255, 255, 255, 40});
+        DrawRectangle(static_cast<int>(r.x + 12 * s), static_cast<int>(y + 4 * s), static_cast<int>((w - 24 * s) * pr), static_cast<int>(4 * s), Color{150, 255, 205, 220});
+    }
+    // live score line
+    ScoreCard sc = t.liveScore();
+    std::string live = fmt2("GATES %d / %d", sc.gatesHit, sc.gatesTotal);
+    if (sc.accuracy >= 0) live += fmti("   ACCURACY %d", static_cast<int>(sc.accuracy));
+    live += fmti("   TIME %d:", static_cast<int>(sc.flightSeconds) / 60) + fmti("%02d", static_cast<int>(sc.flightSeconds) % 60);
+    ui::text(live, r.x + 12 * s, r.y + h - 22 * s, 12 * s, Color{255, 225, 120, 230});
+    // task status for manoeuvres / formation
+    if (!t.taskStatus().empty() && m.status() == MissionStatus::Running)
+        ui::textShadow(t.taskStatus(), c.w * 0.5f, c.h * 0.72f, 18 * s, kHud, Align::Center);
+    if (m.stepFlash() > 0 && m.stepIndex() > 0) {
+        float a = static_cast<float>(std::min(1.0, m.stepFlash()));
+        ui::textShadow(std::string("COMPLETE: ") + m.steps()[m.stepIndex() - 1].title, c.w * 0.5f, c.h * 0.2f, 22 * s, ui::withAlpha(Color{120, 255, 170, 255}, a), Align::Center);
+    }
+}
+
+void Hud::trainingMarkers(const HudContext& c) {
+    const TrainingSession& t = *c.training;
+    const FlightState& ps = c.player->fm->state();
+    float s = c.h / 720.0f;
+    if (c.battle && c.battle->tanker().active) refuelCues(c);
+    const Gate* g = t.currentGate();
+    if (!g) return;
+    bool front;
+    Vector2 sp = project(c, toRl(g->pos), &front);
+    Vector2 ctr = {c.w * 0.5f, c.h * 0.5f};
+    bool onScreen = front && sp.x > 30 * s && sp.x < c.w - 30 * s && sp.y > 30 * s && sp.y < c.h - 30 * s;
+    double dist = length(g->pos - ps.pos);
+    double agl = ps.pos.y - g->ground;
+    bool windowSet = g->maxAgl > 0;
+    bool low = windowSet && agl < g->minAgl, high = windowSet && agl > g->maxAgl;
+    Color col = low || high ? kWarn : Color{120, 255, 190, 255};
+    if (!onScreen) {
+        Vector2 d = {sp.x - ctr.x, sp.y - ctr.y};
+        if (!front) { d.x = -d.x; d.y = -d.y; }
+        float len = std::max(1.0f, std::sqrt(d.x * d.x + d.y * d.y));
+        float rad = std::min(c.w, c.h) * 0.42f;
+        sp = {ctr.x + d.x / len * rad, ctr.y + d.y / len * rad};
+        DrawPoly(sp, 3, 10 * s, std::atan2(d.y, d.x) * RAD2DEG, col);
+    } else {
+        // bracket the gate ring and label it
+        Vector2 edge = project(c, toRl(g->pos + Vec3{0, g->radius, 0}));
+        float rr = std::clamp(std::fabs(edge.y - sp.y), 8.0f * s, 260.0f * s);
+        DrawRingLines(sp, rr, rr, 0, 360, 40, ui::withAlpha(col, 0.6f));
+        float k = 7 * s;
+        ui::line({sp.x - k, sp.y}, {sp.x + k, sp.y}, 1.5f * s, col);
+        ui::line({sp.x, sp.y - k}, {sp.x, sp.y + k}, 1.5f * s, col);
+    }
+    const Section& sec = t.course().sections[t.section()];
+    int gi = t.gateIndex() - (sec.kind == SectionKind::Route ? sec.gateBegin : sec.gateStart) + 1;
+    int gn = sec.gateEnd - (sec.kind == SectionKind::Route ? sec.gateBegin : sec.gateStart);
+    if (gi < 1) gi = 0;   // flying the go-around pattern
+    ui::textShadow(dist > 2000 ? fmt("%.1f KM", dist / 1000.0) : fmti("%d M", static_cast<int>(dist)), sp.x, sp.y - 30 * s, 12 * s, col, Align::Center);
+    if (gi > 0) ui::textShadow(fmt2("GATE %d / %d", gi, gn), sp.x, sp.y + 22 * s, 11 * s, col, Align::Center);
+    else ui::textShadow("PATTERN", sp.x, sp.y + 22 * s, 11 * s, col, Align::Center);
+    // altitude window / ceiling / speed band read-outs (top centre)
+    float y = c.h * 0.24f;
+    if (windowSet) {
+        ui::textShadow(fmt2("GATE WINDOW %d-%d M AGL", static_cast<int>(g->minAgl), static_cast<int>(g->maxAgl)) + fmti("   YOU %d", static_cast<int>(agl)), ctr.x, y, 15 * s,
+                       col, Align::Center);
+        y += 20 * s;
+    }
+    if (sec.ceilingAgl > 0) {
+        bool over = ps.agl > sec.ceilingAgl;
+        ui::textShadow(fmt2("CEILING %d M AGL   (AGL %d)", static_cast<int>(sec.ceilingAgl), static_cast<int>(ps.agl)), ctr.x, y, 14 * s, over ? kWarn : kHud, Align::Center);
+        y += 19 * s;
+    }
+    if (sec.speedMax > 0) {
+        double kmh = ps.airspeed * 3.6;
+        bool ok = ps.airspeed >= sec.speedMin * 0.95 && ps.airspeed <= sec.speedMax * 1.05;
+        ui::textShadow(fmt2("SPEED BAND %d-%d KM/H", static_cast<int>(sec.speedMin * 3.6), static_cast<int>(sec.speedMax * 3.6)) + fmti("   (%d)", static_cast<int>(kmh)),
+                       ctr.x, y, 14 * s, ok ? kHud : kWarn, Align::Center);
+    }
+}
+
+void Hud::trainingApproach(const HudContext& c) {
+    const TrainingSession& t = *c.training;
+    if (!t.onApproach()) return;
+    const FlightState& st = c.player->fm->state();
+    float s = c.h / 720.0f;
+    double d = t.distanceToAim(st);
+    if (d < -200 || d > 12000) return;
+    double dev = t.glideDeviation(st);       // + = high
+    double lat = t.lineupOffset(st);         // + = right of the centreline
+    bool carrier = t.course().carrier;
+    float cx = c.w * 0.5f, cy = c.h * 0.5f;
+    float sx = cx + 150 * s, top = cy - 90 * s, hgt = 180 * s;
+    double fullDev = carrier ? 30.0 : 60.0, fullLat = carrier ? 40.0 : 120.0;
+    for (int k = -2; k <= 2; ++k) DrawCircleLines(static_cast<int>(sx), static_cast<int>(cy + k * hgt / 4), 4 * s, kHudDim);
+    float gy = cy + static_cast<float>(std::clamp(dev / fullDev, -1.0, 1.0)) * hgt / 2;
+    // carrier: the "meatball" (amber light) against the datum bar; runway: a glide-slope diamond
+    if (carrier) {
+        DrawLineEx({sx - 22 * s, cy}, {sx + 22 * s, cy}, 3 * s, Color{120, 255, 150, 230});
+        DrawCircleV({sx, gy}, 7 * s, Color{255, 190, 60, 255});
+        ui::text("BALL", sx - 14 * s, top - 20 * s, 13 * s, kHud);
+    } else {
+        DrawPoly({sx, gy}, 4, 8 * s, 45, kHud);
+        ui::text("GS", sx - 6 * s, top - 20 * s, 13 * s, kHud);
+    }
+    float ly = cy + 120 * s, lw = 180 * s;
+    for (int k = -2; k <= 2; ++k) DrawCircleLines(static_cast<int>(cx + k * lw / 4), static_cast<int>(ly), 4 * s, kHudDim);
+    float lx = cx - static_cast<float>(std::clamp(lat / fullLat, -1.0, 1.0)) * lw / 2;
+    DrawPoly({lx, ly}, 4, 8 * s, 45, kHud);
+    ui::text("LOC", cx - lw / 2 - 40 * s, ly - 7 * s, 13 * s, kHud);
+    const AircraftProfile& p = c.player->fm->profile();
+    double vref = p.approachSpeedMs;
+    ui::textShadow(fmt(carrier ? "DECK %.1f KM" : "RWY %.1f KM", std::max(0.0, d) / 1000.0), sx, top + hgt + 10 * s, 15 * s, kHud, Align::Center);
+    double tol = std::max(carrier ? 4.0 : 6.0, d * 0.012);
+    const char* gs = dev > tol ? "HIGH" : dev < -tol ? "LOW" : "ON PATH";
+    ui::textShadow(gs, sx, top + hgt + 28 * s, 14 * s, std::fabs(dev) > tol ? kWarn : kHud, Align::Center);
+    bool fast = st.airspeed > vref + 15, slow = st.airspeed < vref - 10;
+    ui::textShadow(fmti("APPROACH SPEED %d KM/H", static_cast<int>(vref * 3.6)) + fmti("   (%d)", static_cast<int>(st.airspeed * 3.6)), cx, ly + 22 * s, 14 * s,
+                   fast || slow ? kWarn : kHud, Align::Center);
+    if (!st.gearDown && d < 7000.0) ui::textShadow(carrier ? "GEAR + HOOK DOWN  (G)" : "GEAR DOWN  (G)", cx, ly + 42 * s, 18 * s, kWarn, Align::Center);
+}
+
+void Hud::trainingDebrief(const HudContext& c) {
+    if (!c.trainingResult) return;
+    const ScoreCard& sc = *c.trainingResult;
+    float s = c.h / 720.0f;
+    Color medalCol = sc.medal == Medal::Gold ? Color{255, 210, 90, 255} : sc.medal == Medal::Silver ? Color{215, 222, 230, 255}
+                   : sc.medal == Medal::Bronze ? Color{220, 150, 90, 255} : Color{255, 120, 100, 255};
+    Rectangle d = {c.w * 0.5f - 230 * s, c.h * 0.14f, 460 * s, 330 * s};
+    ui::panel(d, Color{0, 0, 0, 190}, ui::withAlpha(medalCol, 0.5f));
+    ui::textShadow("COURSE COMPLETE", d.x + d.width / 2, d.y + 12 * s, 26 * s, WHITE, Align::Center);
+    ui::textShadow(medalName(sc.medal), d.x + d.width / 2, d.y + 46 * s, 30 * s, medalCol, Align::Center);
+    ui::textShadow(fmti("SCORE %d", static_cast<int>(std::lround(sc.total))) + (c.trainingNewBest ? "   NEW BEST" : ""), d.x + d.width / 2, d.y + 84 * s, 16 * s,
+                   Color{255, 225, 120, 255}, Align::Center);
+    struct Row { const char* k; double v; } rows[] = {
+        {"WAYPOINT ACCURACY", sc.accuracy}, {"MANOEUVRING", sc.manoeuvre}, {"ALTITUDE / SPEED DISCIPLINE", sc.discipline},
+        {"TERRAIN CLEARANCE", sc.clearance}, {"STABILITY / CONTROL", sc.stability}, {"REFUELLING", sc.refuel}, {"LANDING", sc.landing},
+    };
+    float y = d.y + 112 * s;
+    for (const Row& r : rows) {
+        ui::text(r.k, d.x + 18 * s, y, 13 * s, Color{200, 210, 215, 255});
+        if (r.v < 0) ui::text("-", d.x + d.width - 18 * s, y, 13 * s, Color{255, 255, 255, 120}, Align::Right);
+        else {
+            float bw = 120 * s, bx = d.x + d.width - 18 * s - bw - 40 * s;
+            DrawRectangle(static_cast<int>(bx), static_cast<int>(y + 4 * s), static_cast<int>(bw), static_cast<int>(6 * s), Color{255, 255, 255, 40});
+            DrawRectangle(static_cast<int>(bx), static_cast<int>(y + 4 * s), static_cast<int>(bw * r.v / 100.0), static_cast<int>(6 * s), medalCol);
+            ui::text(fmti("%d", static_cast<int>(std::lround(r.v))), d.x + d.width - 18 * s, y, 13 * s, WHITE, Align::Right);
+        }
+        y += 21 * s;
+    }
+    int secs = static_cast<int>(sc.flightSeconds);
+    std::string foot = fmt2("GATES %d / %d", sc.gatesHit, sc.gatesTotal) + fmt2("     TIME %d:%02d", secs / 60, secs % 60);
+    if (sc.crashes) foot += fmti("     RETRIES %d", sc.crashes);
+    if (sc.wire > 0) foot += fmti("     WIRE %d", sc.wire);
+    ui::text(foot, d.x + d.width / 2, y + 6 * s, 12 * s, Color{220, 230, 230, 230}, Align::Center);
+    ui::textShadow(c.trainingNext, c.w * 0.5f, d.y + d.height + 14 * s, 17 * s, WHITE, Align::Center);
 }
 
 void Hud::refuelCues(const HudContext& c) {

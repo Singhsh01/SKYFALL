@@ -134,6 +134,10 @@ LossReport analyzeLoss(const FlightRecorder& rec, double deathTime, CrashReason 
         case CrashReason::NoseFirst:
             rep.advice.push_back("The nose hit first. Hold a slightly nose-up attitude for touchdown.");
             break;
+        case CrashReason::Obstacle:
+            rep.advice.push_back("You hit an obstacle. Line up on the gate early, keep the speed down through the obstacle course and look through the gap, not at the rock.");
+            if (std::fabs(f.bankDeg) > 60) rep.advice.push_back(fmt("You were banked %.0f deg: in a tight gap the wingtips come close to the walls - level the wings before the gap.", std::fabs(f.bankDeg)));
+            break;
         case CrashReason::TailStrike:
             rep.advice.push_back("Tail strike: the nose was too high while sinking. Rotate less or keep more speed.");
             break;

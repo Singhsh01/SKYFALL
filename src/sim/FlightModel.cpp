@@ -18,6 +18,7 @@ const char* crashReasonText(CrashReason r) {
         case CrashReason::Water: return "IMPACT WITH WATER";
         case CrashReason::Destroyed: return "AIRCRAFT DESTROYED";
         case CrashReason::TailStrike: return "TAIL STRIKE";
+        case CrashReason::Obstacle: return "COLLISION WITH AN OBSTACLE";
     }
     return "";
 }
@@ -41,6 +42,13 @@ double FlightModel::dragCoefficient(double alpha, double cl) const {
     double a = std::fabs(alpha);
     if (a > p.alphaStallRad) cd += 1.4 * std::pow(std::sin(a), 2.0) * smoothstep(p.alphaStallRad, p.alphaStallRad + 10 * kDeg, a);
     return cd;
+}
+
+FlightModel::LandingAxisDir FlightModel::landingDir(const DeckInfo& d) {
+    // direction of the angled deck's landing line (deck coordinates (190, -30), see DeckInfo)
+    Vec3 f = d.forward(), r{-f.z, 0.0, f.x};
+    Vec3 dir = normalize(f * 190.0 - r * 30.0);
+    return {dir, std::atan2(dir.z, dir.x)};
 }
 
 void FlightModel::resetOnRunway(bool engineRunning) {
@@ -384,6 +392,25 @@ void FlightModel::step(const ControlInputs& in, double dt) {
         vSide = vSide * (1.0 - std::min(1.0, 10.0 * dt));
         s_.vel = Vec3{fwdH.x * vAlong + vSide.x, s_.vel.y, fwdH.z * vAlong + vSide.z};
     }
+    // Arresting wire: constant deceleration that stops the jet ~95 m after the catch,
+    // whatever the throttle (pilots go to full power on touchdown in case the hook skips).
+    if (s_.arresting) {
+        LandingAxisDir ld = landingDir(deck);
+        double v = std::max(0.0, dot(s_.vel, ld.dir));
+        double decel = std::max(9.0, s_.arrestV0 * s_.arrestV0 / (2.0 * 95.0));
+        v = std::max(0.0, v - decel * dt);
+        s_.vel = ld.dir * v;
+        Euler e = toEuler(s_.q);
+        s_.q = Quat::fromEuler(e.heading + wrapPi(ld.heading - e.heading) * std::min(1.0, 2.0 * dt), std::max(0.0, e.pitch - 0.2 * dt), 0.0);
+        if (v < 0.3) {
+            s_.vel = {0, 0, 0};
+            s_.arresting = false;
+            s_.trapped = true;
+            s_.parkingBrake = true;
+        }
+    } else if (s_.trapped) {
+        s_.vel = {0, 0, 0};
+    }
     s_.pos += s_.vel * dt;
     s_.airspeed = length(s_.vel);
 
@@ -400,6 +427,8 @@ void FlightModel::step(const ControlInputs& in, double dt) {
         if (!wasOnGround) {
             Euler e = toEuler(s_.q);
             double sink = -s_.vel.y;
+            s_.touchdownSink = sink;
+            s_.touchdownTime = s_.simTime;
             if (s_.gearPos < 0.9 && s_.airspeed > 20.0) { forceCrash(CrashReason::BellyLanding); return; }
             if (sink > 7.0) { forceCrash(CrashReason::HardLanding); return; }
             if (std::fabs(e.bank) > 15.0 * kDeg) { forceCrash(CrashReason::WingStrike); return; }
@@ -420,6 +449,37 @@ void FlightModel::step(const ControlInputs& in, double dt) {
     }
     if (!s_.onGround) s_.timeAirborne += dt;
 
+    // Tailhook and wires (only when a carrier deck exists).
+    if (deck.active) {
+        s_.hookDown = s_.gearDown;
+        Vec3 fwd = s_.q.forward();
+        Vec3 fwdH = normalize(Vec3{fwd.x, 0, fwd.z});
+        Vec3 hook = s_.pos - fwdH * 6.5;
+        double t, lat;
+        deck.landingLine(hook.x, hook.z, t, lat);
+        bool hookOnDeck = onDeck && s_.agl <= kGearHeight + 0.8;
+        if (s_.hookDown && hookOnDeck && !s_.arresting && !s_.trapped && std::fabs(lat) < 12.0 && s_.airspeed > 15.0) {
+            for (int w = 0; w < 4; ++w) {
+                if (s_.hookT < deck.wireT[w] && t >= deck.wireT[w]) {
+                    s_.wireCaught = w + 1;
+                    s_.arresting = true;
+                    s_.arrestV0 = std::max(s_.airspeed, 20.0);
+                    break;
+                }
+            }
+        }
+        bool deckNow = s_.onGround && onDeck && !s_.arresting && !s_.trapped && !s_.catArmed && !s_.catFiring;
+        if (s_.deckTouch && !s_.onGround && !s_.trapped && !s_.arresting) ++s_.bolters;   // touch and go: bolter
+        s_.deckTouch = deckNow;
+        s_.hookT = t;
+        s_.hookLateral = lat;
+        if (s_.arresting || s_.trapped) {
+            s_.pos.y = deck.center.y + kGearHeight;
+            s_.onGround = true;
+            s_.agl = kGearHeight;
+        }
+    }
+
     // Airframe extremity collision (nose, wingtips, tails) against terrain while airborne.
     if (!s_.onGround) {
         const Vec3 pts[5] = {{p.lengthM * 0.5, 0, 0}, {0, 0, p.spanM * 0.5}, {0, 0, -p.spanM * 0.5},
@@ -433,7 +493,9 @@ void FlightModel::step(const ControlInputs& in, double dt) {
                 forceCrash(terrain_->isWater(w.x, w.z) && !rw ? CrashReason::Water : CrashReason::Terrain);
                 return;
             }
+            if (terrain_->obstacleHit(w)) { forceCrash(CrashReason::Obstacle); return; }
         }
+        if (terrain_->obstacleHit(s_.pos)) { forceCrash(CrashReason::Obstacle); return; }
     }
 
     updateAttitude(in, dt);

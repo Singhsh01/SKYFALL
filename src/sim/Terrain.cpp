@@ -361,8 +361,21 @@ Terrain::Terrain(const Heightmap& hmIn, const TerrainInfo& info) : info_(info) {
                     hi = std::max(hi, h);
                 }
             if (wet) continue;
-            double score = (hi - lo) + std::hypot(cx, cz) * 0.004;
-            if (score < best) { best = score; rc = {cx, 0.5 * (lo + hi), cz}; }
+            // a usable approach: the steepest angle the terrain forces on a straight-in from either end
+            double base = 0.5 * (lo + hi), app = 90.0;
+            for (double sgn : {-1.0, 1.0}) {
+                double need = 0;
+                // the final and the turn onto it need room inside the map
+                if (std::fabs(cx + sgn * (1500.0 + 7000.0)) > kHalfSize - 1800.0) need = 30.0;
+                for (double d = 400; d <= 7000 && need < 30.0; d += 300) {
+                    double x = cx + sgn * (1500.0 + d);
+                    for (double az : {-120.0, 0.0, 120.0})
+                        need = std::max(need, std::atan2(raw(x, cz + az) - base + 40.0, d) / kDeg);
+                }
+                app = std::min(app, need);
+            }
+            double score = (hi - lo) + std::hypot(cx, cz) * 0.004 + std::max(0.0, app - 3.5) * 60.0;
+            if (score < best) { best = score; rc = {cx, base, cz}; }
         }
     if (best > 1e17) rc = {0, std::max(10.0, raw(0, 0)), 0};
     runway_.center = rc;
@@ -472,6 +485,95 @@ double Terrain::surfaceHeight(double x, double z) const {
     double h = std::max(height(x, z), kSeaLevel);
     if (deck_.active && onDeck(x, z, 14.0)) h = std::max(h, deck_.center.y);   // hull is wider than the strip
     return h;
+}
+
+void DeckInfo::landingLine(double x, double z, double& t, double& lateral) const {
+    double c = std::cos(heading), sn = std::sin(heading);
+    double dx = x - center.x, dz = z - center.z;
+    double along = dx * c + dz * sn, across = -dx * sn + dz * c;
+    const double a0 = -160.0, c0 = -6.0, ua0 = 190.0, uc0 = -30.0;
+    double ul = std::hypot(ua0, uc0), ua = ua0 / ul, uc = uc0 / ul;
+    double ra = along - a0, rc = across - c0;
+    t = ra * ua + rc * uc;
+    lateral = -ra * uc + rc * ua;   // + = starboard of the landing line
+}
+
+namespace {
+constexpr int kObsCells = 64;
+constexpr double kObsCell = 500.0;
+int obsCell(double v) { return std::clamp(static_cast<int>(std::floor((v + kObsCells * kObsCell * 0.5) / kObsCell)), 0, kObsCells - 1); }
+double obstacleReach(const Obstacle& o) {
+    switch (o.kind) {
+        case Obstacle::Kind::Arch: return o.span * 0.5 + o.radius;
+        case Obstacle::Kind::Deck: return o.span * 0.5 + o.width;
+        default: return o.radius;
+    }
+}
+}  // namespace
+
+void Terrain::setObstacles(std::vector<Obstacle> obs) {
+    obstacles_ = std::move(obs);
+    obstacleBuckets_.assign(kObsCells * kObsCells, {});
+    for (int k = 0; k < static_cast<int>(obstacles_.size()); ++k) {
+        const Obstacle& o = obstacles_[k];
+        double r = obstacleReach(o) + 20.0;
+        for (int j = obsCell(o.pos.z - r); j <= obsCell(o.pos.z + r); ++j)
+            for (int i = obsCell(o.pos.x - r); i <= obsCell(o.pos.x + r); ++i) obstacleBuckets_[j * kObsCells + i].push_back(k);
+    }
+    ++obstacleVersion_;
+}
+
+namespace {
+// Signed distance-like test in the obstacle's frame; returns horizontal clearance (<= 0: inside).
+double obstacleClearance(const Obstacle& o, const Vec3& p) {
+    double y = p.y - o.pos.y;
+    switch (o.kind) {
+        case Obstacle::Kind::Pillar:
+        case Obstacle::Kind::Mast: {
+            if (y < -60.0 || y > o.height) return 1e9;
+            double taper = o.kind == Obstacle::Kind::Pillar ? 1.0 - 0.22 * clampd(y / o.height, 0.0, 1.0) : 1.0;
+            return std::hypot(p.x - o.pos.x, p.z - o.pos.z) - o.radius * taper;
+        }
+        case Obstacle::Kind::Arch: {
+            double c = std::cos(o.heading), s = std::sin(o.heading);
+            double dx = p.x - o.pos.x, dz = p.z - o.pos.z;
+            double u = dx * c + dz * s, v = -dx * s + dz * c;   // u along the span, v along the route
+            double best = 1e9;
+            if (y >= -60.0 && y <= o.height) {
+                for (double side : {-1.0, 1.0}) best = std::min(best, std::hypot(u - side * o.span * 0.5, v) - o.radius);
+            }
+            if (y >= o.height - o.thickness && y <= o.height) {
+                double du = std::fabs(u) - (o.span * 0.5 + o.radius), dv = std::fabs(v) - o.radius * 0.9;
+                best = std::min(best, std::max(du, dv));
+            }
+            return best;
+        }
+        case Obstacle::Kind::Deck: {
+            if (y < o.height || y > o.height + o.thickness) return 1e9;
+            double c = std::cos(o.heading), s = std::sin(o.heading);
+            double dx = p.x - o.pos.x, dz = p.z - o.pos.z;
+            double u = dx * c + dz * s, v = -dx * s + dz * c;
+            return std::max(std::fabs(u) - o.span * 0.5, std::fabs(v) - o.width * 0.5);
+        }
+    }
+    return 1e9;
+}
+}  // namespace
+
+bool Terrain::obstacleHit(const Vec3& p) const {
+    if (obstacles_.empty() || obstacleBuckets_.empty()) return false;
+    for (int k : obstacleBuckets_[obsCell(p.z) * kObsCells + obsCell(p.x)])
+        if (obstacleClearance(obstacles_[k], p) <= 0.0) return true;
+    return false;
+}
+
+double Terrain::obstacleDistance(const Vec3& p, double maxRange) const {
+    double best = maxRange;
+    if (obstacles_.empty() || obstacleBuckets_.empty()) return best;
+    for (int j = obsCell(p.z - maxRange); j <= obsCell(p.z + maxRange); ++j)
+        for (int i = obsCell(p.x - maxRange); i <= obsCell(p.x + maxRange); ++i)
+            for (int k : obstacleBuckets_[j * kObsCells + i]) best = std::min(best, std::max(0.0, obstacleClearance(obstacles_[k], p)));
+    return best;
 }
 
 Vec3 DeckInfo::forward() const { return {std::cos(heading), 0.0, std::sin(heading)}; }

@@ -57,6 +57,12 @@ struct Jet {
     double crankTimer = 0;        // > 0: offsetting after a missile launch
     double crankSign = 1;
     double hitFlash = 0;
+    // scripted route (Training Academy formation lead): no weapons, no threat reactions
+    std::vector<Vec3> route;
+    size_t routeIdx = 0;
+    double routeSpeed = 200;
+    bool routeLoop = true;
+    bool formationLead = false;   // training lead: smooth loop, tight speed hold (a wingman formates on it)
     int kills = 0;
     ControlInputs lastInput{};
     // Trail bookkeeping for renderer

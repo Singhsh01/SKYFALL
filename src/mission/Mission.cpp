@@ -20,6 +20,16 @@ void Mission::reset() {
     times_.clear();
 }
 
+void Mission::skipTo(size_t idx) {
+    index_ = std::min(idx, steps_.size());
+    hold_ = 0;
+    flash_ = 0;
+    status_ = index_ >= steps_.size() ? MissionStatus::Complete : MissionStatus::Running;
+    failure_.clear();
+    if (times_.size() > index_) times_.resize(index_);
+    while (times_.size() < index_) times_.push_back(elapsed_);
+}
+
 void Mission::fail(const std::string& why) {
     if (status_ != MissionStatus::Running) return;
     status_ = MissionStatus::Failed;
