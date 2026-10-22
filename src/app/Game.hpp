@@ -8,6 +8,7 @@
 #include "../combat/Combat.hpp"
 #include "../audio/Speech.hpp"
 #include "TerrainDownload.hpp"
+#include "../sim/MapStore.hpp"
 #include "../mission/Campaign.hpp"
 #include "../mission/Mission.hpp"
 #include "../mission/Training.hpp"
@@ -69,6 +70,14 @@ private:
     void updatePlaying(double dt);
     void updateTitleScene(double dt);
     void simulate(double dt, bool withPlayerInput);
+    // render interpolation: draw jets and missiles between the last two 120 Hz physics steps
+    // (stepper alpha), so motion is even at any frame rate; the real state is restored after
+    struct InterpSaved { Jet* jet; Vec3 pos; Quat q; };
+    std::vector<InterpSaved> interpJets_;
+    std::vector<Vec3> interpMissiles_;
+    bool interpActive_ = false;
+    void beginRenderInterpolation();
+    void endRenderInterpolation();
     void processEvents();
     void updateCamera(double dt);
     void updateAudio();
@@ -134,6 +143,14 @@ private:
     bool loadLocation(const std::string& id, bool showProgress = true);
     bool locationAvailable(const std::string& id);
     std::string terrainPath(const std::string& id);
+    std::string bundledMapPath(const std::string& id);
+    // ---- the persistent map store (sim/MapStore) ----
+    MapStore maps_;
+    int locSel_ = 0;                  // last location row focused on the locations screen
+    void pumpMapDownloads();
+    void installAllMaps();
+    void verifyAllMaps();
+    void repairMap(const std::string& id);
     double safeAltitude(Vec3 a, Vec3 b, double margin) const;
     void drawLocations();
     const CampaignMissionDef* campaignDef_ = nullptr;   // missions 04-61 (points at campDef_)
@@ -178,6 +195,8 @@ private:
     std::vector<double> benchSim_, benchHud_;
     bool startModeFromString(const std::string& m);
     void updateDynamicResolution(double dt);
+    double displayFrameBudgetMs() const;
+    void applyFramePacing();
     MissionContext missionContext();
     Renderer renderer_;
     Hud hud_;

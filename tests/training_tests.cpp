@@ -10,18 +10,22 @@
 #include "CampaignPlaythrough.hpp"
 #include "sim/Locations.hpp"
 #include "sim/TerrainAnalysis.hpp"
+#include "sim/MapStore.hpp"
 
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 using namespace sky;
 
@@ -1146,6 +1150,65 @@ TEST(campaign_is_winnable_over_other_locations) {
         CHECK_MSG(extra.size() <= allowed, "%s: %zu missions lost that the bot wins in the desert", id.c_str(), extra.size());
     }
     std::printf("    %d/%d missions won\n", won, flown);
+}
+
+TEST(map_store_installs_verifies_and_repairs) {
+    // SHA-256 against the FIPS test vectors
+    const std::string abc = "abc";
+    CHECK(sha256Hex(reinterpret_cast<const std::uint8_t*>(abc.data()), abc.size()) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    CHECK(sha256Hex(nullptr, 0) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    const std::string two = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    CHECK(sha256Hex(reinterpret_cast<const std::uint8_t*>(two.data()), two.size()) == "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+    // every map shipped with the game matches its recorded checksum
+    for (const std::string& id : allLocationIds()) {
+        if (id == "desert") continue;
+        std::string p = std::string(SKYFALL_ASSET_DIR) + "/terrain/" + id + ".skt";
+        CHECK_MSG(sha256File(p) == bundledMapChecksum(id), "%s: bundled map checksum", id.c_str());
+        std::string err;
+        CHECK_MSG(validMapFile(p, err), "%s: %s", id.c_str(), err.c_str());
+    }
+    // a store in a scratch folder: install, survive a restart, detect damage, repair
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / ("skyfall_maps_test_" + std::to_string(::getpid()));
+    fs::remove_all(dir);
+    {
+        MapStore st(dir.string());
+        CHECK(st.check("fuji") == MapStore::State::Missing);
+        std::string err;
+        bool verified = false;
+        CHECK(st.install("fuji", std::string(SKYFALL_ASSET_DIR) + "/terrain/fuji.skt", "bundled", err, &verified));
+        CHECK(verified);
+        CHECK(st.check("fuji", true) == MapStore::State::Valid);
+        // a file that is not a map is refused
+        std::ofstream(dir / "junk.skt") << "not a map";
+        CHECK(!st.install("rio", (dir / "junk.skt").string(), "download", err));
+        CHECK(st.check("rio") == MapStore::State::Missing);
+    }
+    {
+        MapStore st(dir.string());   // a new session: the manifest is read back
+        CHECK(st.check("fuji", true) == MapStore::State::Valid);
+        // flip one byte: the deep check sees it, the size check does not need to
+        {
+            std::fstream f(st.pathFor("fuji"), std::ios::in | std::ios::out | std::ios::binary);
+            f.seekp(5000);
+            char c = 0x55;
+            f.write(&c, 1);
+        }
+        CHECK(st.check("fuji", false) == MapStore::State::Valid);
+        CHECK(st.check("fuji", true) == MapStore::State::Corrupt);
+        // truncation is caught without hashing
+        fs::resize_file(st.pathFor("fuji"), 1000);
+        CHECK(st.check("fuji", false) == MapStore::State::Corrupt);
+        // repair = reinstall
+        st.remove("fuji");
+        std::string err;
+        CHECK(st.install("fuji", std::string(SKYFALL_ASSET_DIR) + "/terrain/fuji.skt", "bundled", err));
+        CHECK(st.check("fuji", true) == MapStore::State::Valid);
+        // another map is added without touching the first
+        CHECK(st.install("rio", std::string(SKYFALL_ASSET_DIR) + "/terrain/rio.skt", "bundled", err));
+        CHECK(st.entries().size() == 2 && st.check("fuji", true) == MapStore::State::Valid);
+    }
+    fs::remove_all(dir);
 }
 
 TEST(bot_sweep_over_every_location) {

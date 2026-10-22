@@ -5,13 +5,18 @@
 # (symptom: "ld: tapi error ... unknown architecture arm64e..."), this script retries with the
 # newest older SDK that works. The real fix is updating the Command Line Tools:
 #   softwareupdate --list   (install the newest "Command Line Tools for Xcode")
+#
+#   ./scripts/build_mac.sh                  configure (once), build, test, launch
+#   ./scripts/build_mac.sh --configure-only configure the Release build only (used by make_app.sh)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 command -v cmake >/dev/null || { echo "cmake missing: brew install cmake"; exit 1; }
+CONFIGURE_ONLY=0
+if [ "${1:-}" = "--configure-only" ]; then CONFIGURE_ONLY=1; shift; fi
 
 configure() { rm -rf build; cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "$@" >build_config.log 2>&1; }
 
-if [ -f build/CMakeCache.txt ] && [ -f build/Makefile ]; then
+if [ -f build/CMakeCache.txt ] && [ -f build/Makefile ] && grep -q "CMAKE_BUILD_TYPE:STRING=Release" build/CMakeCache.txt; then
   echo "Reusing existing build directory (delete build/ to reconfigure)."
 elif configure; then
   echo "Configured with the default SDK."
@@ -28,6 +33,7 @@ else
     exit 1
   fi
 fi
+[ "$CONFIGURE_ONLY" = 1 ] && exit 0
 set -e
 cmake --build build --parallel 2          # 2 jobs keeps memory use low on 8 GB machines
 ctest --test-dir build --output-on-failure

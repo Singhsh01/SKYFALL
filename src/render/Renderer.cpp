@@ -74,22 +74,22 @@ inline void drawMeshC(const Mesh& m, const Material& mat, const Matrix& t) {
     DrawMesh(m, mat, t);
 }
 
-Vector3 paintFor(const Jet& j, Vector3& b, float& camo) {
+Vector3 paintFor(Team team, int skinIdx, const AircraftProfile& prof, Vector3& b, float& camo) {
     camo = 0;
     g_paintRough = 0.42f;
-    if (j.skin > 0) {
-        const Skin& k = skin(j.skin);
+    if (skinIdx > 0) {
+        const Skin& k = skin(skinIdx);
         b = k.b;
         g_paintC = k.c;
         camo = static_cast<float>(static_cast<int>(k.pattern));
         g_paintRough = k.roughness;
         return k.a;
     }
-    AirframeStyle st = j.fm->profile().style;
-    if (j.team == Team::Blue) {
+    AirframeStyle st = prof.style;
+    if (team == Team::Blue) {
         switch (st) {   // linear-space greys close to the real-world schemes of each family
             case AirframeStyle::StealthTwinTail:
-                if (j.fm->profile().id == AircraftId::Su57) { camo = 1; b = {0.07f, 0.09f, 0.12f}; return {0.20f, 0.23f, 0.27f}; }
+                if (prof.id == AircraftId::Su57) { camo = 1; b = {0.07f, 0.09f, 0.12f}; return {0.20f, 0.23f, 0.27f}; }
                 b = {0.112f, 0.122f, 0.134f}; return {0.158f, 0.168f, 0.180f};
             case AirframeStyle::StealthSingle: b = {0.085f, 0.09f, 0.098f}; return {0.118f, 0.124f, 0.132f};
             case AirframeStyle::DeltaCanard: b = {0.11f, 0.12f, 0.135f}; return {0.15f, 0.16f, 0.175f};
@@ -104,6 +104,8 @@ Vector3 paintFor(const Jet& j, Vector3& b, float& camo) {
     g_paintC = {0.36f, 0.30f, 0.21f};
     return {0.36f, 0.30f, 0.21f};
 }
+
+Vector3 paintFor(const Jet& j, Vector3& b, float& camo) { return paintFor(j.team, j.skin, j.fm->profile(), b, camo); }
 }  // namespace
 
 long Renderer::triangles() const { return g_tris; }
@@ -943,7 +945,7 @@ void Renderer::drawGates(const FrameParams& f) {
 void Renderer::drawRain(const FrameParams& f) {
     if (f.rain <= 0.0f) return;
     // streaks in a box that follows the camera; they fall at 9 m/s and smear with the relative wind
-    const int n = f.quality == GraphicsQuality::Low ? 1800 : 4200;
+    const int n = qualityProfile(f.quality).rainDrops;
     const float box = 70.0f;
     Vector3 fall = {f.rainWind.x, -9.0f + f.rainWind.y, f.rainWind.z};
     float speed = Vector3Length(fall);
@@ -1060,8 +1062,9 @@ void Renderer::drawTerrain(const FrameParams& f) {
     Vector3 cp = f.cam.position;
     Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
     rlDisableBackfaceCulling();
-    float hiDist = f.quality == GraphicsQuality::Low ? 2500.0f : (f.quality == GraphicsQuality::Medium ? 4500.0f : 7000.0f);
-    float l0Dist = f.quality == GraphicsQuality::Low ? 0.0f : (f.quality == GraphicsQuality::Medium ? 900.0f : 2200.0f);
+    const QualityProfile qp = qualityProfile(f.quality);
+    float hiDist = qp.terrainHiDist;
+    float l0Dist = qp.terrainL0Dist;
     int buildBudget = f.isPip ? 0 : 2;   // at most two new 15.6 m chunks per frame (no hitches)
     for (auto& c : world_.chunks) {
         Vector3 d = Vector3Subtract(c.center, cp);
@@ -1114,7 +1117,7 @@ void Renderer::drawStatics(const FrameParams& f) {
     drawDressing(f);
     lit_.setF("uSpecular", 0.0f);
     Vector3 cp = f.cam.position;
-    float treeDist = f.quality == GraphicsQuality::Low ? 3000.0f : (f.quality == GraphicsQuality::Medium ? 6000.0f : 9000.0f);
+    float treeDist = qualityProfile(f.quality).treeDist;
     for (auto& c : world_.chunks) {
         if (!c.hasTrees) continue;
         Vector3 d = Vector3Subtract(c.center, cp);
@@ -1128,6 +1131,8 @@ void Renderer::drawStatics(const FrameParams& f) {
     drawCalls_ += 2;
     // parked aircraft on the apron
     for (const Vector3& p : world_.parkedJets) {
+        Vector3 pp = {p.x, static_cast<float>(rw.center.y + 2.35), p.z};
+        if (Vector3Distance(pp, cp) > qualityProfile(f.quality).sceneryDist * 0.5f || !sphereVisible(f, pp, 15.0f)) continue;
         Matrix M = MatrixMultiply(QuaternionToMatrix(toRlQ(Quat::fromEuler(p.y, 0, 0))),
                                   MatrixTranslate(p.x, static_cast<float>(rw.center.y + 2.35), p.z));
         drawJetModel(AirframeStyle::StealthTwinTail, M, {0.158f, 0.168f, 0.180f}, {0.112f, 0.122f, 0.134f}, 0, 1, 0, 0, 0, 0, 0, f);
@@ -1177,12 +1182,9 @@ void Renderer::drawGroundTargets(const FrameParams& f) {
         Matrix T = MatrixTranslate(static_cast<float>(g.pos.x), static_cast<float>(g.pos.y), static_cast<float>(g.pos.z));
         litMat_.maps[MATERIAL_MAP_DIFFUSE].color = g.alive ? WHITE : Color{40, 36, 32, 255};
         if (g.kind == GroundKind::ParkedJet) {
-            Jet tmp;
-            tmp.team = Team::Red;
-            tmp.fm = std::make_unique<FlightModel>(profile(AircraftId::Su35), *terrain_);
             Vector3 pb;
             float camo;
-            Vector3 pa = paintFor(tmp, pb, camo);
+            Vector3 pa = paintFor(Team::Red, 0, profile(AircraftId::Su35), pb, camo);
             setAtmosphere(jet_, f);
             Matrix M = MatrixMultiply(R, MatrixTranslate(static_cast<float>(g.pos.x), static_cast<float>(g.pos.y + 2.35), static_cast<float>(g.pos.z)));
             drawJetModel(AirframeStyle::FlankerFamily, M, pa, pb, camo, 1, 0, 0, 0, 0, g.alive ? 0.0f : 1.0f, f);
@@ -1222,12 +1224,13 @@ void Renderer::drawGroundTargets(const FrameParams& f) {
 void Renderer::drawDressing(const FrameParams& f) {
     Vector3 cp = f.cam.position;
     Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
-    float maxDist = f.quality == GraphicsQuality::Low ? 9000.0f : (f.quality == GraphicsQuality::Medium ? 14000.0f : 20000.0f);
+    float maxDist = qualityProfile(f.quality).sceneryDist;
     for (const Dressing::Piece& p : dressing_.statics) {
         Vector3 d = Vector3Subtract(p.center, cp);
         float dist = Vector3Length(d);
         if (dist - p.radius > maxDist) continue;
         if (dist > p.radius && Vector3DotProduct(d, fwd) < -p.radius) continue;
+        if (!sphereVisible(f, p.center, p.radius)) continue;   // outside the view frustum
         drawMeshC(p.mesh, litMat_, MatrixIdentity());
         ++drawCalls_;
     }
@@ -1238,7 +1241,7 @@ void Renderer::drawDressing(const FrameParams& f) {
     for (const Vec3& fc : L->factories) {
         bool owned = false;
         if (gb) for (const GroundTarget& g : gb->ground()) if (g.kind == GroundKind::Factory && std::hypot(g.pos.x - fc.x, g.pos.z - fc.z) < 20) owned = true;
-        if (owned || Vector3Distance(toRl(fc), cp) > maxDist) continue;
+        if (owned || Vector3Distance(toRl(fc), cp) > maxDist || !sphereVisible(f, toRl(fc), 90.0f)) continue;
         drawMeshC(factory_, litMat_, MatrixTranslate(static_cast<float>(fc.x), static_cast<float>(fc.y), static_cast<float>(fc.z)));
         ++drawCalls_;
     }
@@ -1246,7 +1249,7 @@ void Renderer::drawDressing(const FrameParams& f) {
     if (dressing_.rotor.vertexCount)
         for (size_t i = 0; i < dressing_.rotorHubs.size(); ++i) {
             Vector3 h = dressing_.rotorHubs[i];
-            if (Vector3Distance(h, cp) > maxDist * 0.7f) continue;
+            if (Vector3Distance(h, cp) > maxDist * 0.7f || !sphereVisible(f, h, 60.0f)) continue;
             Matrix M = MatrixMultiply(MatrixMultiply(MatrixRotateX(static_cast<float>(f.time * 1.3 + i * 0.7)), MatrixRotateY(-dressing_.rotorYaw[i])),
                                       MatrixTranslate(h.x, h.y, h.z));
             drawMeshC(dressing_.rotor, litMat_, M);
@@ -1264,7 +1267,7 @@ void Renderer::drawDressing(const FrameParams& f) {
             Vec3 tan;
             Vec3 p = L->railway.at(sk, &tan);
             p.y = std::max(p.y, terrain_->surfaceHeight(p.x, p.z));
-            if (Vector3Distance(toRl(p), cp) > maxDist * 0.6f) continue;
+            if (Vector3Distance(toRl(p), cp) > maxDist * 0.6f || !sphereVisible(f, toRl(p), 20.0f)) continue;
             float yaw = static_cast<float>(std::atan2(tan.z, tan.x));
             Matrix M = MatrixMultiply(MatrixRotateY(-yaw), MatrixTranslate(static_cast<float>(p.x), static_cast<float>(p.y + 0.4), static_cast<float>(p.z)));
             drawMeshC(k == 0 ? locomotive_ : wagon_, litMat_, M);
@@ -1609,7 +1612,7 @@ void Renderer::drawCloudPuffs(const FrameParams& f) {
 void Renderer::renderShadows(const FrameParams& f) {
     if (f.isPip) return;   // the secondary view reuses this frame's shadow map
     shadowsActive_ = false;
-    if (!shadowRT_.id || !f.battle || !f.shadows || f.quality == GraphicsQuality::Low) return;
+    if (!shadowRT_.id || !f.battle || !f.shadows || !qualityProfile(f.quality).shadows) return;
     Vector3 focus = f.shadowFocus;
     Vector3 sd = f.L.sunDir;
     if (sd.y < 0.03f) return;
@@ -1711,13 +1714,9 @@ void Renderer::renderWorld(const FrameParams& f) {
         }
         if (f.extraJets) {
             for (const ExtraJet& e : *f.extraJets) {
-                Jet tmp;
-                tmp.team = e.team;
-                tmp.skin = e.skin;
-                tmp.fm = std::make_unique<FlightModel>(profile(e.id), *terrain_);
                 Vector3 pb;
                 float camo;
-                Vector3 pa = paintFor(tmp, pb, camo);
+                Vector3 pa = paintFor(e.team, e.skin, profile(e.id), pb, camo);
                 setAtmosphere(jet_, f);
                 drawJetModel(e.style, bodyMatrix(e.pos, e.q), pa, pb, camo, e.gear, 0, e.throttle, e.ab, 0, 0, f);
             }

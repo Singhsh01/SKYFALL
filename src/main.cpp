@@ -5,7 +5,7 @@
 //   skyfall --mode arena|m01     jump straight into the Dogfight Arena / Mission 01
 //   skyfall --capture <dir>      scripted screenshots from the running renderer, then exit
 //   skyfall --bench <seconds>    scripted benchmark; writes benchmarks/benchmark.json + frame_times.csv
-//   skyfall --size 1280x720 --windowed --quality 0|1|2
+//   skyfall --size 1280x720 --windowed --quality 0-5
 #include "app/Game.hpp"
 #include "raylib.h"
 
@@ -81,8 +81,28 @@ void logCallback(int level, const char* fmt, va_list args) {
 }
 }  // namespace
 
+// Launched as SKYFALL.app (Finder, Dock, the Desktop shortcut) the working directory is "/":
+// run from the user's data folder instead, so logs, screenshots and benchmarks have a home.
+// Assets are found next to the executable (Contents/Resources/assets) wherever the game runs.
+static void chooseWorkingDirectory() {
+#if !defined(__EMSCRIPTEN__)
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::string app = GetApplicationDirectory();
+    bool bundle = app.find(".app/Contents/MacOS") != std::string::npos;
+    fs::path cwd = fs::current_path(ec);
+    bool rootDir = ec || cwd == cwd.root_path();
+    if (bundle || rootDir) {
+        fs::path data = fs::path(sky::defaultSettingsPath()).parent_path();
+        fs::create_directories(data, ec);
+        if (!ec) fs::current_path(data, ec);
+    }
+#endif
+}
+
 static int skyfallMain(int argc, char** argv) {
     std::error_code ec;
+    chooseWorkingDirectory();
     std::filesystem::create_directories("logs", ec);
     g_log = std::fopen("logs/skyfall.log", "w");
 #ifdef SKYFALL_SIGNALS
@@ -103,7 +123,7 @@ static int skyfallMain(int argc, char** argv) {
             std::string v = next();
             if (std::sscanf(v.c_str(), "%dx%d", &opt.width, &opt.height) != 2) { opt.width = opt.height = 0; }
         } else if (a == "--help" || a == "-h") {
-            std::printf("skyfall [--mode arena|m01] [--capture dir] [--bench seconds] [--size WxH] [--windowed] [--quality 0-2]\n");
+            std::printf("skyfall [--mode arena|m01] [--capture dir] [--bench seconds] [--size WxH] [--windowed] [--quality 0-5 (low, medium, high, ultra, cinematic 4K, performance 120)]\n");
             return 0;
         }
     }

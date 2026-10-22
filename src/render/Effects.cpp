@@ -306,17 +306,15 @@ void Effects::update(double dt, const Battle& b, const Lighting& L, Vector3 camP
             if (rng_.uniform() < 0.8) spawnFire(d.pos, V(0, 0, 0), 1.4f, 2.8f, 0.25f, V(1.0f, 0.5f, 0.15f));
         }
     }
-    std::vector<Debris> keep;
-    for (Debris& d : debris_) {
+    // in place: no allocation per frame
+    debris_.erase(std::remove_if(debris_.begin(), debris_.end(), [&](const Debris& d) {
         bool ground = d.pos.y < 0 || d.life > 12.0f;
-        if (ground) {
-            if (d.burning && d.life < 12.0f) {
-                Particle q; q.pos = d.pos; q.size0 = 4; q.size1 = 12; q.maxLife = 0.5f; q.color = {1, 0.6f, 0.2f}; q.kind = PKind::Fire;
-                particles_.push_back(q);
-            }
-        } else keep.push_back(d);
-    }
-    debris_.swap(keep);
+        if (ground && d.burning && d.life < 12.0f) {
+            Particle q; q.pos = d.pos; q.size0 = 4; q.size1 = 12; q.maxLife = 0.5f; q.color = {1, 0.6f, 0.2f}; q.kind = PKind::Fire;
+            particles_.push_back(q);
+        }
+        return ground;
+    }), debris_.end());
     // wrecks: rising smoke columns
     for (Wreck& w : wrecks_) {
         w.timer += fdt;
@@ -414,7 +412,8 @@ void Effects::draw(const Camera3D& cam, const Battle& b, const Lighting& L, Shad
     SetShaderValue(ps, intensityLoc, &smokeScale, SHADER_UNIFORM_FLOAT);
     BeginBlendMode(BLEND_ALPHA);
     drawTrails(cam, L);
-    std::vector<std::pair<float, const Particle*>> smoke;
+    auto& smoke = smokeSort_;   // reused buffer: no allocation per frame
+    smoke.clear();
     smoke.reserve(particles_.size());
     for (const Particle& q : particles_)
         if (q.kind == PKind::Smoke || q.kind == PKind::Dust) smoke.push_back({Vector3DistanceSqr(q.pos, camPos), &q});

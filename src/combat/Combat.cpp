@@ -1194,6 +1194,14 @@ void Battle::updateGround(double dt) {
 
 void Battle::update(double dt, const ControlInputs& playerInput, const PlayerCommands& cmd) {
     time_ += dt;
+    // where everything was before this step: the renderer draws between the last two steps
+    for (auto& jp : jets_) {
+        const FlightState& s = jp->fm->state();
+        jp->prevPos = s.pos;
+        jp->prevQ = s.q;
+        jp->prevValid = true;
+    }
+    for (Missile& m : missiles_) { m.prevPos = m.pos; m.prevValid = true; }
     for (auto& jp : jets_) {
         if (jp->isPlayer) updateJet(*jp, dt, &playerInput, &cmd);
         else updateJet(*jp, dt, nullptr, nullptr);

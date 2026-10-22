@@ -1,0 +1,54 @@
+{
+  // SKYFALL tasks: Terminal > Run Task..., or Cmd+Shift+B for the default build.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "SKYFALL: Build (Release)",
+      "type": "shell",
+      "command": "./scripts/build_mac.sh --configure-only && cmake --build build --parallel 2",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "SKYFALL: Build (Debug)",
+      "type": "shell",
+      "command": "cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug -DSKYFALL_BUILD_TESTS=OFF && cmake --build build-debug --target skyfall --parallel 2",
+      "group": "build",
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "SKYFALL: Run tests",
+      "type": "shell",
+      "command": "ctest --test-dir build --output-on-failure",
+      "dependsOn": "SKYFALL: Build (Release)",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "SKYFALL: Play (Release build)",
+      "type": "shell",
+      "command": "./build/skyfall",
+      "dependsOn": "SKYFALL: Build (Release)",
+      "problemMatcher": []
+    },
+    {
+      "label": "SKYFALL: Install SKYFALL.app + Desktop shortcut",
+      "type": "shell",
+      "command": "./scripts/make_app.sh",
+      "problemMatcher": []
+    },
+    {
+      "label": "SKYFALL: Benchmark all presets",
+      "type": "shell",
+      "command": "./scripts/benchmark.sh",
+      "dependsOn": "SKYFALL: Build (Release)",
+      "problemMatcher": []
+    },
+    {
+      "label": "SKYFALL: Web build",
+      "type": "shell",
+      "command": "./scripts/build_web.sh",
+      "problemMatcher": []
+    }
+  ]
+}

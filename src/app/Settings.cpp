@@ -31,9 +31,47 @@ std::string defaultSettingsPath() {
     return (dir / "settings.ini").string();
 }
 
+QualityProfile qualityProfile(GraphicsQuality q) {
+    QualityProfile p;
+    switch (q) {
+        case GraphicsQuality::Low:
+            p.sceneScale = 0.7; p.terrainHiDist = 2500; p.terrainL0Dist = 0; p.treeDist = 3000; p.sceneryDist = 9000; p.rainDrops = 1800; p.shadows = false;
+            break;
+        case GraphicsQuality::Medium:
+            p.sceneScale = 0.85; p.terrainHiDist = 4500; p.terrainL0Dist = 900; p.treeDist = 6000; p.sceneryDist = 14000;
+            break;
+        case GraphicsQuality::High: break;
+        case GraphicsQuality::Ultra: p.nativePixels = true; p.maxWidth = 3840; break;
+        case GraphicsQuality::Cinematic4K:
+            p.nativePixels = true; p.maxWidth = 3840; p.terrainHiDist = 9000; p.terrainL0Dist = 3000; p.treeDist = 12000; p.sceneryDist = 26000;
+            p.rainDrops = 6000;
+            break;
+        case GraphicsQuality::Performance120:
+            p.maxWidth = 1600; p.terrainHiDist = 4500; p.terrainL0Dist = 1200; p.treeDist = 5000; p.sceneryDist = 13000; p.rainDrops = 2200;
+            p.frameBudgetMs = 1000.0 / 120.0;
+            break;
+    }
+    return p;
+}
+
+const char* qualityName(GraphicsQuality q) {
+    static const char* n[kQualityCount] = {"LOW", "MEDIUM", "HIGH", "ULTRA HD", "CINEMATIC 4K", "PERFORMANCE 120"};
+    int i = static_cast<int>(q);
+    return i >= 0 && i < kQualityCount ? n[i] : "HIGH";
+}
+
+void Settings::migrate() {
+    if (settingsVersion >= 1) return;
+    // v0.8 and older defaulted to a 75 fps cap with VSync off: on the 60 Hz MacBook Air display
+    // that tears and judders. Untouched, it now follows the display (VSync, no extra cap).
+    if (fpsCap == 75 && !vsync) { vsync = true; fpsCap = 0; }
+    settingsVersion = 1;
+}
+
 bool Settings::load(const std::string& path) {
     std::ifstream f(path);
     if (!f) return false;
+    settingsVersion = 0;   // until the file says otherwise
     std::string line;
     while (std::getline(f, line)) {
         line = trim(line);
@@ -42,7 +80,9 @@ bool Settings::load(const std::string& path) {
         if (eq == std::string::npos) continue;
         std::string k = trim(line.substr(0, eq)), v = trim(line.substr(eq + 1));
         try {
-            if (k == "quality") quality = static_cast<GraphicsQuality>(std::clamp(std::stoi(v), 0, 3));
+            if (k == "quality") quality = static_cast<GraphicsQuality>(std::clamp(std::stoi(v), 0, kQualityCount - 1));
+            else if (k == "smooth_motion") smoothMotion = toBool(v);
+            else if (k == "settings_version") settingsVersion = std::max(0, std::stoi(v));
             else if (k == "fps_cap") fpsCap = std::clamp(std::stoi(v), 0, 240);
             else if (k == "width") width = std::max(640, std::stoi(v));
             else if (k == "height") height = std::max(360, std::stoi(v));
@@ -94,7 +134,7 @@ bool Settings::save(const std::string& path) const {
       << "quality=" << static_cast<int>(quality) << "\nfps_cap=" << fpsCap << "\nwidth=" << width << "\nheight=" << height
       << "\nfullscreen=" << fullscreen << "\nvsync=" << vsync << "\nfov=" << fovDeg << "\nbloom=" << bloom
       << "\ncamera_shake=" << cameraShake << "\ng_effects=" << gEffects << "\nui_scale=" << uiScale
-      << "\nshow_fps=" << showFps << "\nhigh_contrast_hud=" << highContrastHud << "\nhud_style=" << hudStyle << "\nmissile_cam=" << missileCam << "\ncrash_replay=" << crashReplay << "\ndynamic_resolution=" << dynamicResolution << "\n[input]\n"
+      << "\nshow_fps=" << showFps << "\nhigh_contrast_hud=" << highContrastHud << "\nhud_style=" << hudStyle << "\nmissile_cam=" << missileCam << "\ncrash_replay=" << crashReplay << "\ndynamic_resolution=" << dynamicResolution << "\nsmooth_motion=" << smoothMotion << "\nsettings_version=" << settingsVersion << "\n[input]\n"
       << "invert_pitch=" << invertPitch << "\nsensitivity=" << sensitivity << "\ndeadzone=" << deadzone
       << "\nhandling=" << handling << "\naircraft=" << aircraft << "\nskins=" << skins << "\nlocation=" << location << "\n[audio]\n"
       << "master=" << master << "\nmusic=" << music << "\nengine=" << engine << "\nradio=" << radio

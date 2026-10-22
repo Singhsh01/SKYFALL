@@ -21,6 +21,10 @@ struct Jet {
     bool isPlayer = false;
     int skin = 0;           // camouflage scheme (0 = factory), see render/Skins.hpp
     std::string callsign;
+    // transform at the start of the latest physics step (render interpolation)
+    Vec3 prevPos;
+    Quat prevQ;
+    bool prevValid = false;
     std::unique_ptr<FlightModel> fm;
     double health = 100.0;
     bool alive = true;
@@ -82,6 +86,8 @@ struct Missile {
     bool active = true;
     bool surfaceLaunched = false;
     bool airToSurface = false;  // ATS / air-to-ground missile (bigger warhead, ground lock)
+    Vec3 prevPos;               // position at the start of the latest physics step
+    bool prevValid = false;
 };
 
 struct Bullet {
@@ -248,6 +254,7 @@ public:
     std::vector<std::unique_ptr<Jet>>& jets() { return jets_; }
     const std::vector<std::unique_ptr<Jet>>& jets() const { return jets_; }
     const std::vector<Missile>& missiles() const { return missiles_; }
+    std::vector<Missile>& missilesMut() { return missiles_; }   // render interpolation only
     const std::vector<Bullet>& bullets() const { return bullets_; }
     const std::vector<Flare>& flares() const { return flares_; }
     const std::vector<GroundTarget>& ground() const { return ground_; }

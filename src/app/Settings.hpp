@@ -7,15 +7,32 @@
 
 namespace sky {
 
-enum class GraphicsQuality { Low = 0, Medium = 1, High = 2, Ultra = 3 };   // Ultra: native (Retina / 4K) resolution
+enum class GraphicsQuality { Low = 0, Medium = 1, High = 2, Ultra = 3,   // Ultra: native (Retina / 4K) resolution
+                             Cinematic4K = 4,      // native pixels up to 3840 x 2160, longest view distances
+                             Performance120 = 5 }; // window-point resolution, 120 fps budget, lighter scenery
+constexpr int kQualityCount = 6;
+
+/// What each graphics preset renders: scene resolution, view distances and effect budgets.
+struct QualityProfile {
+    double sceneScale = 1.0;      // x the window size in points
+    bool nativePixels = false;    // render at the display's real pixels (Retina / 4K) instead of points
+    double maxWidth = 1920.0;     // cap on the 3D scene width (pixels)
+    float terrainHiDist = 7000, terrainL0Dist = 2200;   // terrain LOD distances
+    float treeDist = 9000, sceneryDist = 20000;         // vegetation / buildings view distances
+    int rainDrops = 4200;
+    bool shadows = true;
+    double frameBudgetMs = 0;     // > 0: the dynamic resolution aims at this frame time
+};
+QualityProfile qualityProfile(GraphicsQuality q);
+const char* qualityName(GraphicsQuality q);
 
 struct Settings {
     // Graphics
     GraphicsQuality quality = GraphicsQuality::Ultra;
-    int fpsCap = 75;            // frame-rate limit (0 = unlimited)
+    int fpsCap = 0;             // frame-rate limit (0 = none: the display paces with VSync)
     int width = 1280, height = 720;
     bool fullscreen = false;
-    bool vsync = false;        // off: the frame-rate limit (default 75) decides, even on 60 Hz screens
+    bool vsync = true;         // frames in step with the display (no tearing, even motion)
     double fovDeg = 70.0;
     bool bloom = true;
     double cameraShake = 0.6;   // 0..1 motion comfort
@@ -26,7 +43,9 @@ struct Settings {
     int hudStyle = 0;
     bool missileCam = true;     // picture-in-picture target / missile / hit camera
     bool crashReplay = true;    // replay + analysis after the aircraft is lost
-    bool dynamicResolution = true;  // lower the 3D resolution automatically to hold the frame rate           // 0 Minimal (Battlefield-like), 1 Full flight symbology
+    bool dynamicResolution = true;  // lower the 3D resolution automatically to hold the frame rate
+    bool smoothMotion = true;       // draw between the last two physics steps (even motion at any fps)
+    int settingsVersion = 1;        // a file without the key was written by v0.8 or older (see migrate)
     // Input
     bool invertPitch = false;
     double sensitivity = 1.0;
@@ -55,6 +74,9 @@ struct Settings {
     bool missionCompleted(int n) const { return n >= 1 && n <= static_cast<int>(campaignDone.size()) && campaignDone[n - 1] == '1'; }
     void markCompleted(int n) { if (n >= 1 && n <= static_cast<int>(campaignDone.size())) campaignDone[n - 1] = '1'; }
 
+    /// Upgrades a file from an older version: only values that were never changed from the old
+    /// defaults are moved to the new defaults (75 fps cap without VSync -> paced by the display).
+    void migrate();
     /// Returns false if the file did not exist or could not be parsed (defaults are kept).
     bool load(const std::string& path);
     bool save(const std::string& path) const;

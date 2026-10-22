@@ -21,6 +21,7 @@ add_library(skyfall_core STATIC
   src/sim/WorldLayout.cpp
   src/sim/Locations.cpp
   src/sim/TerrainAnalysis.cpp
+  src/sim/MapStore.cpp
   src/sim/FlightModel.cpp
   src/aircraft/AircraftProfile.cpp
   src/combat/Combat.cpp
@@ -120,7 +121,8 @@ if(SKYFALL_BUILD_GAME)
     target_link_options(skyfall PRIVATE
       -sUSE_GLFW=3 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3=1
       -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456 -sTOTAL_STACK=8388608
-      -sINVOKE_RUN=0 -sEXPORTED_RUNTIME_METHODS=callMain -sEXIT_RUNTIME=0
+      -sINVOKE_RUN=0 -sEXPORTED_RUNTIME_METHODS=callMain,FS,addRunDependency,removeRunDependency -sEXIT_RUNTIME=0
+      -lidbfs.js   # /maps: world maps kept in the browser's IndexedDB (downloaded once)
       --preload-file ${CMAKE_CURRENT_SOURCE_DIR}/web/fonts@/usr/share/fonts/truetype/dejavu)
   elseif(APPLE)
     target_link_libraries(skyfall PRIVATE "-framework IOKit" "-framework Cocoa" "-framework OpenGL" "-framework CoreAudio" "-framework CoreVideo")

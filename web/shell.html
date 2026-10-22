@@ -41,6 +41,15 @@
     canvas: document.getElementById('canvas'),
     // every release gets new URLs, so a browser never runs a cached older build
     locateFile: function (path) { return path + '?v={{{ VERSION }}}'; },
+    // world maps live in IndexedDB (/maps): fetched once, available on every later visit
+    preRun: [function () {
+      try {
+        Module.FS.mkdir('/maps');
+        Module.FS.mount(Module.FS.filesystems.IDBFS, {}, '/maps');
+        Module.addRunDependency('maps');
+        Module.FS.syncfs(true, function (e) { if (e) console.warn('map store', e); Module.removeRunDependency('maps'); });
+      } catch (e) { console.warn('map store unavailable', e); }
+    }],
     print: function (t) { console.log(t); },
     printErr: function (t) { console.warn(t); },
     setStatus: function (t) {

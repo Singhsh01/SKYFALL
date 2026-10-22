@@ -79,7 +79,8 @@ int Game::run(const Options& opt) {
     capturing_ = !opt.captureDir.empty() || opt.benchSeconds > 0;
     settingsPath_ = defaultSettingsPath();
     settings_.load(settingsPath_);
-    if (opt.quality >= 0) settings_.quality = static_cast<GraphicsQuality>(std::clamp(opt.quality, 0, 3));
+    settings_.migrate();
+    if (opt.quality >= 0) settings_.quality = static_cast<GraphicsQuality>(std::clamp(opt.quality, 0, kQualityCount - 1));
     initWindow();
     // splash while the world is generated
     BeginDrawing();
@@ -143,6 +144,27 @@ void Game::webTick() {
 }
 #endif
 
+double Game::displayFrameBudgetMs() const {
+    double pb = qualityProfile(settings_.quality).frameBudgetMs;
+    if (pb > 0) return pb;
+    if (settings_.fpsCap > 0) return 1000.0 / settings_.fpsCap;
+#ifdef __EMSCRIPTEN__
+    return 1000.0 / 60.0;
+#else
+    int hz = IsWindowReady() ? GetMonitorRefreshRate(GetCurrentMonitor()) : 60;
+    return 1000.0 / (hz >= 30 && hz <= 360 ? hz : 60);
+#endif
+}
+
+void Game::applyFramePacing() {
+#ifndef __EMSCRIPTEN__
+    // VSync shows every frame for a whole number of display refreshes (no tearing); the cap
+    // (30 / 60 / 90 / 120) limits below the display rate, or above it with VSync off
+    if (settings_.vsync && !capturing_) SetWindowState(FLAG_VSYNC_HINT); else ClearWindowState(FLAG_VSYNC_HINT);
+    SetTargetFPS(capturing_ ? 0 : settings_.fpsCap);
+#endif
+}
+
 void Game::updateDynamicResolution(double dt) {
     // Holds ~60 fps by lowering the 3D scene resolution in 10 % steps (HUD stays native).
     // Down quickly when frames are slow; up only after sustained headroom, and not again soon
@@ -154,8 +176,8 @@ void Game::updateDynamicResolution(double dt) {
     if (dynTimer_ < 1.0) return;
     double meanMs = dynAccum_ / std::max(1, dynFrames_) * 1000.0;
     dynTimer_ = dynAccum_ = 0; dynFrames_ = 0;
-    // budget follows the frame-rate cap (75 fps -> 13.3 ms)
-    double budget = 1000.0 / (settings_.fpsCap > 0 ? settings_.fpsCap : 75);
+    // budget: the preset's (Performance 120: 8.3 ms), else the frame-rate cap, else the display
+    double budget = displayFrameBudgetMs();
     if (meanMs > budget * 1.12 && dynScale_ > 0.55) {
         dynScale_ = std::max(0.5, dynScale_ - 0.1);
         dynUpBlockedUntil_ = time_ + ((time_ - dynLastUp_) < 6.0 ? 60.0 : 8.0);
@@ -301,27 +323,40 @@ void Game::drawBriefing() {
 // ------------------------------------------------------------------------------------------
 #ifdef __EMSCRIPTEN__
 EM_JS(void, sky_fetch_terrain, (const char* id), {
+    // into /maps, kept in the browser's IndexedDB (mounted before main, see web/shell.html):
+    // a map is downloaded once and is there on every later visit, offline too
     var name = UTF8ToString(id);
     fetch('terrain/' + name + '.skt').then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.arrayBuffer();
     }).then(function (buf) {
-        try { FS.mkdir('/terrain'); } catch (e) {}
-        FS.writeFile('/terrain/' + name + '.skt', new Uint8Array(buf));
+        try { FS.mkdir('/maps'); } catch (e) {}
+        FS.writeFile('/maps/' + name + '.incoming', new Uint8Array(buf));
     }).catch(function (e) {
         try { FS.mkdir('/terrain'); } catch (e2) {}
         FS.writeFile('/terrain/' + name + '.missing', 'x');
     });
 });
+
+EM_JS(void, sky_sync_maps, (), {
+    FS.syncfs(false, function (e) { if (e) console.warn('map store sync', e); });
+});
 #endif
 
 std::string Game::terrainPath(const std::string& id) {
+    // the persistent map store first (verified copies), then the maps bundled with the game
+    if (maps_.installed(id)) return maps_.pathFor(id);
+    return bundledMapPath(id);
+}
+
+std::string Game::bundledMapPath(const std::string& id) {
 #ifdef __EMSCRIPTEN__
     return "/terrain/" + id + ".skt";
 #else
     std::string app = GetApplicationDirectory();
     for (const std::string& p : {std::string("assets/terrain/") + id + ".skt", app + "assets/terrain/" + id + ".skt",
-                                 app + "../assets/terrain/" + id + ".skt", std::string("../assets/terrain/") + id + ".skt"})
+                                 app + "../Resources/assets/terrain/" + id + ".skt", app + "../assets/terrain/" + id + ".skt",
+                                 std::string("../assets/terrain/") + id + ".skt"})
         if (FileExists(p.c_str())) return p;
     return "assets/terrain/" + id + ".skt";
 #endif
@@ -332,7 +367,7 @@ std::string Game::terrainDir() {
     return "/terrain";
 #else
     std::string app = GetApplicationDirectory();
-    for (const std::string& p : {std::string("assets/terrain"), app + "assets/terrain", app + "../assets/terrain", std::string("../assets/terrain")})
+    for (const std::string& p : {std::string("assets/terrain"), app + "assets/terrain", app + "../Resources/assets/terrain", app + "../assets/terrain", std::string("../assets/terrain")})
         if (DirectoryExists(p.c_str())) return p;
     return app + "assets/terrain";
 #endif
@@ -351,7 +386,84 @@ std::string Game::voiceDir() {
 
 bool Game::locationAvailable(const std::string& id) {
     if (id == "desert") return true;
-    return FileExists(terrainPath(id).c_str());
+    return maps_.installed(id) || FileExists(bundledMapPath(id).c_str());
+}
+
+void Game::pumpMapDownloads() {
+    // finished downloads land in maps/incoming: validate, checksum and move into the store
+#ifdef __EMSCRIPTEN__
+    for (const LocationDef& l : locations()) {
+        std::string in = maps_.dir() + "/" + l.id + ".incoming";
+        if (!FileExists(in.c_str())) continue;
+        std::string err;
+        bool ok = maps_.install(l.id, in, "download", err);
+        std::remove(in.c_str());
+        if (!ok) locStatus_ = l.name + ": the downloaded map failed verification (" + err + "). Try again.";
+        sky_sync_maps();
+    }
+#else
+    for (const std::string& id : download_.takeFinished()) {
+        std::string in = maps_.dir() + "/incoming/" + id + ".skt";
+        std::string err;
+        bool verified = false;
+        if (!maps_.install(id, in, "download", err, &verified)) locStatus_ = id + ": the downloaded map failed verification (" + err + ").";
+        std::error_code ec;
+        std::filesystem::remove(in, ec);
+    }
+#endif
+}
+
+void Game::installAllMaps() {
+    // every location exactly once: maps already in the store are kept, bundled copies are
+    // installed straight away (offline), the rest is downloaded
+    int installed = 0, kept = 0, failed = 0;
+    std::vector<std::string> fetch;
+    for (const LocationDef& l : locations()) {
+        if (l.id == "desert") continue;
+        if (maps_.check(l.id) == MapStore::State::Valid) { ++kept; continue; }
+        std::string b = bundledMapPath(l.id), err;
+        if (FileExists(b.c_str()) && maps_.install(l.id, b, "bundled", err)) { ++installed; continue; }
+        if (FileExists(b.c_str())) ++failed;
+        fetch.push_back(l.id);
+    }
+#ifdef __EMSCRIPTEN__
+    for (const std::string& id : fetch) sky_fetch_terrain(id.c_str());
+    sky_sync_maps();
+#else
+    if (!fetch.empty()) download_.start(fetch, maps_.dir() + "/incoming", maps_.dir() + "/.tiles");
+#endif
+    char b[200];
+    std::snprintf(b, sizeof b, "Maps: %d already installed, %d installed now%s%s", kept, installed,
+                  fetch.empty() ? "" : (", " + std::to_string(fetch.size()) + " downloading").c_str(), failed ? " (a bundled copy was damaged)" : "");
+    locStatus_ = b;
+}
+
+void Game::verifyAllMaps() {
+    int ok = 0, bad = 0, missing = 0;
+    std::string badNames;
+    for (const LocationDef& l : locations()) {
+        if (l.id == "desert") continue;
+        MapStore::State st = maps_.check(l.id, true);
+        if (st == MapStore::State::Valid) ++ok;
+        else if (st == MapStore::State::Missing) ++missing;
+        else { ++bad; badNames += (badNames.empty() ? "" : ", ") + l.name; }
+    }
+    locStatus_ = "Verified (SHA-256): " + std::to_string(ok) + " intact, " + std::to_string(bad) + " damaged, " + std::to_string(missing) +
+                 " not in the store" + (bad ? " - repair: " + badNames : "") + ".";
+}
+
+void Game::repairMap(const std::string& id) {
+    const LocationDef* l = findLocation(id);
+    if (!l || id == "desert") return;
+    maps_.remove(id);
+    std::string b = bundledMapPath(id), err;
+    if (FileExists(b.c_str()) && maps_.install(id, b, "bundled", err)) { locStatus_ = l->name + ": repaired from the copy bundled with the game."; return; }
+#ifdef __EMSCRIPTEN__
+    sky_fetch_terrain(id.c_str());
+    locStatus_ = l->name + ": downloading a fresh copy...";
+#else
+    if (download_.start({id}, maps_.dir() + "/incoming", maps_.dir() + "/.tiles")) locStatus_ = l->name + ": downloading a fresh copy...";
+#endif
 }
 
 double Game::safeAltitude(Vec3 a, Vec3 b, double margin) const {
@@ -405,7 +517,8 @@ void Game::drawLocations() {
     ui::title("WORLD LOCATIONS", 50 * s, 26 * s, 32 * s);
     const auto& L = locations();
     const int n = static_cast<int>(L.size());
-    nav_.begin(n + 4, in.up, in.down, in.confirm, in.left, in.right);
+    nav_.begin(n + 6, in.up, in.down, in.confirm, in.left, in.right);
+    if (nav_.focus < n) locSel_ = nav_.focus;
 #ifdef __EMSCRIPTEN__
     // finish a pending download
     if (!locPending_.empty()) {
@@ -430,14 +543,15 @@ void Game::drawLocations() {
 #endif
             if (!avail) {
                 if (download_.busy()) locStatus_ = "Another download is running - " + download_.status();
-                else if (download_.start({l.id}, terrainDir(), terrainDir() + "/.cache")) locStatus_.clear();
+                else if (download_.start({l.id}, maps_.dir() + "/incoming", maps_.dir() + "/.tiles")) locStatus_.clear();
             } else if (l.id != terrain_.info().id) {
                 switchTo_ = l.id;
             }
             return;
         }
         bool loading = download_.busy() && download_.current() == l.name;
-        ui::text(avail ? l.region : loading ? "DOWNLOADING..." : "NOT DOWNLOADED - CLICK TO GET", x + bw - 10 * s, y + 10 * s, 12 * s,
+        bool stored = l.id == "desert" || maps_.installed(l.id);
+        ui::text(avail ? (stored ? l.region : l.region + "  (BUNDLED)") : loading ? "DOWNLOADING..." : "NOT DOWNLOADED - CLICK TO GET", x + bw - 10 * s, y + 10 * s, 12 * s,
                  avail ? Color{150, 255, 205, 200} : loading ? Color{255, 220, 120, 240} : Color{255, 150, 110, 220}, Align::Right, false);
         y += bh + 3 * s;
     }
@@ -471,12 +585,10 @@ void Game::drawLocations() {
         if (locReturn_ == Screen::Settings) { screen_ = Screen::Settings; nav_.focus = 21; locReturn_ = Screen::Title; return; }
         startTitle(); nav_.focus = 3; return;
     }
-    // map downloads
-    int missing = 0;
-    std::vector<std::string> missingIds;
-    for (const LocationDef& l : L) if (!locationAvailable(l.id)) { ++missing; missingIds.push_back(l.id); }
+    // the map store: download every map once, verify, repair
+    int inStore = 0, total = 0;
+    for (const LocationDef& l : L) if (l.id != "desert") { ++total; if (maps_.installed(l.id)) ++inStore; }
     float dy = ay + 158 * s;
-#ifndef __EMSCRIPTEN__
     if (download_.busy()) {
         if (ui::button(nav_, n + 3, {ax, dy, aw, 40 * s}, "CANCEL DOWNLOAD", download_.current())) download_.cancel();
         Rectangle pb = {ax, dy + 48 * s, aw, 10 * s};
@@ -484,13 +596,18 @@ void Game::drawLocations() {
         DrawRectangleRec({pb.x, pb.y, pb.width * download_.progress(), pb.height}, Color{150, 255, 205, 230});
         ui::text(download_.status(), ax, dy + 64 * s, 13 * s, Color{220, 230, 230, 230}, Align::Left, false);
     } else {
-        std::string sub = missing ? std::to_string(missing) + " maps, about 2 MB each" : "All maps are downloaded";
-        if (ui::button(nav_, n + 3, {ax, dy, aw, 40 * s}, missing ? "DOWNLOAD ALL MISSING MAPS" : "ALL MAPS DOWNLOADED", sub) && missing)
-            download_.start(missingIds, terrainDir(), terrainDir() + "/.cache");
-        if (!download_.status().empty()) ui::text(download_.status(), ax, dy + 48 * s, 13 * s, Color{220, 230, 230, 230}, Align::Left, false);
+        std::string sub = std::to_string(inStore) + " of " + std::to_string(total) + " in the map store - kept across updates, offline";
+        if (ui::button(nav_, n + 3, {ax, dy, aw, 40 * s}, inStore < total ? "DOWNLOAD ALL MAPS" : "ALL MAPS INSTALLED", sub)) { audio_.play(Sfx::Click); installAllMaps(); }
     }
     dy += 84 * s;
-#endif
+    float hw2 = (aw - 8 * s) / 2;
+    if (ui::button(nav_, n + 4, {ax, dy, hw2, 36 * s}, "VERIFY ALL MAPS")) { audio_.play(Sfx::Click); verifyAllMaps(); }
+    const LocationDef& sel = L[std::clamp(locSel_, 0, n - 1)];
+    if (ui::button(nav_, n + 5, {ax + hw2 + 8 * s, dy, hw2, 36 * s}, "REPAIR " + sel.name, "", sel.id != "desert") && sel.id != "desert") {
+        audio_.play(Sfx::Click);
+        repairMap(sel.id);
+    }
+    dy += 46 * s;
     if (!locStatus_.empty()) {
         float ty = dy;
         std::string line, word;
@@ -789,6 +906,7 @@ void Game::respawnPlayer() {
 // ------------------------------------------------------------------------------------------
 void Game::frame(double dt, bool render) {
     speech_.update();
+    pumpMapDownloads();
     if (screen_ == Screen::Playing) updateRadioQueue();
     if (!switchTo_.empty()) {
         // menus request location changes; the world is rebuilt here, outside any drawing
@@ -814,12 +932,14 @@ void Game::frame(double dt, bool render) {
         // 3D scene resolution follows the window size in points (not Retina pixels) times a
         // quality scale; the HUD is still drawn at native resolution.
         updateDynamicResolution(dt);
-        double scale = settings_.quality == GraphicsQuality::Low ? 0.7 : (settings_.quality == GraphicsQuality::Medium ? 0.85 : 1.0);
-        scale *= dynScale_;
-        // Ultra renders at the display's real pixel count (Retina / 4K), up to 3840 wide
-        bool ultra = settings_.quality == GraphicsQuality::Ultra;
-        double baseW = ultra ? GetRenderWidth() : GetScreenWidth(), baseH = ultra ? GetRenderHeight() : GetScreenHeight();
-        double maxW = ultra ? 3840.0 : 1920.0;
+        const QualityProfile qp = qualityProfile(settings_.quality);
+        double scale = qp.sceneScale * dynScale_;
+        // Ultra / Cinematic 4K render at the display's real pixel count (Retina / 4K), up to
+        // 3840 wide; the others render at the window size in points and the composite pass
+        // upscales with contrast-adaptive sharpening (reconstructed 4K on a 4K display)
+        bool native = qp.nativePixels;
+        double baseW = native ? GetRenderWidth() : GetScreenWidth(), baseH = native ? GetRenderHeight() : GetScreenHeight();
+        double maxW = qp.maxWidth;
         int rw = std::min(static_cast<int>(maxW), static_cast<int>(baseW * scale));
         int rh = static_cast<int>(baseH * scale * std::min(1.0, maxW / std::max(1.0, baseW * scale)));
         if (rw != renderer_.width() || rh != renderer_.height()) renderer_.resize(rw, rh);
@@ -835,6 +955,7 @@ void Game::frame(double dt, bool render) {
         case Screen::Academy: titleTime_ += dt; updateTitleScene(dt); break;
         default: break;
     }
+    beginRenderInterpolation();
     updateCamera(dt);
     if (screen_ == Screen::Briefing) {
         // frame the aircraft on the right-hand side, clear of the briefing text
@@ -847,6 +968,46 @@ void Game::frame(double dt, bool render) {
     }
     updateAudio();
     if (render) renderFrame();
+    endRenderInterpolation();
+}
+
+void Game::beginRenderInterpolation() {
+    interpActive_ = false;
+    if (!settings_.smoothMotion || replayActive_ || battle_.jets().empty()) return;
+    if (screen_ == Screen::Paused || screen_ == Screen::Briefing) return;
+    const double a = std::clamp(stepper_.alpha(), 0.0, 1.0);
+    interpJets_.clear();
+    interpMissiles_.clear();
+    for (auto& jp : battle_.jets()) {
+        Jet& j = *jp;
+        if (!j.prevValid || !j.fm) continue;
+        FlightState& s = j.fm->mutableState();
+        // a reset or teleport since the last step: draw where it is now
+        if (dot(s.pos - j.prevPos, s.pos - j.prevPos) > 250.0 * 250.0) continue;
+        interpJets_.push_back({&j, s.pos, s.q});
+        s.pos = j.prevPos + (s.pos - j.prevPos) * a;
+        Quat q0 = j.prevQ, q1 = s.q;
+        double d = q0.w * q1.w + q0.x * q1.x + q0.y * q1.y + q0.z * q1.z;
+        if (d < 0) { q1 = Quat{-q1.w, -q1.x, -q1.y, -q1.z}; }
+        s.q = Quat{q0.w + (q1.w - q0.w) * a, q0.x + (q1.x - q0.x) * a, q0.y + (q1.y - q0.y) * a, q0.z + (q1.z - q0.z) * a}.normalized();
+    }
+    for (Missile& m : battle_.missilesMut()) {
+        interpMissiles_.push_back(m.pos);
+        if (m.prevValid && dot(m.pos - m.prevPos, m.pos - m.prevPos) < 300.0 * 300.0) m.pos = m.prevPos + (m.pos - m.prevPos) * a;
+    }
+    interpActive_ = true;
+}
+
+void Game::endRenderInterpolation() {
+    if (!interpActive_) return;
+    for (const InterpSaved& sv : interpJets_) {
+        FlightState& s = sv.jet->fm->mutableState();
+        s.pos = sv.pos;
+        s.q = sv.q;
+    }
+    auto& ms = battle_.missilesMut();
+    for (size_t i = 0; i < ms.size() && i < interpMissiles_.size(); ++i) ms[i].pos = interpMissiles_[i];
+    interpActive_ = false;
 }
 
 void Game::handleGlobalKeys() {
@@ -863,7 +1024,8 @@ void Game::handleGlobalKeys() {
         char name[128];
         std::snprintf(name, sizeof name, "screenshots/skyfall_%lld.png", static_cast<long long>(std::time(nullptr)));
         saveScreenshot(name);
-        hud_.radio("SYSTEM", std::string("Screenshot saved: ") + name, 3);
+        std::error_code ec;
+        hud_.radio("SYSTEM", std::string("Screenshot saved: ") + std::filesystem::absolute(name, ec).string(), 4);
     }
 }
 
@@ -1723,7 +1885,15 @@ void Game::drawSettings() {
     float y2 = 110 * s;
     ui::text("GRAPHICS & COMFORT", x2, y2 - 26 * s, 15 * s, kAccent);
     int q = static_cast<int>(settings_.quality);
-    if (ui::cycle(nav_, 7, {x2, y2, cw, rh}, "Quality", q, {"LOW", "MEDIUM", "HIGH", "ULTRA HD"})) { settings_.quality = static_cast<GraphicsQuality>(q); changed = true; }
+    std::vector<std::string> qn;
+    for (int i = 0; i < kQualityCount; ++i) qn.push_back(qualityName(static_cast<GraphicsQuality>(i)));
+    if (ui::cycle(nav_, 7, {x2, y2, cw, rh}, "Quality", q, qn)) {
+        settings_.quality = static_cast<GraphicsQuality>(q);
+        // the 120 fps preset needs a frame rate that can reach 120
+        if (settings_.quality == GraphicsQuality::Performance120 && settings_.fpsCap > 0 && settings_.fpsCap < 120) settings_.fpsCap = 120;
+        applyFramePacing();
+        changed = true;
+    }
     y2 += rh + g;
     int t = static_cast<int>(tod_);
     if (ui::cycle(nav_, 8, {x2, y2, cw, rh}, "Time of day", t, {"MORNING", "GOLDEN HOUR", "NOON"})) { tod_ = static_cast<TimeOfDay>(t); lighting_ = Lighting::preset(tod_); }
@@ -1740,17 +1910,20 @@ void Game::drawSettings() {
     changed |= ui::toggle(nav_, 16, {x1, y + 22 * s, cw, rh}, "Missile / target camera", settings_.missileCam);
     changed |= ui::toggle(nav_, 17, {x1, y + 22 * s + rh + g, cw, rh}, "Crash replay + analysis", settings_.crashReplay);
     {
-        static const int caps[] = {60, 75, 120, 0};
-        int fi = 1;
-        for (int i = 0; i < 4; ++i) if (caps[i] == settings_.fpsCap) fi = i;
-        if (ui::cycle(nav_, 22, {x1, y + 22 * s + 2 * (rh + g), cw, rh}, "Frame rate limit", fi, {"60 FPS", "75 FPS", "120 FPS", "UNLIMITED"})) {
+        static const int caps[] = {0, 30, 60, 90, 120, 75};
+        static const char* capNames[] = {"DISPLAY / NONE", "30 FPS", "60 FPS", "90 FPS", "120 FPS", "75 FPS"};
+        int nCaps = settings_.fpsCap == 75 ? 6 : 5;   // 75: kept only for files that chose it
+        int fi = 0;
+        for (int i = 0; i < nCaps; ++i) if (caps[i] == settings_.fpsCap) fi = i;
+        std::vector<std::string> cn(capNames, capNames + nCaps);
+        if (ui::cycle(nav_, 22, {x1, y + 22 * s + 2 * (rh + g), cw, rh}, "Frame rate limit", fi, cn)) {
             settings_.fpsCap = caps[fi];
-            SetTargetFPS(settings_.fpsCap);
+            applyFramePacing();
             changed = true;
         }
-        // VSync locks the frame rate to the monitor (60 Hz screens cannot show 75 fps with it on)
-        if (ui::toggle(nav_, 23, {x2, y2 + 10 * s + rh + 4 * s + g, cw, rh}, "VSync (off allows > 60 fps on 60 Hz screens)", settings_.vsync)) {
-            if (settings_.vsync) SetWindowState(FLAG_VSYNC_HINT); else ClearWindowState(FLAG_VSYNC_HINT);
+        // VSync keeps every frame in step with the display: no tearing, even motion
+        if (ui::toggle(nav_, 23, {x2, y2 + 10 * s + rh + 4 * s + g, cw, rh}, "VSync (even motion, no tearing)", settings_.vsync)) {
+            applyFramePacing();
             changed = true;
         }
     }
@@ -2710,6 +2883,8 @@ int Game::runBench() {
     stats_.keepAll(true);
     auto last = std::chrono::steady_clock::now();
     double elapsed = 0;
+    double sumCalls = 0, sumTris = 0;
+    long counted = 0;
     while (elapsed < opt_.benchSeconds && !WindowShouldClose()) {
         auto now = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double>(now - last).count();
@@ -2717,7 +2892,10 @@ int Game::runBench() {
         // gentle scripted turn so the view changes
         battle_.player().lastInput.roll = std::sin(elapsed * 0.3) * 0.4;
         frame(std::min(dt, 0.25));
-        if (elapsed > (opt_.native ? 1.0 : 6.0)) { stats_.push(dt * 1000.0); benchSim_.push_back(simMs_); benchHud_.push_back(hudMs_); }  // skip warm-up
+        if (elapsed > (opt_.native ? 1.0 : 6.0)) {   // skip warm-up
+            stats_.push(dt * 1000.0); benchSim_.push_back(simMs_); benchHud_.push_back(hudMs_);
+            sumCalls += renderer_.drawCalls(); sumTris += renderer_.triangles(); ++counted;
+        }
         elapsed += dt;
     }
     auto meanMax = [](const std::vector<double>& v, double& mean, double& mx) {
@@ -2731,7 +2909,8 @@ int Game::runBench() {
     std::printf("cpu: simulation mean %.3f ms max %.3f ms | hud mean %.3f ms max %.3f ms\n", sm, sx, hm, hx);
     if (renderer_.profiling()) std::printf("gpu passes (per frame, serialised):\n%s", renderer_.profReport().c_str());
     std::printf("display %dx%d, resolution scale %d%%\n", GetRenderWidth(), GetRenderHeight(), static_cast<int>(std::lround(dynScale_ * 100)));
-    std::printf("scene %dx%d, draw calls %d, triangles %.0fk\n", renderer_.width(), renderer_.height(), renderer_.drawCalls(), renderer_.triangles() / 1000.0);
+    std::printf("scene %dx%d, quality %s, draw calls %.0f, triangles %.0fk (per-frame means)\n", renderer_.width(), renderer_.height(), qualityName(settings_.quality),
+                sumCalls / std::max(1L, counted), sumTris / std::max(1L, counted) / 1000.0);
     std::fflush(stdout);
     std::filesystem::create_directories("benchmarks");
     std::string renderer = std::string(reinterpret_cast<const char*>(rlGetVersion() == RL_OPENGL_33 ? "OpenGL 3.3" : "OpenGL"));

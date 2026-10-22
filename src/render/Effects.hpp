@@ -93,6 +93,7 @@ private:
     std::unordered_map<int, int> vaporGen_;
     std::unordered_map<int, bool> vaporOn_;
     Vector3 camPos_{};
+    std::vector<std::pair<float, const Particle*>> smokeSort_;   // back-to-front order of smoke puffs
 };
 
 }  // namespace sky
