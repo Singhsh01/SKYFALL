@@ -654,6 +654,7 @@ void Game::applySettings() {
         battle_.player().skin = settings_.skinFor(static_cast<int>(battle_.player().fm->profile().id));
     if (!battle_.jets().empty())
         battle_.player().fm->setHandling(static_cast<HandlingMode>(settings_.handling));
+    if (!battle_.jets().empty()) battle_.player().fm->setArcadeBoost(settings_.arcadeBoost);
 }
 
 // ------------------------------------------------------------------------------------------
@@ -887,6 +888,7 @@ void Game::respawnPlayer() {
         p.fm->resetAirborne(sp, 0.0, 230.0, 0.8);
     }
     p.fm->setHandling(static_cast<HandlingMode>(settings_.handling));
+    p.fm->setArcadeBoost(settings_.arcadeBoost);
     p.alive = true;
     p.health = 100;
     p.missiles = prof.missiles;
@@ -1319,7 +1321,25 @@ void Game::updateCamera(double dt) {
         zoom_ = std::clamp(zoom_ - in.zoom * 0.08, 0.5, 2.5);
     }
     shake_ *= std::exp(-dt * 3.0);
-    double shakeAmp = settings_.cameraShake * std::min(1.0, shake_ + std::max(0.0, (s.airspeed - 280.0) / 600.0) +
+    // ---- sense of speed: how fast for this jet, how close to the ground, how hard it accelerates
+    {
+        double vmax = std::max(200.0, p.fm->arcadeTopSpeed(s.pos.y));
+        double agl = s.agl;
+        double target = std::clamp((s.airspeed - 0.35 * vmax) / (0.6 * vmax), 0.0, 1.0);
+        lowAlt_ = (1.0 - smoothstep(40.0, 450.0, agl)) * smoothstep(0.25 * vmax, 0.55 * vmax, s.airspeed);
+        speedNorm_ += (target - speedNorm_) * (1.0 - std::exp(-dt * 2.5));
+        double a = dt > 1e-4 ? (s.airspeed - lastAirspeed_) / dt : 0.0;
+        if (screen_ != Screen::Playing || s.onGround || std::fabs(a) > 400.0) a = 0.0;   // resets / teleports
+        lastAirspeed_ = s.airspeed;
+        accelSmooth_ += (a - accelSmooth_) * (1.0 - std::exp(-dt * 4.0));
+        // punching into high speed: a short rush, once per surge
+        bool surge = accelSmooth_ > 45.0 && speedNorm_ > 0.35;
+        if (surge && !surging_) rush_ = 1.0;
+        surging_ = accelSmooth_ > 25.0 && speedNorm_ > 0.3;
+        rush_ *= std::exp(-dt * 2.2);
+    }
+    const double comfort = 0.35 + 0.65 * settings_.cameraShake;   // the comfort slider tames it all
+    double shakeAmp = settings_.cameraShake * std::min(1.0, shake_ + speedNorm_ * 0.22 + lowAlt_ * speedNorm_ * 0.25 +
                                                       (s.alpha > 0.25 ? 0.15 : 0.0) + s.abLevel * 0.05);
     Vector3 jitter = {static_cast<float>((GetRandomValue(-100, 100) / 100.0) * shakeAmp),
                       static_cast<float>((GetRandomValue(-100, 100) / 100.0) * shakeAmp),
@@ -1349,7 +1369,7 @@ void Game::updateCamera(double dt) {
             cam_.position = Vector3Add(toRl(eyeW), Vector3Scale(jitter, 0.004f));
             cam_.target = toRl(tgt);
             cam_.up = toRl(s.q.up());
-            fovTarget = settings_.fovDeg + 2;
+            fovTarget = settings_.fovDeg + 2 + (speedNorm_ * 5.0 + lowAlt_ * 3.0) * comfort;
             nearPlane_ = 1.0f;
             break;
         }
@@ -1358,8 +1378,9 @@ void Game::updateCamera(double dt) {
             double k = 1.0 - std::exp(-dt * 7.0);
             chaseQ_ = slerp(chaseQ_, s.q, k);
             if (in.looking) { orbitYaw_ += in.lookYaw; orbitPitch_ = std::clamp(orbitPitch_ + in.lookPitch, -0.5, 1.0); }
-            // Battlefield-style: close behind and slightly above, rolling with the jet
-            double dist = prof.chaseDistance * 0.95 * zoom_;
+            // Battlefield-style: close behind and slightly above, rolling with the jet; the camera
+            // drops back as the jet surges forward and closes in when it brakes
+            double dist = prof.chaseDistance * 0.95 * zoom_ * (1.0 + std::clamp(accelSmooth_ / 90.0, -0.12, 0.16) * comfort);
             double height = dist * 0.2;
             Quat q = chaseQ_;
             if (s.onGround) {
@@ -1376,7 +1397,8 @@ void Game::updateCamera(double dt) {
             cam_.target = toRl(s.pos + q.forward() * 45.0 + q.up() * 4.2);
             Vec3 up = s.onGround ? Vec3{0, 1, 0} : normalize(Vec3{0, 1, 0} * 0.05 + q.up() * 0.95);
             cam_.up = toRl(up);
-            fovTarget = settings_.fovDeg + 4.0 + std::clamp((s.airspeed - 120.0) / 250.0, 0.0, 1.0) * 10.0 + s.abLevel * 5.0;
+            fovTarget = settings_.fovDeg + 4.0 + (speedNorm_ * 11.0 + s.abLevel * 4.0 + lowAlt_ * 5.0 +
+                                                  std::clamp(accelSmooth_ / 70.0, -0.6, 1.0) * 3.0) * comfort;
             nearPlane_ = 0.5f;
             break;
         }
@@ -1429,6 +1451,31 @@ void Game::updateAudio() {
     audio_.setLockState(playing && mode_ == GameMode::Arena ? lock : 0);
     audio_.setMissileWarning(playing && battle_.playerMissileWarning());
     audio_.setStallWarning(playing && s.stalled);
+    audio_.setSpeedFeel(playing ? static_cast<float>(lowAlt_) : 0.0f);
+    if (!playing || !p.alive) return;
+    // the surge into high speed gets its whoosh (same trigger as the visual rush)
+    if (rush_ > 0.97 && !rushSounded_) { audio_.play(Sfx::Rush, 0.7f); rushSounded_ = true; }
+    if (rush_ < 0.5) rushSounded_ = false;
+    // flybys: another jet passes within ~200 m at high closing speed
+    Vector3 camRight = Vector3Normalize(Vector3CrossProduct(Vector3Subtract(cam_.target, cam_.position), cam_.up));
+    for (const auto& jp : battle_.jets()) {
+        const Jet& j = *jp;
+        if (&j == &p || !j.alive) continue;
+        const FlightState& o = j.fm->state();
+        Vec3 d = o.pos - s.pos;
+        double dist = length(d);
+        double closing = -dot(o.vel - s.vel, d) / std::max(dist, 1.0);
+        auto it = flybyNear_.find(j.id);
+        bool near = dist < 200.0 && length(o.vel - s.vel) > 120.0;
+        if (near && (it == flybyNear_.end() || !it->second) && closing < 60.0) {
+            // just passed the closest point: play it on the side it went by
+            float pan = static_cast<float>(std::clamp(Vector3DotProduct(Vector3Normalize(toRl(d)), camRight), -1.0f, 1.0f));
+            audio_.play(Sfx::Flyby, static_cast<float>(std::clamp(1.4 - dist / 200.0, 0.3, 1.0)), pan);
+            flybyNear_[j.id] = true;
+        } else if (!near) {
+            flybyNear_[j.id] = false;
+        }
+    }
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1446,7 +1493,12 @@ FrameParams Game::makeFrameParams() {
     f.blackout = blackout_;
     f.redout = redout_;
     f.damage = static_cast<float>(damagePulse_);
-    f.speedFx = static_cast<float>(std::clamp((battle_.player().fm->state().airspeed - 250.0) / 300.0, 0.0, 1.0));
+    {
+        const double comfort = 0.35 + 0.65 * settings_.cameraShake;
+        f.speedFx = static_cast<float>(std::clamp((speedNorm_ * 0.55 + lowAlt_ * 0.45) * comfort, 0.0, 1.0));
+        f.rush = static_cast<float>(rush_ * comfort);
+        if (camMode_ == CameraMode::External || screen_ != Screen::Playing || replayActive_) f.speedFx = f.rush = 0.0f;
+    }
     f.showRunwayLights = true;
     f.bloom = settings_.bloom;
     f.quality = settings_.quality;
@@ -1867,8 +1919,8 @@ void Game::drawSettings() {
     float s = h / 720.0f;
     DrawRectangle(0, 0, static_cast<int>(w), static_cast<int>(h), Color{0, 0, 0, 170});
     ui::title("SETTINGS", 60 * s, 34 * s, 38 * s);
-    nav_.begin(24, in.up, in.down, in.confirm, in.left, in.right);
-    float cw = 420 * s, rh = 42 * s, g = 6 * s;
+    nav_.begin(26, in.up, in.down, in.confirm, in.left, in.right);
+    float cw = 420 * s, rh = 36 * s, g = 5 * s;
     float x1 = 60 * s, x2 = 60 * s + cw + 40 * s;
     float y = 110 * s;
     ui::text("AUDIO", x1, y - 26 * s, 15 * s, kAccent);
@@ -1916,6 +1968,9 @@ void Game::drawSettings() {
         int fi = 0;
         for (int i = 0; i < nCaps; ++i) if (caps[i] == settings_.fpsCap) fi = i;
         std::vector<std::string> cn(capNames, capNames + nCaps);
+        changed |= ui::toggle(nav_, 24, {x1, y + 22 * s + 3 * (rh + g), cw, rh}, "Arcade boost (3-4 s to top speed)", settings_.arcadeBoost);
+        changed |= ui::toggle(nav_, 25, {x1, y + 22 * s + 4 * (rh + g), cw, rh}, "Smooth motion (frame interpolation)", settings_.smoothMotion);
+        changed |= false;
         if (ui::cycle(nav_, 22, {x1, y + 22 * s + 2 * (rh + g), cw, rh}, "Frame rate limit", fi, cn)) {
             settings_.fpsCap = caps[fi];
             applyFramePacing();
@@ -1939,7 +1994,7 @@ void Game::drawSettings() {
             return;
         }
     }
-    if (ui::button(nav_, 18, {x1, h - 64 * s, 200 * s, 46 * s}, "BACK") || in.back) {
+    if (ui::button(nav_, 18, {x2 + cw - 200 * s, h - 60 * s, 200 * s, 42 * s}, "BACK") || in.back) {
         settings_.save(settingsPath_);
         screen_ = settingsReturn_;
         nav_.focus = 0;
@@ -2159,6 +2214,36 @@ int Game::runCapture() {
             camMode_ = CameraMode::Chase; chaseInit_ = false;
             scriptedStep(0.1, [&](double) { setInput(0, 0, 0, 0); });
             snap(sh.name, 3);
+        }
+        return 0;
+    }
+    if (set == "speed") {
+        // sense of speed: the same low pass slow and in full afterburner, chase and cockpit
+        hideHud_ = false;
+        freeFlight_ = true;
+        startArena(false);
+        settings_.handling = 0;
+        applySettings();
+        for (int pass = 0; pass < 2; ++pass) {
+            double v0 = pass == 0 ? 160.0 : 390.0;
+            double gx = -6000, gz = 2500;
+            double alt = terrain_.surfaceHeight(gx, gz) + 55.0;
+            battle_.player().fm->resetAirborne({gx, alt, gz}, 0.0, v0, pass == 0 ? 0.45 : 1.0);
+            screen_ = Screen::Playing;
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            lastAirspeed_ = v0;
+            scriptedStep(1.5, [&](double) {
+                const FlightState& st = battle_.player().fm->state();
+                double want = terrain_.surfaceHeight(st.pos.x + 400, st.pos.z) + 55.0;
+                setInput(std::clamp((want - st.pos.y) * 0.02 - st.vel.y * 0.04, -0.4, 0.4), 0, 0, pass == 0 ? 0.0 : 1.0);
+            });
+            for (int k = 0; k < 20; ++k) updateCamera(1.0 / 30.0);   // settle FOV / smoothing
+            if (pass == 1) { rush_ = 1.0; accelSmooth_ = 80.0; }
+            snap(pass == 0 ? "speed_chase_slow" : "speed_chase_fast", 0);
+            camMode_ = CameraMode::Cockpit;
+            for (int k = 0; k < 20; ++k) updateCamera(1.0 / 30.0);
+            if (pass == 1) rush_ = 0.6;
+            snap(pass == 0 ? "speed_cockpit_slow" : "speed_cockpit_fast", 0);
         }
         return 0;
     }

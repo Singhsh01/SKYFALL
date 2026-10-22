@@ -118,6 +118,12 @@ public:
     /// Returns false (and refuses) when weight-on-wheels prevents gear retraction.
     bool toggleGear();
     void setHandling(HandlingMode m) { mode_ = m; }
+    /// Arcade performance profile (Arcade handling only): quick acceleration to each aircraft's
+    /// arcade top speed and quick, floored deceleration. Off = the earlier arcade physics.
+    void setArcadeBoost(bool on) { arcadeBoost_ = on; }
+    bool arcadeBoost() const { return arcadeBoost_; }
+    /// Arcade top speed at an altitude (m/s, true airspeed).
+    double arcadeTopSpeed(double altitude) const;
     HandlingMode handling() const { return mode_; }
     void applyDamage(double) {}
     void forceCrash(CrashReason r);
@@ -141,6 +147,7 @@ private:
     const Terrain* terrain_;
     FlightState s_{};
     HandlingMode mode_ = HandlingMode::Assisted;
+    bool arcadeBoost_ = true;
 };
 
 /// Fixed-step accumulator with a bounded catch-up (prevents the "spiral of death").

@@ -60,6 +60,10 @@ struct AircraftProfile {
     // Camera anchors (body frame, metres): x fwd, y up, z right
     double eyeX, eyeY;
     double chaseDistance, chaseHeight;
+    // Arcade performance profile (Arcade handling only; Assisted / Simulation use the physics):
+    // top speed as a Mach number at sea level and at 11 km (blended in between) and the time to
+    // reach it from slow flight (150 m/s) in full afterburner
+    double arcadeMachSL = 1.15, arcadeMachHigh = 1.9, arcadeAccelS = 3.5;
     // Loadout
     int missiles;
     int cannonRounds;

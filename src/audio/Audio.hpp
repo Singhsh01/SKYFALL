@@ -15,7 +15,7 @@
 
 namespace sky {
 
-enum class Sfx { Explosion, BigExplosion, MissileLaunch, Flares, Hit, Click, Radio, Gear, Impact };
+enum class Sfx { Explosion, BigExplosion, MissileLaunch, Flares, Hit, Click, Radio, Gear, Impact, Flyby, Rush };
 
 class Audio {
 public:
@@ -28,6 +28,8 @@ public:
     void setLockState(int s);         // 0 none, 1 locking, 2 locked
     void setMissileWarning(bool on);
     void setStallWarning(bool on);
+    /// Sense of speed: 0..1 low-altitude rush (wind roar near the ground).
+    void setSpeedFeel(float lowAlt) { lowAlt_ = lowAlt; }
     void play(Sfx s, float gain = 1.0f, float pan = 0.0f);
     void setPaused(bool p) { paused_ = p; }
 
@@ -42,7 +44,8 @@ private:
     void* stream_ = nullptr;
     std::mutex mtx_;
     std::vector<Voice> voices_;
-    std::atomic<float> rpm_{0}, ab_{0}, speed_{0};
+    std::atomic<float> rpm_{0}, ab_{0}, speed_{0}, lowAlt_{0};
+    float smoothLow_ = 0, lpRoar_ = 0;
     std::atomic<bool> cockpit_{true}, alive_{true}, gun_{false}, warn_{false}, stall_{false}, paused_{false};
     std::atomic<int> lock_{0};
     std::atomic<float> master_{0.8f}, music_{0.5f}, engine_{0.85f}, radio_{0.65f}, effects_{0.9f};

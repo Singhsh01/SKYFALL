@@ -25,6 +25,7 @@
 #include "Settings.hpp"
 
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -233,6 +234,10 @@ private:
     double headYaw_ = 0, headPitch_ = 0;
     double orbitYaw_ = 2.4, orbitPitch_ = 0.12, zoom_ = 1.0;
     double shake_ = 0;
+    // sense of speed (updateCamera): 0..1 speed for this jet, low-altitude factor, smoothed acceleration, surge pulse
+    double speedNorm_ = 0, lowAlt_ = 0, accelSmooth_ = 0, rush_ = 0, lastAirspeed_ = 0;
+    bool surging_ = false, rushSounded_ = false;
+    std::map<int, bool> flybyNear_;   // jets inside the flyby range (sound once per pass)
     double fovCur_ = 70;
     Vector3 deathCamPos_{}, deathTarget_{};
     float nearPlane_ = 0.5f, farPlane_ = 70000.0f;

@@ -26,7 +26,7 @@ AircraftProfile make(AircraftId id, const char* name, const char* shortName, Air
     return p;
 }
 
-const std::array<AircraftProfile, static_cast<size_t>(AircraftId::Count)> kProfiles = {
+std::array<AircraftProfile, static_cast<size_t>(AircraftId::Count)> baseProfiles() { return {
     //   id                name                 short     style                         playable empty   fuel   S     span  len   mil   AB   roll pitch g   Vr   eyeX chase msl
     make(AircraftId::F22,    "F-22 Raptor",        "F-22",  AirframeStyle::StealthTwinTail, true,  19700, 8200, 78.0, 13.6, 18.9, 140, 232, 220, 32, 9.0, 72, 5.6, 26, 6),
     make(AircraftId::F35,    "F-35 Lightning II",  "F-35",  AirframeStyle::StealthSingle,   true, 13300, 8300, 42.7, 10.7, 15.7, 125, 191, 200, 28, 9.0, 74, 4.8, 23, 4),
@@ -36,7 +36,28 @@ const std::array<AircraftProfile, static_cast<size_t>(AircraftId::Count)> kProfi
     make(AircraftId::MiG29,  "MiG-29",             "MIG-29",AirframeStyle::Fulcrum,         true, 11000, 3500, 38.0, 11.4, 17.4, 100, 163, 220, 30, 9.0, 70, 5.4, 23, 4),
     make(AircraftId::Su30,   "Su-30",              "SU-30", AirframeStyle::FlankerFamily,   true, 18400, 7800, 62.0, 14.7, 21.9, 149, 246, 200, 28, 9.0, 74, 6.0, 28, 6),
     make(AircraftId::F16,    "F-16 Fighting Falcon","F-16", AirframeStyle::ViperSingle,     true,   8600, 3200, 27.9, 10.0, 15.1,  76, 129, 240, 30, 9.0, 66, 4.0, 20, 4),
-};
+}; }
+
+// Arcade top speeds and acceleration: each aircraft keeps its own character (the F-22 and Su-57
+// are Mach 2 class up high, the F-35 tops out lower and accelerates more slowly, ...)
+std::array<AircraftProfile, static_cast<size_t>(AircraftId::Count)> withArcade() {
+    auto a = baseProfiles();
+    struct Arc { double sl, high, accel; };
+    const Arc arc[] = {
+        {1.20, 2.00, 3.35},  // F-22
+        {1.10, 1.60, 3.8},   // F-35
+        {1.15, 1.80, 3.4},   // Rafale
+        {1.20, 2.00, 3.4},   // Su-57
+        {1.15, 2.10, 3.6},   // Su-35
+        {1.15, 2.10, 3.5},   // MiG-29
+        {1.10, 1.90, 3.9},   // Su-30
+        {1.15, 2.00, 3.4},   // F-16
+    };
+    for (size_t i = 0; i < a.size(); ++i) { a[i].arcadeMachSL = arc[i].sl; a[i].arcadeMachHigh = arc[i].high; a[i].arcadeAccelS = arc[i].accel; }
+    return a;
+}
+const std::array<AircraftProfile, static_cast<size_t>(AircraftId::Count)> kProfiles = withArcade();
+
 }  // namespace
 
 const AircraftProfile& profile(AircraftId id) { return kProfiles[static_cast<size_t>(id)]; }

@@ -1857,6 +1857,7 @@ void Renderer::composite(const FrameParams& f) {
     composite_.setF("uTime", static_cast<float>(fmod(f.time, 100.0)));
     composite_.setF("uGrain", 0.018f);
     composite_.setF("uSpeedFx", f.speedFx);
+    composite_.setF("uRush", f.rush);
     {
         static float grade = std::getenv("SKYFALL_GRADE") ? static_cast<float>(std::atof(std::getenv("SKYFALL_GRADE"))) : 1.0f;
         static float gk = std::getenv("SKYFALL_GK") ? static_cast<float>(std::atof(std::getenv("SKYFALL_GK"))) : 0.5f;
@@ -1911,6 +1912,7 @@ void Renderer::renderPip(const FrameParams& f, int w, int h) {
     composite_.setF("uGradeK", 0.5f);
     composite_.setF("uSharpen", 0.0f);
     composite_.setF("uSpeedFx", 0.0f);
+    composite_.setF("uRush", 0.0f);
     int l1 = composite_.loc("uBloom1"), l2 = composite_.loc("uBloom2");
     if (l1 >= 0) SetShaderValueTexture(composite_.sh, l1, bloomA_.texture);
     if (l2 >= 0) SetShaderValueTexture(composite_.sh, l2, bloomC_.texture);

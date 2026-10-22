@@ -82,6 +82,7 @@ bool Settings::load(const std::string& path) {
         try {
             if (k == "quality") quality = static_cast<GraphicsQuality>(std::clamp(std::stoi(v), 0, kQualityCount - 1));
             else if (k == "smooth_motion") smoothMotion = toBool(v);
+            else if (k == "arcade_boost") arcadeBoost = toBool(v);
             else if (k == "settings_version") settingsVersion = std::max(0, std::stoi(v));
             else if (k == "fps_cap") fpsCap = std::clamp(std::stoi(v), 0, 240);
             else if (k == "width") width = std::max(640, std::stoi(v));
@@ -136,7 +137,7 @@ bool Settings::save(const std::string& path) const {
       << "\ncamera_shake=" << cameraShake << "\ng_effects=" << gEffects << "\nui_scale=" << uiScale
       << "\nshow_fps=" << showFps << "\nhigh_contrast_hud=" << highContrastHud << "\nhud_style=" << hudStyle << "\nmissile_cam=" << missileCam << "\ncrash_replay=" << crashReplay << "\ndynamic_resolution=" << dynamicResolution << "\nsmooth_motion=" << smoothMotion << "\nsettings_version=" << settingsVersion << "\n[input]\n"
       << "invert_pitch=" << invertPitch << "\nsensitivity=" << sensitivity << "\ndeadzone=" << deadzone
-      << "\nhandling=" << handling << "\naircraft=" << aircraft << "\nskins=" << skins << "\nlocation=" << location << "\n[audio]\n"
+      << "\nhandling=" << handling << "\narcade_boost=" << arcadeBoost << "\naircraft=" << aircraft << "\nskins=" << skins << "\nlocation=" << location << "\n[audio]\n"
       << "master=" << master << "\nmusic=" << music << "\nengine=" << engine << "\nradio=" << radio
       << "\neffects=" << effects << "\nmusic_enabled=" << musicEnabled << "\ncaptions=" << captions << "\nvoice_briefings=" << voiceBriefings << "\n[progress]\ncampaign_done=" << campaignDone << "\n";
     if (!extra.empty()) {

@@ -71,7 +71,7 @@ struct FrameParams {
     int hideJetId = -1;           // jet not drawn (player in cockpit view)
     Lighting L;
     double time = 0;
-    float blackout = 0, redout = 0, damage = 0, speedFx = 0;
+    float blackout = 0, redout = 0, damage = 0, speedFx = 0, rush = 0;
     bool showRunwayLights = true;
     bool bloom = true;
     GraphicsQuality quality = GraphicsQuality::High;

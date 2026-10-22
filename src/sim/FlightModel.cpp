@@ -135,7 +135,9 @@ void FlightModel::forceCrash(CrashReason r) {
 
 void FlightModel::updateEngine(const ControlInputs& in, double dt, double rho) {
     const AircraftProfile& p = *prof_;
-    s_.throttle = clampd(s_.throttle + in.throttleRate * 0.55 * dt, 0.0, 1.0);
+    // the lever moves faster in Arcade (idle to full afterburner in about 0.7 s)
+    const bool boost = mode_ == HandlingMode::Arcade && arcadeBoost_;
+    s_.throttle = clampd(s_.throttle + in.throttleRate * (boost ? 1.45 : 0.55) * dt, 0.0, 1.0);
     constexpr double kIdle = 0.62;
     switch (s_.engine) {
         case EngineState::Off:
@@ -153,12 +155,12 @@ void FlightModel::updateEngine(const ControlInputs& in, double dt, double rho) {
         case EngineState::Running: {
             double target = kIdle + (1.0 - kIdle) * std::min(s_.throttle / kAbDetent, 1.0);
             // on the catapult the run-up is quicker (deck crews do not wait for a slow spool)
-            double spool = (target > s_.rpm ? p.spoolTimeS : p.spoolTimeS * 0.6) * (s_.catArmed ? 0.35 : 1.0);
+            double spool = (target > s_.rpm ? p.spoolTimeS : p.spoolTimeS * 0.6) * (s_.catArmed ? 0.35 : 1.0) * (boost ? 0.3 : 1.0);
             s_.rpm += (target - s_.rpm) * approachFactor(dt, spool);
             double abTarget = (s_.throttle >= kAbDetent && s_.rpm > 0.96)
                                   ? 0.55 + 0.45 * (s_.throttle - kAbDetent) / (1.0 - kAbDetent)
                                   : 0.0;
-            s_.abLevel += (abTarget - s_.abLevel) * approachFactor(dt, 0.35);
+            s_.abLevel += (abTarget - s_.abLevel) * approachFactor(dt, boost ? 0.15 : 0.35);
             break;
         }
     }
@@ -179,6 +181,12 @@ void FlightModel::updateEngine(const ControlInputs& in, double dt, double rho) {
     }
 }
 
+double FlightModel::arcadeTopSpeed(double altitude) const {
+    const AircraftProfile& p = *prof_;
+    double a = isa(std::max(0.0, altitude)).speedOfSound;
+    return a * lerpd(p.arcadeMachSL, p.arcadeMachHigh, smoothstep(0.0, 11000.0, altitude));
+}
+
 void FlightModel::arcadeVelocity(const ControlInputs& in, double dt, double rho) {
     const AircraftProfile& p = *prof_;
     const double m = massKg();
@@ -193,6 +201,37 @@ void FlightModel::arcadeVelocity(const ControlInputs& in, double dt, double rho)
     // arcade guarantees a full-afterburner thrust/weight of at least 1.25 for every aircraft
     double thrustScale = std::max(1.0, 1.25 * m * kG / std::max(p.thrustAbN, 1.0));
     double accel = (s_.thrustN * thrustScale * cosA - qS * cd) / m - kG * dir.y - 0.045 * turnRate * V;
+    if (arcadeBoost_) {
+        // Arcade performance profile: the speed chases a target set by the lever, at rates that
+        // take a jet from slow flight to its arcade top speed in ~3-4 s in full afterburner and
+        // back to a controllable speed in ~4-5 s at idle with the airbrake. Independent of the
+        // weapons load. Below the boost band (slow flight, gear down) the physics above applies,
+        // so the jet can still slow down for a landing and never stops or reverses in the air.
+        const double vmax = arcadeTopSpeed(s_.pos.y);
+        const double vIdle = 0.30 * vmax, vMil = 0.74 * vmax;
+        const double vCtrl = std::max(p.approachSpeedMs * 1.6, 0.36 * vmax);   // "controllable" speed after braking
+        double dry = clampd(s_.throttle / kAbDetent, 0.0, 1.0);
+        bool running = s_.engine == EngineState::Running;
+        double rpmFrac = clampd((s_.rpm - 0.62) / (1.0 - 0.62), 0.0, 1.0);   // 0.62 = idle rpm (updateEngine)
+        double vt = running ? lerpd(vIdle, vMil, std::pow(std::min(dry, rpmFrac + 0.02), 1.15)) + (vmax - vMil) * clampd(s_.abLevel, 0.0, 1.0) : 0.0;
+        vt *= 1.0 - 0.30 * std::max(0.0, dir.y) + 0.10 * std::max(0.0, -dir.y);   // climbs cost speed, dives add a little
+        vt *= cosA > 0.0 ? 0.6 + 0.4 * cosA : 0.6;                                   // flying sideways / high alpha bleeds
+        if (s_.airbrake) vt = std::min(vt, vCtrl);
+        const double accelMax = std::max(25.0, (vmax - 150.0) / std::max(1.0, p.arcadeAccelS));
+        const double decelMax = std::max(15.0, (vmax - vCtrl) / (s_.airbrake ? 4.5 : 13.0));
+        double dv = vt - V;
+        double knee = 0.06 * vmax;   // soft approach to the target: no jolt when it is reached
+        double aBoost = dv > 0 ? accelMax * std::min(1.0, dv / knee) : -decelMax * std::min(1.0, -dv / knee);
+        aBoost += -kG * dir.y * 0.5 - 0.03 * turnRate * V;   // gravity along the path and turn bleed still felt
+        // blend in above slow flight, with the gear up
+        double band = std::max(p.approachSpeedMs * 1.35, 105.0);
+        double w = smoothstep(band, band + 35.0, V) * (1.0 - s_.gearPos);
+        if (!running) w = 0.0;
+        double a = accel + (aBoost - accel) * w;
+        // braking never takes the jet below the controllable speed on its own
+        if (w > 0.0 && a < 0.0 && V + a * dt < vCtrl && vt >= vCtrl * 0.98) a = std::max(a, (vCtrl - V) / dt);
+        accel = a;
+    }
     V = std::max(0.0, V + accel * dt);
     // the flight path follows the nose; authority fades below ~60 m/s (arcade "stall")
     double auth = smoothstep(32.0, 75.0, V);
@@ -201,7 +240,17 @@ void FlightModel::arcadeVelocity(const ControlInputs& in, double dt, double rho)
     s_.vel = newDir * V;
     // below flying speed gravity takes over again
     s_.vel.y -= kG * (1.0 - auth) * dt;
-    s_.gLoad = 1.0 + turnRate * V / kG * (s_.omega.z >= 0 ? 1.0 : -1.0) * (std::fabs(s_.omega.z) / std::max(turnRate, 1e-6));
+    if (arcadeBoost_) {
+        // arcade G follows the stick: full pull at fighting speed is the jet's G limit at any
+        // speed (turn rate x speed would read tens of g at the arcade top speeds)
+        double pmax = p.maxPitchRate * 2.05;
+        double frac = clampd(std::fabs(s_.omega.z) / std::max(pmax, 1e-6), 0.0, 1.0);
+        double yawFrac = clampd(std::fabs(s_.omega.y) / 0.62, 0.0, 1.0) * 0.25;
+        double pull = std::min(1.0, frac + yawFrac) * (p.gLimit - 1.0) * std::min(1.0, V / 180.0);
+        s_.gLoad = s_.omega.z >= 0 ? 1.0 + pull : 1.0 - pull * 0.45;
+    } else {
+        s_.gLoad = 1.0 + turnRate * V / kG * (s_.omega.z >= 0 ? 1.0 : -1.0) * (std::fabs(s_.omega.z) / std::max(turnRate, 1e-6));
+    }
     s_.stalled = auth < 0.25;
 }
 

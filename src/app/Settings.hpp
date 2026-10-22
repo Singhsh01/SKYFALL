@@ -51,6 +51,7 @@ struct Settings {
     double sensitivity = 1.0;
     double deadzone = 0.12;
     int handling = 0;
+    bool arcadeBoost = true;        // Arcade handling: fast acceleration / braking performance profile
     int aircraft = 0;
     std::string location = "desert";   // world location (see sim/Locations.hpp)
     std::string skins = std::string(8, '0');   // camouflage per aircraft (digit = skin index)

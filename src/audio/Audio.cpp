@@ -87,6 +87,8 @@ void Audio::play(Sfx s, float gain, float pan) {
         case Sfx::Radio: v.dur = 0.35f; break;
         case Sfx::Gear: v.dur = 1.2f; break;
         case Sfx::Impact: v.dur = 0.15f; break;
+        case Sfx::Flyby: v.dur = 1.7f; break;
+        case Sfx::Rush: v.dur = 1.1f; break;
     }
     v.seed = static_cast<unsigned>(voices_.size() * 7919 + 17);
     std::lock_guard<std::mutex> lk(mtx_);
@@ -126,7 +128,12 @@ void Audio::render(float* out, unsigned frames) {
             float windIn = n;
             hpWind_ = 0.97f * (hpWind_ + windIn - hpWindPrev_);
             hpWindPrev_ = windIn;
-            float wind = lp1(lpWind_, hpWind_, 1800.0f - 900.0f * ck) * std::min(1.0f, (spd / 320.0f) * (spd / 320.0f)) * 0.9f;
+            smoothLow_ += (lowAlt_.load() - smoothLow_) * 0.0003f;
+            // wind keeps rising past the speed of sound (arcade top speeds reach Mach 2), and
+            // low over the ground a deep roar of displaced air joins it
+            float sp2 = std::min(1.6f, (spd / 320.0f) * (spd / 320.0f));
+            float wind = lp1(lpWind_, hpWind_, 1800.0f - 900.0f * ck + 500.0f * std::min(1.0f, spd / 600.0f)) * sp2 * 0.75f;
+            wind += lp1(lpRoar_, n, 220.0f) * smoothLow_ * std::min(1.0f, spd / 400.0f) * 1.6f * (1.0f - 0.4f * ck);
             float engine = (rumble * (1.0f - 0.35f * ck) + abRoar + whine) * eng + wind * eng * 0.8f;
             L += engine; R += engine;
             // cannon: 30 Hz bursts of filtered noise
@@ -194,6 +201,18 @@ void Audio::render(float* out, unsigned frames) {
                     s = bp * e * 0.6f * (rad / std::max(fx, 0.01f));
                     break;
                 }
+                case Sfx::Flyby: {
+                    // a jet passing close: rising then falling rush, pitch dropping as it goes by
+                    float pk = 0.45f;
+                    e = tt < pk ? (tt / pk) * (tt / pk) : std::exp(-(tt - pk) * 3.2f);
+                    s = lp1(v.lp, n, 2800.0f * std::exp(-tt * 1.4f) + 260.0f) * e * 1.5f;
+                    s += lp1(v.lp2, n, 140.0f) * e * 0.9f;
+                    break;
+                }
+                case Sfx::Rush:
+                    e = std::sin(3.14159f * std::min(1.0f, tt / v.dur)) * std::exp(-tt * 1.5f);
+                    s = lp1(v.lp, n, 900.0f + 2200.0f * std::exp(-tt * 2.5f)) * e * 1.1f;
+                    break;
                 case Sfx::Gear:
                     e = std::sin(3.14159f * tt / v.dur);
                     s = lp1(v.lp, n, 250.0f) * e * 0.9f;

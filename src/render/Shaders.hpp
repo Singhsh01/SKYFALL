@@ -891,7 +891,8 @@ uniform float uRedout;
 uniform float uDamage;          // red damage pulse
 uniform float uTime;
 uniform float uGrain;
-uniform float uSpeedFx;
+uniform float uSpeedFx;   // 0..1 sense of speed: radial rush at the screen edges (centre stays sharp)
+uniform float uRush;      // 0..1 short pulse when the jet punches into high speed
 uniform float uSharpen;   // contrast-adaptive sharpening when the 3D scene is upscaled
 uniform float uGrade;     // 1 = filmic pipeline with sRGB output
 uniform float uGradeK;
@@ -925,6 +926,8 @@ float lumaH(vec3 hdr) { float y = luma(hdr) * uExposure * 0.6; return y / (1.0 +
 
 void main() {
     vec2 uv = fragTexCoord;
+    // entering high speed: a brief compression of the image towards the centre
+    uv = 0.5 + (uv - 0.5) * (1.0 - 0.018 * uRush);
     // heat distortion: shimmer the image inside each exhaust plume's screen footprint
     if (uHazeCount > 0.5) {
         vec2 aspect = vec2(float(textureSize(texture0, 0).x) / float(textureSize(texture0, 0).y), 1.0);
@@ -963,6 +966,19 @@ void main() {
         // sharpen against the diagonal neighbours (flat and textured areas only, never on edges)
         vec3 avg = (hNW + hNE + hSW + hSE) * 0.25;
         h = max(h + (hM - avg) * uSharpen * 2.0, vec3(0.0));
+    }
+    // rushing air: radial smear towards the edges only (targets in the middle stay crisp)
+    float spd = clamp(uSpeedFx + uRush * 0.6, 0.0, 1.0);
+    if (spd > 0.01) {
+        float edge = smoothstep(0.06, 0.32, r2) * spd;
+        if (edge > 0.003) {
+            vec2 stepv = -cc * (0.010 + 0.012 * uRush) * edge;
+            vec3 acc = h;
+            for (int i = 1; i <= 4; ++i) acc += texture(texture0, uv + stepv * float(i)).rgb;
+            h = mix(h, acc / 5.0, min(0.85, edge * 1.4));
+            // faint chromatic split at the very edge, like a lens under buffeting
+            h.r = mix(h.r, texture(texture0, uv - cc * 0.003 * edge).r, 0.5 * edge);
+        }
     }
     vec3 bloom = texture(uBloom1, uv).rgb * 0.6 + texture(uBloom2, uv).rgb * 0.8;
     vec3 col;

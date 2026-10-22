@@ -216,6 +216,7 @@ struct PlayerCommands {
 class Battle {
 public:
     explicit Battle(const Terrain& terrain);
+    const Terrain& terrain() const { return *terrain_; }
 
     /// Creates the player jet (id 0) — caller then resets its flight model as needed.
     Jet& createPlayer(AircraftId id);

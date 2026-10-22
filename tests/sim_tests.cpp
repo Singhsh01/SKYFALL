@@ -101,6 +101,72 @@ TEST(lift_curve_shape) {
     CHECK(fm.dragCoefficient(0, 0) >= p.cd0);
 }
 
+namespace {
+/// Level flight at `alt` from 150 m/s: seconds to reach 95 % of the arcade top speed in full
+/// afterburner, then seconds at idle + airbrake to the controllable speed, and the lowest speed.
+struct ArcadeRun { double t95 = -1, tBrake = -1, vMin = 1e9, vTop = 0, vmax = 0; bool reversed = false; };
+ArcadeRun arcadeRun(AircraftId id, double alt, HandlingMode mode, double fuelFrac = 1.0) {
+    static Terrain t;
+    FlightModel fm(profile(id), t);
+    fm.setHandling(mode);
+    fm.resetAirborne({-4000, alt, 0}, 0.0, 150.0, 0.5);
+    fm.mutableState().fuelKg = profile(id).fuelMassKg * fuelFrac;
+    ArcadeRun r;
+    r.vmax = fm.arcadeTopSpeed(alt);
+    ControlInputs in;
+    in.throttleRate = 1.0;
+    double tt = 0;
+    for (int i = 0; i < 120 * 10; ++i) {
+        const FlightState& s = fm.state();
+        in.pitch = clampd((alt - s.pos.y) * 0.01 - s.vel.y * 0.05, -0.5, 0.5);
+        fm.step(in, FlightModel::kDt);
+        tt += FlightModel::kDt;
+        if (r.t95 < 0 && s.airspeed >= 0.95 * r.vmax) r.t95 = tt;
+    }
+    r.vTop = fm.state().airspeed;
+    double vctrl = std::max(profile(id).approachSpeedMs * 1.6, 0.36 * r.vmax);
+    in.throttleRate = -1.0;
+    in.airbrake = true;
+    tt = 0;
+    for (int i = 0; i < 120 * 12; ++i) {
+        const FlightState& s = fm.state();
+        in.pitch = clampd((alt - s.pos.y) * 0.01 - s.vel.y * 0.05, -0.5, 0.5);
+        fm.step(in, FlightModel::kDt);
+        tt += FlightModel::kDt;
+        r.vMin = std::min(r.vMin, s.airspeed);
+        if (dot(s.vel, s.q.forward()) < 0) r.reversed = true;
+        if (r.tBrake < 0 && s.airspeed <= vctrl * 1.05) r.tBrake = tt;
+    }
+    return r;
+}
+}  // namespace
+
+TEST(arcade_profile_accelerates_in_3_to_4_s_and_brakes_in_4_to_5_s) {
+    for (int ac = 0; ac < static_cast<int>(AircraftId::Count); ++ac) {
+        for (double alt : {1500.0, 9000.0}) {
+            ArcadeRun r = arcadeRun(static_cast<AircraftId>(ac), alt, HandlingMode::Arcade);
+            CHECK(r.t95 >= 2.9 && r.t95 <= 4.2);
+            CHECK(r.vTop >= 0.97 * r.vmax && r.vTop <= 1.03 * r.vmax);
+            CHECK(r.tBrake >= 3.8 && r.tBrake <= 5.0);
+            CHECK(r.vMin > 95.0);          // still flying: no stop in mid-air
+            CHECK(!r.reversed);
+            // the weapons / fuel load does not change the arcade performance
+            ArcadeRun light = arcadeRun(static_cast<AircraftId>(ac), alt, HandlingMode::Arcade, 0.2);
+            CHECK(std::fabs(light.t95 - r.t95) < 0.25);
+        }
+    }
+    // the F-22 is Mach 2 class up high, each aircraft keeps its own top speed
+    Terrain t;
+    FlightModel f22(profile(AircraftId::F22), t), f35(profile(AircraftId::F35), t);
+    CHECK(f22.arcadeTopSpeed(11000) / isa(11000).speedOfSound >= 1.95);
+    CHECK(f35.arcadeTopSpeed(11000) < f22.arcadeTopSpeed(11000));
+    // Assisted and Simulation keep the physics: nowhere near top speed after 4 s
+    ArcadeRun a = arcadeRun(AircraftId::F22, 1500, HandlingMode::Assisted);
+    CHECK(a.t95 < 0 || a.t95 > 6.0);
+    ArcadeRun sim = arcadeRun(AircraftId::F22, 1500, HandlingMode::Simulation);
+    CHECK(sim.t95 < 0 || sim.t95 > 6.0);
+}
+
 TEST(engine_off_produces_no_thrust_and_start_requires_command) {
     FlightModel fm(profile(AircraftId::F22), terrain());
     fm.resetOnRunway();

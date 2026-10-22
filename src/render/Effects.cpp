@@ -211,12 +211,14 @@ void Effects::update(double dt, const Battle& b, const Lighting& L, Vector3 camP
         t.alive = false;
     }
 
-    // speed streaks around the camera (sense of speed)
+    // speed streaks around the camera (sense of speed): denser, longer and brighter as the jet
+    // goes faster, so the rushing air reads even over featureless sky or sea
     if (!b.jets().empty() && b.player().alive) {
         const FlightState& ps = b.player().fm->state();
         float sp = static_cast<float>(ps.airspeed);
         if (sp > 140.0f && !ps.onGround) {
-            float rate = (sp - 140.0f) * 0.25f * fdt;
+            float fast = std::clamp((sp - 140.0f) / 400.0f, 0.0f, 1.0f);
+            float rate = (sp - 140.0f) * (0.25f + 0.35f * fast) * fdt;
             int n = static_cast<int>(rate) + (rng_.uniform() < (rate - std::floor(rate)) ? 1 : 0);
             Vector3 vel = toRl(ps.vel);
             Vector3 dir = Vector3Normalize(vel);
@@ -224,11 +226,33 @@ void Effects::update(double dt, const Battle& b, const Lighting& L, Vector3 camP
                 Vector3 off = V(static_cast<float>(rng_.range(-30, 30)), static_cast<float>(rng_.range(-18, 18)), static_cast<float>(rng_.range(-30, 30)));
                 Particle q;
                 q.pos = Vector3Add(Vector3Add(camPos, Vector3Scale(dir, 60.0f)), off);
-                q.vel = Vector3Scale(vel, 0.0f);
-                q.size0 = 0.05f; q.size1 = 0.05f; q.maxLife = 0.45f; q.kind = PKind::Spark; q.stretch = true;
-                q.color = {0.12f, 0.12f, 0.13f}; q.drag = 0; q.lift = 0;
-                q.vel = Vector3Scale(dir, -sp * 0.5f);  // streaks rush past the camera
+                q.size0 = 0.05f + 0.04f * fast; q.size1 = q.size0; q.maxLife = 0.45f - 0.15f * fast; q.kind = PKind::Spark; q.stretch = true;
+                float c = 0.12f + 0.22f * fast;
+                q.color = {c, c, c * 1.04f}; q.drag = 0; q.lift = 0;
+                q.vel = Vector3Scale(dir, -sp * (0.5f + 0.3f * fast));  // streaks rush past the camera
                 particles_.push_back(q);
+            }
+            // very low and fast: the jet's wake kicks up dust (or spray over water) under it
+            const Terrain& T = b.terrain();
+            double ground = T.surfaceHeight(ps.pos.x, ps.pos.z);
+            double agl = ps.pos.y - ground;
+            if (agl < 70.0 && sp > 160.0) {
+                bool water = T.isWater(ps.pos.x, ps.pos.z);
+                float k = static_cast<float>((1.0 - agl / 70.0) * std::min(1.0, (sp - 160.0) / 200.0));
+                float expect = 90.0f * k * fdt;   // puffs per frame (90 per second at full strength)
+                int m = static_cast<int>(expect) + (rng_.uniform() < expect - std::floor(expect) ? 1 : 0);
+                Vector3 back = Vector3Scale(dir, -18.0f);
+                for (int i = 0; i < m && particles_.size() < kMaxParticles; ++i) {
+                    Particle q;
+                    q.pos = V(static_cast<float>(ps.pos.x + back.x + rng_.range(-10, 10)), static_cast<float>(ground + 1.0),
+                              static_cast<float>(ps.pos.z + back.z + rng_.range(-10, 10)));
+                    q.vel = V(static_cast<float>(dir.x * sp * 0.08f + rng_.range(-6, 6)), static_cast<float>(rng_.range(4, 12)),
+                              static_cast<float>(dir.z * sp * 0.08f + rng_.range(-6, 6)));
+                    q.size0 = 3.0f; q.size1 = 16.0f + 14.0f * k; q.maxLife = 1.6f + rng_.uniform();
+                    q.kind = PKind::Dust; q.drag = 1.2f; q.lift = 0.5f;
+                    q.color = water ? Vector3{0.85f, 0.88f, 0.92f} : Vector3{0.55f, 0.47f, 0.36f};
+                    particles_.push_back(q);
+                }
             }
         }
     }
