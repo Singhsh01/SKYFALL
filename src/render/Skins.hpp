@@ -7,16 +7,19 @@
 namespace sky {
 
 enum class CamoPattern { TwoTone = 0, Splinter = 1, Woodland = 2, Digital = 3, Stripes = 4,
-                         CounterShade = 5, Shard = 6, Demo = 7, Metal = 8, Carbon = 9 };
+                         CounterShade = 5, Shard = 6, Demo = 7, Metal = 8, Carbon = 9,
+                         Armor = 10, Circuit = 11, HexVector = 12 };
 
 struct Skin {
     const char* name;
     Vector3 a, b, c;      // base, second and third colour
     CamoPattern pattern;
     float roughness;
+    float metal = 0.12f;            // metalness of the paint
+    Vector3 glow{0, 0, 0};          // emissive accent colour (linear, HDR) for circuit / seam patterns
 };
 
-constexpr int kSkinCount = 16;
+constexpr int kSkinCount = 24;
 
 inline const Skin& skin(int i) {
     static const Skin k[kSkinCount] = {
@@ -34,9 +37,18 @@ inline const Skin& skin(int i) {
         {"MIDNIGHT NEON", {0.022f, 0.024f, 0.03f}, {0.0f, 0.42f, 0.48f}, {0.7f, 0.72f, 0.74f}, CamoPattern::Demo, 0.24f},
         {"POLAR SHARD", {0.72f, 0.74f, 0.77f}, {0.05f, 0.08f, 0.15f}, {0.36f, 0.40f, 0.45f}, CamoPattern::Shard, 0.34f},
         {"DEMO RED", {0.72f, 0.72f, 0.73f}, {0.50f, 0.02f, 0.025f}, {0.015f, 0.03f, 0.12f}, CamoPattern::Demo, 0.22f},
-        {"BARE METAL", {0.78f, 0.79f, 0.80f}, {0.60f, 0.61f, 0.63f}, {0.0f, 0.0f, 0.0f}, CamoPattern::Metal, 0.32f},
+        {"BARE METAL", {0.78f, 0.79f, 0.80f}, {0.60f, 0.61f, 0.63f}, {0.0f, 0.0f, 0.0f}, CamoPattern::Metal, 0.32f, 0.55f},
         {"SAND GHOST", {0.40f, 0.34f, 0.25f}, {0.21f, 0.18f, 0.135f}, {0.15f, 0.13f, 0.10f}, CamoPattern::CounterShade, 0.45f},
         {"CARBON", {0.018f, 0.019f, 0.021f}, {0.05f, 0.052f, 0.056f}, {0.55f, 0.12f, 0.02f}, CamoPattern::Carbon, 0.28f},
+        // cinematic armour finishes (original designs: high-tech armour and aerospace engineering)
+        {"CRIMSON GOLD ARMOR", {0.36f, 0.025f, 0.03f}, {0.72f, 0.48f, 0.12f}, {0.05f, 0.02f, 0.02f}, CamoPattern::Armor, 0.24f, 0.72f, {1.6f, 0.9f, 0.35f}},
+        {"VOLT GRAPHITE", {0.055f, 0.06f, 0.07f}, {0.10f, 0.11f, 0.125f}, {0.15f, 0.65f, 1.0f}, CamoPattern::Circuit, 0.30f, 0.45f, {0.35f, 1.6f, 4.0f}},
+        {"STEALTH SILVER", {0.02f, 0.02f, 0.024f}, {0.12f, 0.12f, 0.13f}, {0.62f, 0.63f, 0.66f}, CamoPattern::Shard, 0.22f, 0.6f},
+        {"TITANIUM", {0.56f, 0.57f, 0.61f}, {0.43f, 0.45f, 0.50f}, {0.0f, 0.0f, 0.0f}, CamoPattern::Metal, 0.26f, 0.75f},
+        {"HEX VECTOR", {0.05f, 0.09f, 0.10f}, {0.11f, 0.16f, 0.17f}, {0.20f, 0.26f, 0.28f}, CamoPattern::HexVector, 0.32f, 0.35f, {0.3f, 2.2f, 2.4f}},
+        {"NANO CRIMSON", {0.025f, 0.02f, 0.022f}, {0.06f, 0.035f, 0.04f}, {0.9f, 0.08f, 0.06f}, CamoPattern::Circuit, 0.26f, 0.5f, {4.0f, 0.35f, 0.25f}},
+        {"GOLD TITAN", {0.70f, 0.47f, 0.13f}, {0.10f, 0.10f, 0.11f}, {0.03f, 0.03f, 0.03f}, CamoPattern::Armor, 0.22f, 0.8f, {1.2f, 1.0f, 0.6f}},
+        {"CARBON VOLT", {0.018f, 0.019f, 0.021f}, {0.05f, 0.052f, 0.056f}, {0.1f, 0.6f, 1.0f}, CamoPattern::Carbon, 0.26f, 0.12f, {0.3f, 1.4f, 3.2f}},
     };
     return k[(i >= 0 && i < kSkinCount) ? i : 0];
 }

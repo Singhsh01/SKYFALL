@@ -496,7 +496,11 @@ uniform vec3 uPaintA;
 uniform vec3 uPaintB;
 uniform vec3 uPaintC;
 uniform float uCamo;        // pattern: 0 two-tone, 1 splinter, 2 woodland, 3 digital, 4 stripes,
-                            // 5 counter-shaded, 6 shard, 7 demo sweep, 8 polished metal, 9 carbon
+                            // 5 counter-shaded, 6 shard, 7 demo sweep, 8 polished metal, 9 carbon,
+                            // 10 armour plates, 11 circuit traces, 12 hex vector camouflage
+uniform float uMetal;       // paint metalness (0.12 paint .. 0.8 bare metal / armour)
+uniform vec3 uGlowColor;    // emissive accent colour (circuit lines, armour seams), 0 = none
+uniform float uGlowPulse;   // accent brightness (rises with the throttle / afterburner)
 uniform float uRoughness;
 uniform float uHitFlash;
 uniform float uDamage;
@@ -531,9 +535,52 @@ void main() {
     float ao = clamp(max(vColor.r, max(vColor.g, vColor.b)), 0.0, 1.0);
     vec3 base;
     float metal, rough, coat;
+    float glowMask = 0.0;
     if (mat > 0.75) {
         vec3 paint = uPaintA;
-        if (uCamo > 8.5) {
+        glowMask = 0.0;
+        if (uCamo > 11.5) {
+            // hex vector camouflage: hexagonal cells in three tones with thin bright seams
+            vec2 p = vObj.xz * 0.9 + vec2(vObj.y * 0.5, 0.0);
+            vec2 r = vec2(1.0, 1.732);
+            vec2 h = r * 0.5;
+            vec2 a = mod(p, r) - h, b = mod(p - h, r) - h;
+            vec2 gv = dot(a, a) < dot(b, b) ? a : b;
+            vec2 id = p - gv;
+            float tone = fract(sin(dot(floor(id * 4.0), vec2(12.9898, 78.233))) * 43758.5453);
+            paint = tone < 0.5 ? uPaintA : (tone < 0.8 ? uPaintB : uPaintC);
+            vec2 q = abs(gv);
+            float edge = max(dot(q, normalize(vec2(1.0, 1.732))), q.x);
+            glowMask = smoothstep(0.43, 0.49, edge) * 0.6;
+        } else if (uCamo > 10.5) {
+            // circuit traces: orthogonal conductor lines with pads, glowing in the accent colour
+            vec2 g = vObj.xz * vec2(1.6, 2.2) + vec2(vObj.y * 1.3, 0.0);
+            vec2 cell = floor(g);
+            float rnd = fract(sin(dot(cell, vec2(27.17, 91.31))) * 4373.7);
+            vec2 f = fract(g);
+            float horiz = step(0.5, rnd);
+            float line = horiz > 0.5 ? 1.0 - smoothstep(0.03, 0.07, abs(f.y - 0.5)) : 1.0 - smoothstep(0.03, 0.07, abs(f.x - 0.5));
+            line *= step(0.35, fract(rnd * 7.31));
+            float pad = 1.0 - smoothstep(0.08, 0.13, length(f - 0.5));
+            pad *= step(0.82, fract(rnd * 13.7));
+            float panelTone = fract(sin(dot(floor(vObj.xz * 0.45), vec2(3.1, 7.7))) * 437.5);
+            paint = mix(uPaintA, uPaintB, step(0.6, panelTone));
+            glowMask = max(line, pad);
+            paint = mix(paint, uPaintC * 0.35, glowMask);
+        } else if (uCamo > 9.5) {
+            // armour plating: overlapping plates in two metals, dark seams between them
+            vec2 pl = vObj.xz * vec2(0.42, 0.62) + vec2(vObj.y * 0.4, 0.0);
+            vec2 sk = vec2(pl.x + 0.35 * floor(pl.y), pl.y);
+            vec2 cell = floor(sk), f = fract(sk);
+            float id = fract(sin(dot(cell, vec2(41.3, 17.9))) * 9617.1);
+            // the outer wings, the nose and the fins wear the second metal
+            float second = step(0.62, abs(vObj.z) / 6.5) + step(5.2, vObj.x) + step(1.4, vObj.y);
+            paint = mix(uPaintA, uPaintB, clamp(second, 0.0, 1.0));
+            paint = mix(paint, paint * 1.12, step(0.7, id) * 0.6);
+            float seam = 1.0 - smoothstep(0.0, 0.035, min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y)));
+            paint = mix(paint, uPaintC, seam * 0.8);
+            glowMask = seam * step(0.85, id) * 0.8;
+        } else if (uCamo > 8.5) {
             // carbon: fine twill weave in two near-blacks, an accent pinstripe along the spine
             vec2 q = vObj.xz * 9.0 + vObj.y * 3.0;
             float tw = step(0.5, fract((floor(q.x) + floor(q.y)) * 0.5 + fract(q.x) * 0.5));
@@ -614,7 +661,7 @@ void main() {
         base *= (0.93 + 0.12 * mott) * (0.95 + 0.1 * panelId) * (1.0 - 0.12 * smoothstep(0.55, 0.85, streak));
         // exhaust soot towards the tail
         base *= mix(1.0, 0.72, smoothstep(-6.0, -9.5, vObj.x));
-        metal = uCamo > 7.5 && uCamo < 8.5 ? 0.55 : 0.12;
+        metal = uMetal;
         rough = uRoughness * (0.85 + 0.3 * mott) * (0.85 + 0.3 * panelId) + 0.12 * smoothstep(0.55, 0.85, streak);
         coat = 0.35 * (1.0 - 0.6 * smoothstep(0.55, 0.85, streak));
         // normal map: panel grooves and rivet bumps, by screen-space derivatives (bump mapping)
@@ -672,6 +719,8 @@ void main() {
     col += base * uFlashColor * (1.0 / (1.0 + fd * fd * 0.0004));
     col += vec3(1.0, 0.25, 0.1) * uHitFlash;
     col += vec3(2.4, 0.7, 0.15) * ember;
+    // illuminated accents (circuit lines, armour seams): emissive, brighter with the throttle
+    col += uGlowColor * glowMask * uGlowPulse * (1.0 - scorch);
     // formation-light strips (pale green, metal id with a bright green tint) glow softly
     if (mat > 0.25 && mat < 0.75 && vColor.g > 0.9 && vColor.r < 0.6) col += vec3(0.35, 1.4, 0.55);
     col = applyFog(col, vPos);

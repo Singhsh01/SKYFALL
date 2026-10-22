@@ -68,6 +68,8 @@ constexpr int kShadowSize = 2048;
 
 Vector3 g_paintC{0, 0, 0};   // third camouflage colour for the jet drawn next
 float g_paintRough = 0.42f;
+float g_paintMetal = 0.12f;
+Vector3 g_paintGlow{0, 0, 0};
 long g_tris = 0;   // triangles submitted this frame (benchmark statistics)
 inline void drawMeshC(const Mesh& m, const Material& mat, const Matrix& t) {
     g_tris += m.triangleCount > 0 ? m.triangleCount : m.vertexCount / 3;
@@ -77,12 +79,16 @@ inline void drawMeshC(const Mesh& m, const Material& mat, const Matrix& t) {
 Vector3 paintFor(Team team, int skinIdx, const AircraftProfile& prof, Vector3& b, float& camo) {
     camo = 0;
     g_paintRough = 0.42f;
+    g_paintMetal = 0.12f;
+    g_paintGlow = {0, 0, 0};
     if (skinIdx > 0) {
         const Skin& k = skin(skinIdx);
         b = k.b;
         g_paintC = k.c;
         camo = static_cast<float>(static_cast<int>(k.pattern));
         g_paintRough = k.roughness;
+        g_paintMetal = k.metal;
+        g_paintGlow = k.glow;
         return k.a;
     }
     AirframeStyle st = prof.style;
@@ -1324,8 +1330,13 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
     jet_.setV3("uPaintC", g_paintC);
     jet_.setF("uCamo", camo);
     jet_.setF("uRoughness", g_paintRough);
+    jet_.setF("uMetal", g_paintMetal);
+    jet_.setV3("uGlowColor", g_paintGlow);
+    jet_.setF("uGlowPulse", 0.35f + 0.45f * pose.throttle + 0.9f * pose.ab);   // accents brighten with the engine
     g_paintC = {0, 0, 0};
     g_paintRough = 0.42f;
+    g_paintMetal = 0.12f;
+    g_paintGlow = {0, 0, 0};
     jet_.setF("uHitFlash", pose.hitFlash);
     jet_.setF("uDamage", pose.damage);
     rlDisableBackfaceCulling();
