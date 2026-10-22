@@ -95,9 +95,11 @@ bool Settings::load(const std::string& path) {
             else if (k == "g_effects") gEffects = toBool(v);
             else if (k == "ui_scale") uiScale = std::clamp(std::stod(v), 0.75, 1.5);
             else if (k == "show_fps") showFps = toBool(v);
+            else if (k == "hud_panel_scale") hudPanelScale = std::clamp(std::stod(v), 0.45, 1.0);
             else if (k == "high_contrast_hud") highContrastHud = toBool(v);
             else if (k == "missile_cam") missileCam = toBool(v);
             else if (k == "crash_replay") crashReplay = toBool(v);
+            else if (k == "kill_replay") killReplay = toBool(v);
             else if (k == "dynamic_resolution") dynamicResolution = toBool(v);
             else if (k == "campaign_done") { for (size_t i = 0; i < v.size() && i < campaignDone.size(); ++i) campaignDone[i] = v[i] == '1' ? '1' : '0'; }
             else if (k == "hud_style") hudStyle = std::clamp(std::stoi(v), 0, 1);
@@ -135,7 +137,7 @@ bool Settings::save(const std::string& path) const {
       << "quality=" << static_cast<int>(quality) << "\nfps_cap=" << fpsCap << "\nwidth=" << width << "\nheight=" << height
       << "\nfullscreen=" << fullscreen << "\nvsync=" << vsync << "\nfov=" << fovDeg << "\nbloom=" << bloom
       << "\ncamera_shake=" << cameraShake << "\ng_effects=" << gEffects << "\nui_scale=" << uiScale
-      << "\nshow_fps=" << showFps << "\nhigh_contrast_hud=" << highContrastHud << "\nhud_style=" << hudStyle << "\nmissile_cam=" << missileCam << "\ncrash_replay=" << crashReplay << "\ndynamic_resolution=" << dynamicResolution << "\nsmooth_motion=" << smoothMotion << "\nsettings_version=" << settingsVersion << "\n[input]\n"
+      << "\nshow_fps=" << showFps << "\nhud_panel_scale=" << hudPanelScale << "\nhigh_contrast_hud=" << highContrastHud << "\nhud_style=" << hudStyle << "\nmissile_cam=" << missileCam << "\ncrash_replay=" << crashReplay << "\nkill_replay=" << killReplay << "\ndynamic_resolution=" << dynamicResolution << "\nsmooth_motion=" << smoothMotion << "\nsettings_version=" << settingsVersion << "\n[input]\n"
       << "invert_pitch=" << invertPitch << "\nsensitivity=" << sensitivity << "\ndeadzone=" << deadzone
       << "\nhandling=" << handling << "\narcade_boost=" << arcadeBoost << "\naircraft=" << aircraft << "\nskins=" << skins << "\nlocation=" << location << "\n[audio]\n"
       << "master=" << master << "\nmusic=" << music << "\nengine=" << engine << "\nradio=" << radio

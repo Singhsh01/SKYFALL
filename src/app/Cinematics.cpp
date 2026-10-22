@@ -146,7 +146,16 @@ void Game::recordFrame() {
     }
     for (const Missile& m : battle_.missiles()) {
         if (length(m.pos - s.pos) > 6000.0) continue;
-        f.missiles.push_back({m.id, m.pos, normalize(m.vel), m.motor > 0, m.targetJet == p.id});
+        RecMissile rm{m.id, m.pos, normalize(m.vel), m.motor > 0, m.targetJet == p.id};
+        rm.targetJet = m.targetJet;
+        rm.owner = m.owner;
+        f.missiles.push_back(rm);
+    }
+    // cannon rounds near the fight (the kill replay draws them as tracers)
+    for (const Bullet& b : battle_.bullets()) {
+        if (f.tracers.size() >= 48) break;
+        if (length(b.pos - s.pos) > 2500.0) continue;
+        f.tracers.push_back({b.pos, normalize(b.vel), b.owner});
     }
     Euler e = toEuler(s.q);
     f.speed = static_cast<float>(s.airspeed);
@@ -265,6 +274,118 @@ FrameParams Game::makeReplayFrameParams() {
     f.extraMissiles = &replayMissiles_;
     f.blackout = f.redout = f.damage = 0;
     f.shadowFocus = toRl(recorder_.playerAt(std::min(replayT_, deathTime_)).pos);
+    return f;
+}
+
+// ------------------------------------------------------------------------------------------
+// Kill replay: the enemy's view of its own shoot-down, in a second picture-in-picture window
+// ------------------------------------------------------------------------------------------
+void Game::startKillReplay(int victimId, const std::string& weapon) {
+    if (!settings_.killReplay) return;
+    const Jet* v = battle_.jetById(victimId);
+    if (!v) return;
+    const FlightState& vs = v->fm->state();
+    RecJet at;
+    at.id = v->id;
+    at.type = v->fm->profile().id;
+    at.team = v->team == Team::Blue ? 0 : 1;
+    at.pos = vs.pos;
+    at.q = vs.q;
+    at.throttle = static_cast<float>(std::clamp((vs.rpm - 0.6) / 0.4, 0.0, 1.0));
+    at.ab = static_cast<float>(vs.abLevel);
+    KillClip clip = makeKillClip(recorder_, victimId, at, vs.vel, time_, v->callsign.empty() ? std::string(v->fm->profile().shortName) : v->callsign, weapon);
+    if (!clip.valid()) return;
+    if (killActive_) { killPending_ = std::move(clip); killHasPending_ = true; return; }   // play it next
+    killClip_ = std::move(clip);
+    killActive_ = true;
+    killT_ = killClip_.start();
+    killLook_ = KillCamState{};
+}
+
+void Game::updateKillReplay(double dt) {
+    if (!killActive_) return;
+    if (IsKeyPressed(KEY_N)) killT_ = killClip_.killTime + 10.0;   // skip
+    // real time, a little slower around the impact; the game keeps running underneath
+    double k = (killT_ > killClip_.killTime - 0.6 && killT_ < killClip_.killTime + 0.35) ? 0.45 : 1.0;
+    killT_ += dt * k;
+    killView_ = killCamera(killClip_, killT_, killLook_, dt * k);
+    if (killT_ > killClip_.killTime + 1.6) {
+        killActive_ = false;
+        if (killHasPending_) {
+            killHasPending_ = false;
+            killClip_ = std::move(killPending_);
+            killActive_ = true;
+            killT_ = killClip_.start();
+            killLook_ = KillCamState{};
+        }
+        return;
+    }
+    // the recorded scene at this instant (the victim itself is the camera: not drawn)
+    killJets_.clear();
+    killMissiles_.clear();
+    killSprites_.clear();
+    double tt = std::min(killT_, killClip_.killTime);
+    const RecFrame* f = killClip_.frameAt(tt);
+    auto addJet = [&](const RecJet& j) {
+        ExtraJet e;
+        e.id = j.type; e.style = profile(j.type).style; e.team = j.team == 0 ? Team::Blue : Team::Red;
+        e.pos = j.pos; e.q = j.q; e.gear = j.gear; e.throttle = j.throttle; e.ab = j.ab;
+        if (j.team == 0 && j.id == killClip_.frames.front().player.id) e.skin = settings_.skinFor(static_cast<int>(j.type));
+        killJets_.push_back(e);
+    };
+    if (f) {
+        RecJet pl;
+        if (killClip_.jetAt(f->player.id, tt, pl)) addJet(pl);
+        for (const RecJet& o : f->others) {
+            if (o.id == killClip_.victimId) continue;
+            RecJet j;
+            if (killClip_.jetAt(o.id, tt, j)) addJet(j);
+        }
+        for (const RecMissile& m : f->missiles) {
+            killMissiles_.push_back({m.pos, m.dir});
+            // smoke trail: the missile's recorded positions over the last second
+            for (const RecFrame& g : killClip_.frames) {
+                if (g.t < tt - 1.2 || g.t > tt) continue;
+                for (const RecMissile& gm : g.missiles)
+                    if (gm.id == m.id) {
+                        float age = static_cast<float>(tt - g.t);
+                        unsigned char a = static_cast<unsigned char>(std::clamp(200.0f * (1.0f - age / 1.2f), 0.0f, 200.0f));
+                        killSprites_.push_back({toRl(gm.pos), 3.5f + age * 9.0f, Color{235, 235, 238, a}, false});
+                    }
+            }
+            if (m.motor) killSprites_.push_back({toRl(m.pos - m.dir * 2.0), 3.0f, Color{255, 200, 120, 255}});
+        }
+        for (const RecTracer& b : f->tracers) killSprites_.push_back({toRl(b.pos), 1.2f, Color{255, 220, 140, 230}});
+    }
+    if (killView_.afterKill) {
+        // the hit: a fireball at the cockpit, burning on as the wreck falls
+        RecJet me = killClip_.victimAt(killT_);
+        float a = static_cast<float>(killView_.impact);
+        killSprites_.push_back({toRl(me.pos + me.q.forward() * 2.0), 12.0f + 30.0f * (1.0f - a), Color{255, 170, 70, static_cast<unsigned char>(200 * std::max(a, 0.35f))}});
+        killSprites_.push_back({toRl(me.pos - me.q.forward() * 6.0), 8.0f, Color{255, 120, 40, 180}});
+    }
+}
+
+FrameParams Game::makeKillReplayFrameParams() {
+    FrameParams f = makeFrameParams();
+    f.cam.position = toRl(killView_.eye);
+    f.cam.target = toRl(killView_.target);
+    f.cam.up = toRl(killView_.up);
+    f.cam.fovy = static_cast<float>(killView_.fovDeg);
+    f.cam.projection = CAMERA_PERSPECTIVE;
+    f.battle = &replayStage_;     // recorded aircraft only (no live jets in the past)
+    f.groundFrom = &battle_;
+    f.hideJetId = -1;
+    f.extraJets = &killJets_;
+    f.extraMissiles = &killMissiles_;
+    f.sprites = &killSprites_;
+    f.drawEffects = false;        // live particles belong to "now", not to the replayed moment
+    f.bloom = false;
+    f.nearPlane = 0.5f;
+    f.blackout = f.redout = f.damage = 0;
+    f.speedFx = f.rush = 0;
+    f.quality = settings_.quality >= GraphicsQuality::High ? GraphicsQuality::Medium : GraphicsQuality::Low;
+    f.shadowFocus = toRl(killView_.eye);
     return f;
 }
 

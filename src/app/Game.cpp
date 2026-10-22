@@ -662,6 +662,7 @@ void Game::applySettings() {
 // ------------------------------------------------------------------------------------------
 void Game::startTitle() {
     pip_ = PipState{};
+    killActive_ = killHasPending_ = false;
     replayActive_ = false;
     deathWait_ = -1;
     screen_ = Screen::Title;
@@ -765,6 +766,7 @@ void Game::startMission(int n) {
     headYaw_ = headPitch_ = 0;
     recorder_.clear();
     pip_ = PipState{};
+    killActive_ = killHasPending_ = false;
     replayActive_ = false;
     deathWait_ = -1;
     lossCause_ = LossCause::Crash;
@@ -834,6 +836,7 @@ void Game::startArena(bool keepPlayerState) {
     battle_.setAiEnabled(true);
     recorder_.clear();
     pip_ = PipState{};
+    killActive_ = killHasPending_ = false;
     replayActive_ = false;
     deathWait_ = -1;
     lossCause_ = LossCause::Crash;
@@ -874,6 +877,7 @@ void Game::startHangar() {
 void Game::respawnPlayer() {
     recorder_.clear();
     pip_ = PipState{};
+    killActive_ = killHasPending_ = false;
     replayActive_ = false;
     deathWait_ = -1;
     lossCause_ = LossCause::Crash;
@@ -1153,6 +1157,7 @@ void Game::updatePlaying(double dt) {
         simMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     }
     processEvents();
+    updateKillReplay(dt);
     if (mode_ == GameMode::Training) updateTrainingFrame(dt);
 
     // mission narration / completion
@@ -1250,6 +1255,7 @@ void Game::processEvents() {
                 audio_.play(Sfx::BigExplosion, 0.5f + 1.5f * att, pan);
                 if (e.a == p.id) { lastKillTime_ = time_; lastKillPos_ = e.pos; }
                 if (e.a == p.id) {
+                    startKillReplay(e.b, e.text);
                     hud_.popup("+100   ENEMY JET DESTROYED", Color{255, 225, 120, 255});
                     hud_.hitMarker(true);
                     radio(Speaker::Wingman, lines::kKills[GetRandomValue(0, 3)], 3.5);
@@ -1565,7 +1571,16 @@ void Game::renderFrame() {
     const int pipW = 480, pipH = 300;
     bool pipOn = settings_.missileCam && !replayActive_ && !hideHud_ && pip_.mode != PipMode::Off &&
                  (screen_ == Screen::Playing || screen_ == Screen::Paused);
-    if (pipOn) {
+    // kill replay: the enemy's view, same size as the missile camera window. When both windows
+    // are open each is re-rendered every other frame (no extra frame-time spike).
+    bool killOn = killActive_ && !replayActive_ && !hideHud_ && (screen_ == Screen::Playing || screen_ == Screen::Paused);
+    ++frameNo_;
+    bool both = pipOn && killOn;
+    if (killOn && (!both || (frameNo_ & 1))) {
+        renderer_.renderPip(makeKillReplayFrameParams(), pipW, pipH, 1);
+        rlSetClipPlanes(nearPlane_, farPlane_);
+    }
+    if (pipOn && (!both || !(frameNo_ & 1))) {
         FrameParams pf = makeFrameParams();
         pf.cam = pip_.cam;
         pf.hideJetId = -1;
@@ -1633,6 +1648,13 @@ void Game::renderFrame() {
         hc.pip = &pip_;
         hc.pipTex = renderer_.pipTexture();
         hc.pipW = pipW; hc.pipH = pipH;
+        hc.killActive = killOn;
+        hc.killTex = renderer_.pipTexture(1);
+        hc.killName = killClip_.victimName;
+        hc.killWeapon = killClip_.weapon;
+        hc.killProgress = killActive_ ? std::clamp((killT_ - killClip_.start()) / std::max(0.1, killClip_.killTime + 1.6 - killClip_.start()), 0.0, 1.0) : 0.0;
+        hc.killImpact = killView_.impact;
+        hc.killAfter = killView_.afterKill;
         hc.replay = replayActive_;
         hc.replayT = replayT_; hc.replayFrom = replayFrom_; hc.replayTo = replayTo_; hc.deathTime = deathTime_;
         hc.loss = &lossReport_;
@@ -1659,7 +1681,9 @@ void Game::renderFrame() {
                 std::snprintf(b, sizeof b, "%.0f FPS  %.1f ms  RES %d%%", pc.mean > 0 ? 1000.0 / pc.mean : 0.0, pc.mean, static_cast<int>(std::lround(dynScale_ * 100)));
             else
                 std::snprintf(b, sizeof b, "%.0f FPS  %.1f ms", pc.mean > 0 ? 1000.0 / pc.mean : 0.0, pc.mean);
-            ui::text(b, GetScreenWidth() - 12.0f, GetScreenHeight() - 156.0f * GetScreenHeight() / 720.0f, 13, Color{255, 255, 255, 140}, Align::Right);
+            Rectangle sr = hud_.statusRect();
+            float fy = sr.height > 0 ? sr.y - 15.0f * GetScreenHeight() / 720.0f : GetScreenHeight() - 156.0f * GetScreenHeight() / 720.0f;
+            ui::text(b, GetScreenWidth() - 18.0f * GetScreenHeight() / 720.0f, fy, 10.5f * GetScreenHeight() / 720.0f, Color{255, 255, 255, 140}, Align::Right);
         }
     }
     drawMenus();
@@ -1919,7 +1943,7 @@ void Game::drawSettings() {
     float s = h / 720.0f;
     DrawRectangle(0, 0, static_cast<int>(w), static_cast<int>(h), Color{0, 0, 0, 170});
     ui::title("SETTINGS", 60 * s, 34 * s, 38 * s);
-    nav_.begin(26, in.up, in.down, in.confirm, in.left, in.right);
+    nav_.begin(27, in.up, in.down, in.confirm, in.left, in.right);
     float cw = 420 * s, rh = 36 * s, g = 5 * s;
     float x1 = 60 * s, x2 = 60 * s + cw + 40 * s;
     float y = 110 * s;
@@ -1970,7 +1994,7 @@ void Game::drawSettings() {
         std::vector<std::string> cn(capNames, capNames + nCaps);
         changed |= ui::toggle(nav_, 24, {x1, y + 22 * s + 3 * (rh + g), cw, rh}, "Arcade boost (3-4 s to top speed)", settings_.arcadeBoost);
         changed |= ui::toggle(nav_, 25, {x1, y + 22 * s + 4 * (rh + g), cw, rh}, "Smooth motion (frame interpolation)", settings_.smoothMotion);
-        changed |= false;
+        changed |= ui::toggle(nav_, 26, {x1, y + 22 * s + 5 * (rh + g), cw, rh}, "Kill replay window (enemy's view)", settings_.killReplay);
         if (ui::cycle(nav_, 22, {x1, y + 22 * s + 2 * (rh + g), cw, rh}, "Frame rate limit", fi, cn)) {
             settings_.fpsCap = caps[fi];
             applyFramePacing();
@@ -2245,6 +2269,46 @@ int Game::runCapture() {
             if (pass == 1) rush_ = 0.6;
             snap(pass == 0 ? "speed_cockpit_slow" : "speed_cockpit_fast", 0);
         }
+        return 0;
+    }
+    if (set == "killreplay") {
+        // a bandit is shot down by a real missile: the kill event opens the second window, which
+        // replays the shoot-down from the bandit's cockpit
+        hideHud_ = false;
+        startArena(false);
+        Jet* bandit = nullptr;
+        for (auto& jp : battle_.jets()) if (jp->team == Team::Red && jp->alive) { bandit = jp.get(); break; }
+        if (!bandit) return 1;
+        int vid = bandit->id;
+        double gy = std::max(2500.0, terrain_.surfaceHeight(0, 0) + 1500.0);
+        bandit->fm->resetAirborne({0, gy, 0}, 0.25, 210.0, 0.8);
+        battle_.player().fm->resetAirborne({-900, gy + 40, -350}, 0.38, 260.0, 0.9);
+        screen_ = Screen::Playing;
+        camMode_ = CameraMode::Chase; chaseInit_ = false;
+        battle_.setAiEnabled(false);
+        double tRec = -1;
+        bool fired = false;
+        int shots = 0;
+        for (int k = 0; k < 420 && shots < 5; ++k) {
+            scriptedStep(1.0 / 30.0, [&](double) { setInput(0, 0, 0, 0.3); });
+            recordFrame();
+            if (!fired && k == 30) {
+                Jet& p = battle_.player();
+                p.lockTarget = vid; p.lockProgress = 1.0; p.weaponAG = false;
+                pendingCmd_.fireMissile = true;
+                fired = true;
+            }
+            updateKillReplay(1.0 / 30.0);
+            static bool impactShot = false;
+            bool impactNow = killActive_ && killView_.afterKill && !impactShot && killView_.impact < 0.75;
+            if (killActive_ && ((k % 60) == 0 || impactNow)) {
+                snap(impactNow ? "killreplay_impact" : "killreplay_" + std::to_string(k), 0);
+                if (impactNow) impactShot = true;
+                ++shots;
+            }
+            (void)tRec;
+        }
+        std::printf("killreplay: shots %d\n", shots);
         return 0;
     }
     if (set == "skins") {

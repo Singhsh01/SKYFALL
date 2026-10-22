@@ -333,8 +333,10 @@ void Renderer::shutdown() {
     for (Prog* p : {&sky_, &terrain_p_, &water_, &lit_, &jet_, &flameP_, &cloud_, &runway_, &particle_, &bright_, &blur_, &composite_})
         UnloadShader(p->sh);
     freeTarget(scene_); freeTarget(bloomA_); freeTarget(bloomB_); freeTarget(bloomC_); freeTarget(bloomD_);
-    freeTarget(pipScene_);
-    if (pipOut_.id) UnloadRenderTexture(pipOut_);
+    for (int k = 0; k < 2; ++k) {
+        freeTarget(pipScene_[k]);
+        if (pipOut_[k].id) UnloadRenderTexture(pipOut_[k]);
+    }
 }
 
 void Renderer::buildGroundModels() {
@@ -1419,11 +1421,22 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
 }
 
 void Renderer::drawLightSprites(const FrameParams& f) {
+    if (!smokeSprites_.empty()) {
+        // alpha-blended soft puffs (replay smoke trails): drawn before the glows
+        std::swap(lights_, smokeSprites_);
+        drawSpriteBatch(f, false);
+        std::swap(lights_, smokeSprites_);
+        smokeSprites_.clear();
+    }
+    drawSpriteBatch(f, true);
+}
+
+void Renderer::drawSpriteBatch(const FrameParams& f, bool additive) {
     if (lights_.empty()) return;
     BeginShaderMode(particle_.sh);
-    particle_.setF("uIntensity", 3.0f);
+    particle_.setF("uIntensity", additive ? 3.0f : 1.0f);
     rlDisableDepthMask();
-    BeginBlendMode(BLEND_ADDITIVE);
+    BeginBlendMode(additive ? BLEND_ADDITIVE : BLEND_ALPHA);
     rlSetTexture(world_.glow.id);
     Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
     Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, f.cam.up));
@@ -1751,8 +1764,10 @@ void Renderer::renderWorld(const FrameParams& f) {
         drawCloudPuffs(f);
     }
     if (pm) profMark("clouds");
-    if (f.battle)
+    if (f.battle && f.drawEffects)
         effects_.draw(f.cam, *f.battle, f.L, particle_.sh, particle_.loc("uIntensity"), world_.edgeLights, f.showRunwayLights);
+    if (f.sprites)
+        for (const WorldSprite& sp : *f.sprites) (sp.additive ? lights_ : smokeSprites_).push_back({sp.pos, sp.size, sp.col});
     if (pm) profMark("particles");
     drawGates(f);
     drawLightSprites(f);
@@ -1873,11 +1888,14 @@ void Renderer::composite(const FrameParams& f) {
     EndShaderMode();
 }
 
-void Renderer::renderPip(const FrameParams& f, int w, int h) {
-    if (w != pipW_ || h != pipH_ || !pipScene_.id) {
+void Renderer::renderPip(const FrameParams& f, int w, int h, int slot) {
+    slot = slot == 1 ? 1 : 0;
+    RenderTexture2D& pipScene_ = this->pipScene_[slot];
+    RenderTexture2D& pipOut_ = this->pipOut_[slot];
+    if (w != pipW_[slot] || h != pipH_[slot] || !pipScene_.id) {
         freeTarget(pipScene_);
         if (pipOut_.id) UnloadRenderTexture(pipOut_);
-        pipW_ = w; pipH_ = h;
+        pipW_[slot] = w; pipH_[slot] = h;
         pipScene_ = makeTarget(w, h, hdr_, true);
         pipOut_ = LoadRenderTexture(w, h);
         SetTextureFilter(pipOut_.texture, TEXTURE_FILTER_BILINEAR);

@@ -43,6 +43,8 @@ struct ExtraJet {
     int skin = 0;
 };
 struct ExtraMissile { Vec3 pos, dir; };
+/// A glowing billboard in the world (replay smoke, tracers, impact fireballs).
+struct WorldSprite { Vector3 pos; float size; Color col; bool additive = true; };   // additive glow, or alpha-blended smoke
 
 /// Everything that animates on an aircraft model for one frame.
 struct JetPose {
@@ -81,6 +83,8 @@ struct FrameParams {
     const Battle* groundFrom = nullptr;                  // ground units source if `battle` is a stand-in
     const std::vector<ExtraJet>* extraJets = nullptr;    // replay aircraft
     const std::vector<ExtraMissile>* extraMissiles = nullptr;
+    const std::vector<WorldSprite>* sprites = nullptr;   // extra additive billboards
+    bool drawEffects = true;        // live particles (off for replays of an earlier moment)
     Vector3 shadowFocus{0, 0, 0};
     float rain = 0;                 // 0..1 rain intensity
     Vector3 rainWind{0, 0, 0};      // rain velocity relative to the camera (m/s, without the fall speed)
@@ -107,8 +111,8 @@ public:
     /// Bloom + tonemap into the currently bound framebuffer (call between BeginDrawing/EndDrawing).
     void composite(const FrameParams& f);
     /// Render a second, small view (missile / target / hit camera) into its own targets.
-    void renderPip(const FrameParams& f, int w, int h);
-    Texture2D pipTexture() const { return pipOut_.texture; }
+    void renderPip(const FrameParams& f, int w, int h, int slot = 0);
+    Texture2D pipTexture(int slot = 0) const { return pipOut_[slot].texture; }
     /// Lens flare / sun glare sprites (after composite, 2D).
     void drawSunFlare(const FrameParams& f, int w, int h);
 
@@ -178,10 +182,11 @@ private:
     int obstacleVer_ = -1;
     std::vector<Vector3> mastLights_;
     struct LightSprite { Vector3 pos; float size; Color col; };
-    std::vector<LightSprite> lights_;
+    std::vector<LightSprite> lights_, smokeSprites_;
     struct Spin { float angle = 0; double t = -1; };
     std::unordered_map<int, Spin> wheelSpin_;
     void drawLightSprites(const FrameParams& f);
+    void drawSpriteBatch(const FrameParams& f, bool additive);
     bool sphereVisible(const FrameParams& f, Vector3 c, float r) const;
     void drawCarrier(const FrameParams& f);
     void drawRain(const FrameParams& f);
@@ -195,8 +200,9 @@ private:
 
     RenderTexture2D scene_{}, bloomA_{}, bloomB_{}, bloomC_{}, bloomD_{};
     RenderTexture2D shadowRT_{};
-    RenderTexture2D pipScene_{}, pipOut_{};
-    int pipW_ = 0, pipH_ = 0;
+    // picture-in-picture views: 0 = missile / target / hit camera, 1 = kill replay
+    RenderTexture2D pipScene_[2]{}, pipOut_[2]{};
+    int pipW_[2] = {0, 0}, pipH_[2] = {0, 0};
     Texture2D shadowDepth_{};
     Matrix lightVP_{};
     bool shadowsActive_ = false;

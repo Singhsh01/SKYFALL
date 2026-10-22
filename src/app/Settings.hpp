@@ -38,11 +38,13 @@ struct Settings {
     double cameraShake = 0.6;   // 0..1 motion comfort
     bool gEffects = true;       // blackout / redout vignette
     double uiScale = 1.0;
+    double hudPanelScale = 0.55;    // size of the non-critical HUD panels (1.0 = the earlier, larger panels)
     bool showFps = true;
     bool highContrastHud = false;
     int hudStyle = 0;
     bool missileCam = true;     // picture-in-picture target / missile / hit camera
     bool crashReplay = true;    // replay + analysis after the aircraft is lost
+    bool killReplay = true;     // second window: an enemy's view of its own shoot-down
     bool dynamicResolution = true;  // lower the 3D resolution automatically to hold the frame rate
     bool smoothMotion = true;       // draw between the last two physics steps (even motion at any fps)
     int settingsVersion = 1;        // a file without the key was written by v0.8 or older (see migrate)

@@ -90,6 +90,19 @@ private:
     void updateReplay(double dt);
     void endReplay();
     FrameParams makeReplayFrameParams();
+    // kill replay (Cinematics.cpp): the enemy's view of its shoot-down, second PiP window
+    void startKillReplay(int victimId, const std::string& weapon);
+    void updateKillReplay(double dt);
+    FrameParams makeKillReplayFrameParams();
+    KillClip killClip_, killPending_;
+    bool killActive_ = false, killHasPending_ = false;
+    double killT_ = 0;
+    KillCamState killLook_;
+    KillView killView_;
+    std::vector<ExtraJet> killJets_;
+    std::vector<ExtraMissile> killMissiles_;
+    std::vector<WorldSprite> killSprites_;
+    long long frameNo_ = 0;           // alternates the two PiP renders when both are open
     void drawMenus();
     void drawTitle();
     void drawCampaign();

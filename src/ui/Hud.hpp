@@ -56,6 +56,11 @@ struct HudContext {
     const PipState* pip = nullptr;
     Texture2D pipTex{};
     int pipW = 480, pipH = 300;
+    // kill replay window (the enemy's view of its shoot-down)
+    bool killActive = false, killAfter = false;
+    Texture2D killTex{};
+    std::string killName, killWeapon;
+    double killProgress = 0, killImpact = 0;
     // replay
     bool replay = false;
     double replayT = 0, replayFrom = 0, replayTo = 0, deathTime = 0;
@@ -83,8 +88,10 @@ public:
     void popup(const std::string& text, Color col);
     void hitMarker(bool kill) { hit_ = 0.25; killHit_ = kill; }
     void clear() { radio_.clear(); popups_.clear(); hit_ = 0; }
+    Rectangle statusRect() const { return lastWeaponsRect_; }
 
 private:
+    Rectangle lastWeaponsRect_{};   // the status block (other panels stack above it)
     void flightSymbology(const HudContext& c, bool cockpit);
     void pitchLadder(const HudContext& c);
     void targets(const HudContext& c);
@@ -103,6 +110,7 @@ private:
     void minimalSymbology(const HudContext& c);
     void hintsBar(const HudContext& c);
     void pipPanel(const HudContext& c);
+    void killPanel(const HudContext& c);
     void replayOverlay(const HudContext& c);
     void radioPanel(const HudContext& c);
     void popups(const HudContext& c);

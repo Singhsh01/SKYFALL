@@ -22,6 +22,8 @@ Quat slerpQ(const Quat& a, Quat b, double t) {
 }
 }  // namespace
 
+Quat slerpQuat(const Quat& a, Quat b, double t) { return slerpQ(a, b, t); }
+
 bool FlightRecorder::offer(const RecFrame& f) {
     if (!frames_.empty() && f.t - frames_.back().t < 1.0 / kRate - 1e-6) return false;
     frames_.push_back(f);
@@ -159,6 +161,163 @@ LossReport analyzeLoss(const FlightRecorder& rec, double deathTime, CrashReason 
     }
     if (rep.advice.empty()) rep.advice.push_back("Fly smoother and keep more height in reserve.");
     return rep;
+}
+
+// ------------------------------------------------------------------------------------------
+// Kill replay
+// ------------------------------------------------------------------------------------------
+namespace {
+const RecJet* findJet(const RecFrame& f, int id) {
+    if (f.player.id == id) return &f.player;
+    for (const RecJet& o : f.others) if (o.id == id) return &o;
+    return nullptr;
+}
+}  // namespace
+
+KillClip makeKillClip(const FlightRecorder& rec, int victimId, const RecJet& victimAtKill, const Vec3& victimVel, double killTime,
+                      const std::string& victimName, const std::string& weapon, double seconds) {
+    KillClip c;
+    c.victimId = victimId;
+    c.victimType = victimAtKill.type;
+    c.victimName = victimName;
+    c.killTime = killTime;
+    c.victimVel = victimVel;
+    c.weapon = weapon;
+    for (const RecFrame& f : rec.frames())
+        if (f.t >= killTime - seconds && f.t <= killTime) c.frames.push_back(f);
+    // the exact moment of the kill: the victim where it was hit
+    if (!c.frames.empty()) {
+        RecFrame last = c.frames.back();
+        last.t = std::max(killTime, last.t + 1e-3);
+        bool have = false;
+        for (RecJet& o : last.others) if (o.id == victimId) { o = victimAtKill; have = true; }
+        if (!have) last.others.push_back(victimAtKill);
+        c.frames.push_back(last);
+    }
+    // the victim must be in the clip for more than a moment, or there is nothing to show
+    int seen = 0;
+    for (const RecFrame& f : c.frames) seen += findJet(f, victimId) ? 1 : 0;
+    if (seen < 4) c.victimId = -1;
+    return c;
+}
+
+const RecFrame* KillClip::frameAt(double t) const {
+    if (frames.empty()) return nullptr;
+    const RecFrame* best = &frames.front();
+    for (const RecFrame& f : frames) {
+        if (f.t > t) break;
+        best = &f;
+    }
+    return best;
+}
+
+bool KillClip::jetAt(int id, double t, RecJet& out) const {
+    for (size_t i = 0; i + 1 < frames.size(); ++i) {
+        const RecFrame& a = frames[i];
+        const RecFrame& b = frames[i + 1];
+        if (t < a.t || t > b.t) continue;
+        const RecJet* ja = findJet(a, id);
+        const RecJet* jb = findJet(b, id);
+        if (!ja && !jb) return false;
+        if (!ja || !jb) { out = ja ? *ja : *jb; return true; }
+        double u = (t - a.t) / std::max(b.t - a.t, 1e-6);
+        out = *ja;
+        out.pos = lerp(ja->pos, jb->pos, u);
+        out.q = slerpQ(ja->q, jb->q, u);
+        out.throttle = static_cast<float>(lerpd(ja->throttle, jb->throttle, u));
+        out.ab = static_cast<float>(lerpd(ja->ab, jb->ab, u));
+        out.gear = static_cast<float>(lerpd(ja->gear, jb->gear, u));
+        return true;
+    }
+    if (frames.empty()) return false;
+    const RecFrame& edge = t < frames.front().t ? frames.front() : frames.back();
+    if (const RecJet* j = findJet(edge, id)) { out = *j; return true; }
+    return false;
+}
+
+RecJet KillClip::playerAt(double t) const {
+    RecJet r;
+    if (frames.empty()) return r;
+    jetAt(frames.front().player.id, t, r);
+    return r;
+}
+
+RecJet KillClip::victimAt(double t) const {
+    RecJet r;
+    if (t <= killTime) {
+        if (!jetAt(victimId, t, r) && !frames.empty()) {
+            // not seen yet at the start of the clip: the first time it is
+            for (const RecFrame& f : frames) if (const RecJet* j = findJet(f, victimId)) { r = *j; break; }
+        }
+        return r;
+    }
+    // after the kill: the wreck falls on its last velocity, rolling and nosing down
+    jetAt(victimId, killTime, r);
+    double dt = t - killTime;
+    r.pos = r.pos + victimVel * dt + Vec3{0, -0.5 * kG * dt * dt, 0};
+    Quat roll = Quat::fromAxisAngle(r.q.forward(), 2.4 * dt);
+    Quat nose = Quat::fromAxisAngle(r.q.right(), -0.5 * dt);
+    r.q = (nose * roll * r.q).normalized();
+    r.ab = 0;
+    r.throttle = 0;
+    return r;
+}
+
+KillView killCamera(const KillClip& clip, double t, KillCamState& st, double dt) {
+    Vec3& look = st.look;
+    KillView v;
+    RecJet me = clip.victimAt(t);
+    v.afterKill = t > clip.killTime;
+    v.eye = me.pos + me.q.forward() * 5.5 + me.q.up() * 1.3;
+    Vec3 fwd = me.q.forward();
+    // what the pilot looks at: the missile guiding on it, else the attacker when close
+    Vec3 want = fwd;
+    double wantFov = 60.0;
+    const RecFrame* f = clip.frameAt(std::min(t, clip.killTime));
+    bool missile = false;
+    if (f) {
+        double best = 1e18;
+        for (const RecMissile& m : f->missiles) {
+            if (m.targetJet != clip.victimId) continue;
+            double d = length(m.pos - v.eye);
+            if (d < 3500.0 && d < best) { best = d; want = normalize(m.pos - v.eye); missile = true; }
+        }
+        // zoom so the missile and its smoke read in a small window
+        if (missile) wantFov = std::clamp(2.0 * std::atan(110.0 / std::max(best, 1.0)) / kDeg, 8.0, 70.0);
+    }
+    RecJet attacker = clip.playerAt(std::min(t, clip.killTime));
+    if (missile) {
+        // keep the attacker in the picture with the missile when they are close together
+        double sep = std::acos(clampd(dot(want, normalize(attacker.pos - v.eye)), -1.0, 1.0)) / kDeg;
+        if (sep < 35.0) wantFov = std::max(wantFov, std::min(70.0, sep * 2.4 + 8.0));
+    }
+    RecJet p = clip.playerAt(std::min(t, clip.killTime));
+    double dp = length(p.pos - v.eye);
+    if (!missile && dp < 4000.0) {
+        // the attacker: blended with the nose so the horizon and the jet's motion stay readable
+        Vec3 toP = normalize(p.pos - v.eye);
+        double w = std::clamp(1.2 - dp / 4000.0, 0.35, 0.9);
+        want = normalize(fwd * (1.0 - w) + toP * w);
+        // the attacker fills roughly a tenth of the frame, like a pilot's eyes picking it out
+        wantFov = std::clamp(2.0 * std::atan(80.0 / std::max(dp, 1.0)) / kDeg, 6.0, 62.0);
+        v.threatVisible = true;
+    }
+    if (missile) v.threatVisible = true;
+    if (length(look) < 0.5) look = want;
+    double k = 1.0 - std::exp(-dt * (v.afterKill ? 1.5 : 4.0));
+    look = normalize(look + (want - look) * k);
+    v.target = v.eye + look * 100.0;
+    v.up = normalize(me.q.up() * 0.6 + Vec3{0, 1, 0} * 0.4);
+    // the zoom follows smoothly too (no jumps when the threat changes)
+    if (st.fov <= 0) st.fov = wantFov;
+    st.fov += (wantFov - st.fov) * k;
+    v.fovDeg = st.fov;
+    if (v.afterKill) {
+        double a = t - clip.killTime;
+        v.impact = std::exp(-a * 3.0);
+        v.fovDeg = 60.0 + 12.0 * std::min(1.0, a);
+    }
+    return v;
 }
 
 }  // namespace sky

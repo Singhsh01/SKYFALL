@@ -102,6 +102,14 @@ std::vector<std::string> wrapText(const std::string& text, float size, float max
     return out;
 }
 
+/// Size of the non-critical information panels relative to their original design (0.55 by
+/// default: a wider view of the battlefield). The minimap, the replay windows and warnings keep
+/// their size.
+float panelK(const HudContext& c) { return c.settings ? static_cast<float>(c.settings->hudPanelScale) : 0.55f; }
+/// Font size for a panel: shrinks with the panel, but never below ~10.5 px at 720p (scaled with
+/// the screen, so it stays readable at 4K too).
+float pfont(float pt, float s, float k) { return std::max(pt * s * k, std::min(pt, 10.5f) * s); }
+
 const Color kObjective = {255, 176, 60, 255};
 const Color kFriendlyAsset = {110, 190, 255, 255};
 }  // namespace
@@ -191,6 +199,7 @@ void Hud::draw(const HudContext& c) {
                            c.w * 0.5f, c.h * 0.40f + 46 * s, 22 * s, WHITE, Align::Center);
     }
     if (c.pipActive) pipPanel(c);
+    if (c.killActive) killPanel(c);
     if (!c.dead && !c.showHelp) hintsBar(c);
     if (c.showDebug) debug(c);
     if (c.showHelp) help(c);
@@ -497,43 +506,45 @@ void Hud::targets(const HudContext& c) {
 }
 
 void Hud::weapons(const HudContext& c) {
+    // compact status block, bottom right: hull, cannon, missiles, flares
     const Jet& p = *c.player;
-    float s = c.h / 720.0f;
-    float w = 230 * s, h = 138 * s;
+    float s = c.h / 720.0f, k = panelK(c), ps = s * k;
+    float f = pfont(13, s, k), fs = pfont(11, s, k);
+    float row = std::max(20 * ps, f + 4 * s);
+    float w = std::max(230 * ps, 128 * s), h = 10 * ps + row * 5 + 6 * s;
     Rectangle r = {c.w - w - 18 * s, c.h - h - 18 * s, w, h};
     ui::panel(r, kPanel, kPanelBorder);
-    float x = r.x + 12 * s, y = r.y + 10 * s;
-    ui::text(p.fm->profile().name, x, y, 15 * s, WHITE);
-    y += 22 * s;
+    float x = r.x + 8 * s, y = r.y + 5 * s;
+    float labelW = ui::measure("HULL", fs) + 6 * s;
     // hull
     float hp = static_cast<float>(p.health / 100.0);
-    ui::text("HULL", x, y, 13 * s, Color{200, 210, 210, 230});
-    Rectangle bar = {x + 50 * s, y + 3 * s, w - 74 * s, 9 * s};
-    DrawRectangleRec(bar, Color{255, 255, 255, 30});
     Color hc = hp > 0.6f ? Color{120, 240, 160, 230} : hp > 0.3f ? kWarn : kEnemy;
+    ui::text("HULL", x, y + 1 * s, fs, Color{200, 210, 210, 230});
+    Rectangle bar = {x + labelW, y + row * 0.25f, w - labelW - 40 * s, std::max(5 * s, row * 0.35f)};
+    DrawRectangleRec(bar, Color{255, 255, 255, 30});
     DrawRectangleRec({bar.x, bar.y, bar.width * hp, bar.height}, hc);
-    ui::text(fmti("%d", static_cast<int>(p.health)), bar.x + bar.width + 4 * s, y - 1 * s, 13 * s, hc);
-    y += 20 * s;
-    // cannon
-    ui::text("CANNON", x, y, 13 * s, Color{200, 210, 210, 230});
-    ui::text(fmti("%d", p.rounds), x + w - 24 * s, y, 15 * s, p.gunFiring ? kWarn : WHITE, Align::Right);
-    y += 20 * s;
-    // missiles pips
+    ui::text(fmti("%d", static_cast<int>(p.health)), r.x + w - 8 * s, y, f, hc, Align::Right);
+    y += row;
+    ui::text("GUN", x, y + 1 * s, fs, Color{200, 210, 210, 230});
+    ui::text(fmti("%d", p.rounds), r.x + w - 8 * s, y, f, p.gunFiring ? kWarn : WHITE, Align::Right);
+    y += row;
     auto missileRow = [&](const char* name, int have, int max, bool selected) {
-        if (selected) DrawRectangle(static_cast<int>(x - 6 * s), static_cast<int>(y - 2 * s), static_cast<int>(w - 12 * s), static_cast<int>(18 * s), Color{150, 255, 205, 40});
-        ui::text(name, x, y, 13 * s, selected ? Color{150, 255, 205, 255} : Color{200, 210, 210, 200});
+        if (selected) DrawRectangle(static_cast<int>(r.x + 2 * s), static_cast<int>(y - 1 * s), static_cast<int>(w - 4 * s), static_cast<int>(row - 1 * s), Color{150, 255, 205, 40});
+        ui::text(name, x, y + 1 * s, fs, selected ? Color{150, 255, 205, 255} : Color{200, 210, 210, 200});
+        float pw = std::max(6 * s, 12 * ps), gap = std::max(2 * s, 5 * ps);
         for (int i = 0; i < max; ++i) {
-            Rectangle pip = {x + 66 * s + i * 17 * s, y + 2 * s, 12 * s, 10 * s};
+            Rectangle pip = {x + labelW + i * (pw + gap), y + row * 0.22f, pw, std::max(5 * s, row * 0.42f)};
             if (i < have) DrawRectangleRec(pip, selected ? WHITE : Color{255, 255, 255, 150});
             else DrawRectangleLinesEx(pip, 1, Color{255, 255, 255, 90});
         }
-        y += 20 * s;
+        y += row;
     };
-    missileRow("ATA MSL", p.missiles, p.fm->profile().missiles, !p.weaponAG);
-    missileRow("ATS MSL", p.agms, 4, p.weaponAG);
-    ui::text("FLARES", x, y, 13 * s, Color{200, 210, 210, 230});
+    missileRow("ATA", p.missiles, p.fm->profile().missiles, !p.weaponAG);
+    missileRow("ATS", p.agms, 4, p.weaponAG);
+    ui::text("FLR", x, y + 1 * s, fs, Color{200, 210, 210, 230});
+    float fw = std::max(12 * s, 24 * ps), fg = std::max(3 * s, 6 * ps);
     for (int i = 0; i < 3; ++i) {
-        Rectangle pip = {x + 66 * s + i * 30 * s, y + 2 * s, 24 * s, 10 * s};
+        Rectangle pip = {x + labelW + i * (fw + fg), y + row * 0.22f, fw, std::max(5 * s, row * 0.42f)};
         if (i < p.flareCharges) DrawRectangleRec(pip, Color{255, 200, 90, 240});
         else {
             DrawRectangleLinesEx(pip, 1, Color{255, 200, 90, 90});
@@ -543,7 +554,7 @@ void Hud::weapons(const HudContext& c) {
             }
         }
     }
-    ui::text("[X]", x + w - 24 * s, y, 12 * s, Color{255, 255, 255, 120}, Align::Right);
+    lastWeaponsRect_ = r;
 }
 
 void Hud::minimap(const HudContext& c) {
@@ -644,16 +655,19 @@ void Hud::minimalSymbology(const HudContext& c) {
         Color white = {255, 255, 255, 225};
         Color bg = {0, 0, 0, 110};
         float cx = c.w * 0.5f, cy = c.h * 0.5f;
-        float off = 230.0f * s, bw = 78.0f * s, bh = 30.0f * s;
+        const float kd = std::max(panelK(c), 0.62f);   // compact readouts (panelK)
+        const float fz = std::max(20 * s * kd, 12.0f * s);
+        float off = 230.0f * s, bw = std::max(78.0f * s * kd, ui::measure("0000", fz) + 16 * s), bh = std::max(30.0f * s * kd, fz + 6 * s);
         double kmh = st.airspeed * 3.6;
         Rectangle sb = {cx - off - bw, cy - bh * 0.5f, bw, bh};
         Rectangle ab = {cx + off, cy - bh * 0.5f, bw + 8 * s, bh};
-        drawTape(sb.x + bw + 6 * s, cy, 95 * s, kmh, 20.0, 5, false, s, white);
-        drawTape(ab.x - 6 * s, cy, 95 * s, st.pos.y, 50.0, 4, true, s, white);
-        drawRoller(sb, kmh, 4, 1, 20 * s, white, bg);
-        drawRoller(ab, st.pos.y, 5, 10, 20 * s, white, bg);
-        ui::textShadow("KM/H", sb.x, sb.y - 16 * s, 11 * s, ui::withAlpha(white, 0.8f));
-        ui::textShadow("ALT M", ab.x, ab.y - 16 * s, 11 * s, ui::withAlpha(white, 0.8f));
+        drawTape(sb.x + bw + 6 * s, cy, 95 * s * kd, kmh, 20.0, 5, false, s * kd, white);
+        drawTape(ab.x - 6 * s, cy, 95 * s * kd, st.pos.y, 50.0, 4, true, s * kd, white);
+        // the speed drum steps in tens above 1000 km/h so it stays readable while accelerating
+        drawRoller(sb, kmh, 4, kmh >= 1000.0 ? 10 : 1, fz, white, bg);
+        drawRoller(ab, st.pos.y, 5, 10, fz, white, bg);
+        ui::textShadow("KM/H", sb.x, sb.y - 14 * s, 10.5f * s, ui::withAlpha(white, 0.8f));
+        ui::textShadow("ALT M", ab.x, ab.y - 14 * s, 10.5f * s, ui::withAlpha(white, 0.8f));
         // vertical speed arrow next to the altimeter
         double vs = st.vel.y;
         float vlen = static_cast<float>(std::clamp(vs / 120.0, -1.0, 1.0)) * 40 * s;
@@ -662,8 +676,8 @@ void Hud::minimalSymbology(const HudContext& c) {
             ui::line({vx, cy}, {vx, cy - vlen}, 2.0f * s, white);
             ui::textShadow(fmt("%+.0f", vs), vx + 5 * s, cy - vlen - 6 * s, 11 * s, white);
         }
-        ui::textShadow(fmt("G %.1f", st.gLoad), sb.x, sb.y + bh + 6 * s, 12 * s, st.gLoad > 8.0 ? kWarn : white);
-        if (st.agl < 600 && !st.onGround) ui::textShadow(fmt("R %.0f", st.agl), ab.x, ab.y + bh + 6 * s, 12 * s, st.agl < 150 ? kWarn : white);
+        ui::textShadow(fmt("G %.1f", st.gLoad), sb.x, sb.y + bh + 4 * s, 10.5f * s, st.gLoad > 8.0 ? kWarn : white);
+        if (st.agl < 600 && !st.onGround) ui::textShadow(fmt("R %.0f", st.agl), ab.x, ab.y + bh + 4 * s, 10.5f * s, st.agl < 150 ? kWarn : white);
     }
     if (st.airspeed > 20) {
         Vector2 fpm = project(c, toRl(st.pos + normalize(st.vel) * 1000.0), &f2);
@@ -682,7 +696,7 @@ void Hud::minimalSymbology(const HudContext& c) {
 }
 
 void Hud::hintsBar(const HudContext& c) {
-    float s = c.h / 720.0f;
+    float s = c.h / 720.0f * std::max(panelK(c), 0.75f);   // compact panel (see panelK)
     const char* items[][2] = {{"W", "AFTERBURNER"}, {"F", c.player->weaponAG ? "ATS MISSILE" : "ATA MISSILE"}, {"Q", "SWAP MSL"},
                               {"X", "FLARES"}, {"<<", "ROLL"}, {"C", "CAMERA"}, {"ESC", "MENU"}};
     float x = c.w * 0.5f - 300 * s, y = c.h - 30 * s;
@@ -700,7 +714,9 @@ void Hud::pipPanel(const HudContext& c) {
     const PipState& p = *c.pip;
     float s = c.h / 720.0f;
     float w = 300 * s, h = w * c.pipH / c.pipW;
-    Rectangle r = {c.w - w - 18 * s, c.h - 18 * s - 138 * s - 14 * s - h, w, h};
+    // above the (compact) status block
+    float statusTop = lastWeaponsRect_.height > 0 ? lastWeaponsRect_.y : c.h - 18 * s - 138 * s;
+    Rectangle r = {c.w - w - 18 * s, statusTop - 14 * s - h, w, h};
     bool hitCam = p.mode == PipMode::Hit;
     Color frame = hitCam ? (p.result > 0 ? Color{255, 90, 70, 255} : Color{255, 200, 90, 255}) : kHud;
     // video feed (render textures are stored bottom-up)
@@ -769,6 +785,46 @@ void Hud::pipPanel(const HudContext& c) {
     }
 }
 
+void Hud::killPanel(const HudContext& c) {
+    // same size as the missile camera window; stacked above it when both are open
+    float s = c.h / 720.0f;
+    float w = 300 * s, h = w * c.pipH / c.pipW;
+    float statusTop = lastWeaponsRect_.height > 0 ? lastWeaponsRect_.y : c.h - 18 * s - 138 * s;
+    float y = statusTop - 14 * s - h;
+    if (c.pipActive) y -= h + 12 * s;
+    Rectangle r = {c.w - w - 18 * s, y, w, h};
+    Color frame = c.killAfter ? Color{255, 90, 70, 255} : Color{255, 200, 90, 255};
+    DrawTexturePro(c.killTex, {0, 0, static_cast<float>(c.pipW), static_cast<float>(-c.pipH)}, r, {0, 0}, 0, WHITE);
+    for (float yy = r.y; yy < r.y + r.height; yy += 3 * s) DrawLineEx({r.x, yy}, {r.x + r.width, yy}, 1, Color{0, 0, 0, 22});
+    // the hit: white flash, then a red tint while the wreck burns
+    if (c.killImpact > 0.02) DrawRectangleRec(r, Color{255, 230, 200, static_cast<unsigned char>(std::min(1.0, c.killImpact) * 210)});
+    if (c.killAfter) DrawRectangleRec(r, Color{140, 20, 10, 60});
+    DrawRectangleLinesEx(r, 2.0f * s, frame);
+    float k = 14 * s;
+    for (int i = 0; i < 4; ++i) {
+        float x = (i & 1) ? r.x + r.width - 4 * s : r.x + 4 * s, yy = (i & 2) ? r.y + r.height - 4 * s : r.y + 4 * s;
+        float dx = (i & 1) ? -k : k, dy = (i & 2) ? -k : k;
+        DrawLineEx({x, yy}, {x + dx, yy}, 2 * s, frame);
+        DrawLineEx({x, yy}, {x, yy + dy}, 2 * s, frame);
+    }
+    std::string title = "KILL REPLAY  -  " + (c.killName.empty() ? std::string("BANDIT") : c.killName) + " VIEW";
+    ui::textShadow(title, r.x + 10 * s, r.y + 8 * s, 13 * s, frame);
+    if (std::fmod(time_, 1.0) < 0.6) {
+        DrawCircleV({r.x + r.width - 54 * s, r.y + 15 * s}, 4 * s, Color{255, 50, 40, 255});
+        ui::textShadow("REPLAY", r.x + r.width - 46 * s, r.y + 8 * s, 11 * s, Color{255, 255, 255, 230});
+    }
+    // progress and the skip key
+    DrawRectangle(static_cast<int>(r.x + 2 * s), static_cast<int>(r.y + r.height - 24 * s), static_cast<int>(r.width - 4 * s), static_cast<int>(22 * s), Color{0, 0, 0, 120});
+    DrawRectangle(static_cast<int>(r.x + 2 * s), static_cast<int>(r.y + r.height - 4 * s), static_cast<int>((r.width - 4 * s) * c.killProgress), static_cast<int>(2 * s), frame);
+    std::string info = c.killAfter ? "DESTROYED" : (c.killWeapon.empty() ? std::string("INCOMING") : "INCOMING  " + c.killWeapon);
+    ui::text(info, r.x + 10 * s, r.y + r.height - 20 * s, 13 * s, frame);
+    ui::text("N  SKIP", r.x + r.width - 10 * s, r.y + r.height - 20 * s, 11 * s, Color{255, 255, 255, 170}, Align::Right);
+    if (c.killAfter) {
+        float a = static_cast<float>(std::clamp(1.0 - c.killImpact * 0.5, 0.0, 1.0));
+        ui::textShadow("SPLASH", r.x + r.width * 0.5f, r.y + r.height * 0.38f, 26 * s, ui::withAlpha(Color{255, 80, 60, 255}, a), Align::Center);
+    }
+}
+
 void Hud::replayOverlay(const HudContext& c) {
     float s = c.h / 720.0f;
     float bar = c.h * 0.085f;
@@ -823,7 +879,7 @@ void Hud::replayOverlay(const HudContext& c) {
 
 void Hud::killFeed(const HudContext& c) {
     if (!c.battle) return;
-    float s = c.h / 720.0f;
+    float s = c.h / 720.0f * std::max(panelK(c), 0.75f);   // compact panel (see panelK)
     float y = 18 * s;
     for (const KillFeedEntry& k : c.battle->killFeed()) {
         float a = static_cast<float>(std::clamp(9.0 - k.age, 0.0, 1.0));
@@ -896,7 +952,7 @@ void Hud::warnings(const HudContext& c) {
 }
 
 void Hud::missionPanel(const HudContext& c) {
-    float s = c.h / 720.0f;
+    float s = c.h / 720.0f * std::max(panelK(c), 0.75f);   // compact panel (see panelK)
     if (c.mission) {
         const Mission& m = *c.mission;
         float w = 330 * s;
@@ -1077,7 +1133,7 @@ void Hud::trainingPanel(const HudContext& c) {
     const Mission& m = *c.mission;
     const TrainingSession& t = *c.training;
     const Course& course = t.course();
-    float s = c.h / 720.0f;
+    float s = c.h / 720.0f * std::max(panelK(c), 0.75f);   // compact panel (see panelK)
     float w = 340 * s;
     const MissionStep* cur = m.current();
     std::vector<std::string> instr;
@@ -1387,7 +1443,7 @@ void Hud::popups(const HudContext& c) {
 }
 
 void Hud::debug(const HudContext& c) {
-    float s = c.h / 720.0f;
+    float s = c.h / 720.0f * std::max(panelK(c), 0.75f);   // compact panel (see panelK)
     const FlightState& st = c.player->fm->state();
     Rectangle r = {c.w - 300 * s, 200 * s, 282 * s, 340 * s};
     ui::panel(r, Color{0, 0, 0, 170}, kPanelBorder);

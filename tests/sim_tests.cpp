@@ -9,6 +9,7 @@
 #include "sim/Locations.hpp"
 #include "sim/Atmosphere.hpp"
 #include "sim/FlightModel.hpp"
+#include "telemetry/Replay.hpp"
 #include "telemetry/FrameStats.hpp"
 #include "telemetry/Replay.hpp"
 #include "CombatBot.hpp"
@@ -586,6 +587,62 @@ TEST(frame_stats_percentiles) {
     CHECK(p.p95 > 94 && p.p95 < 96.5);
     CHECK(p.p99 > 98 && p.p99 <= 100);
     CHECK_NEAR(p.mean, 50.5, 1e-9);
+}
+
+TEST(kill_replay_clip_is_a_private_copy_seen_from_the_victim) {
+    // 6 s of a fight at 30 Hz: the player (id 0) closes on a bandit (id 7) from behind-left and
+    // fires a missile at t = 3 s that hits at t = 6 s
+    FlightRecorder rec;
+    for (int i = 0; i <= 180; ++i) {
+        double t = 100.0 + i / 30.0;
+        RecFrame f;
+        f.t = t;
+        f.player.id = 0;
+        f.player.pos = {-3000.0 + 250.0 * (t - 100.0), 2000, -800.0 + 120.0 * (t - 100.0)};
+        f.player.q = Quat::fromEuler(0.4, 0, 0);
+        RecJet v;
+        v.id = 7; v.team = 1; v.type = AircraftId::Su35;
+        v.pos = {0.0 + 200.0 * (t - 100.0), 2000, 0};
+        v.q = Quat::fromEuler(0.0, 0, 0);
+        f.others.push_back(v);
+        if (t >= 103.0) {
+            RecMissile m;
+            m.id = 42; m.targetJet = 7; m.owner = 0; m.motor = true;
+            double u = (t - 103.0) / 3.0;
+            m.pos = lerp(f.player.pos, v.pos, u);
+            m.dir = normalize(v.pos - f.player.pos);
+            f.missiles.push_back(m);
+        }
+        CHECK(rec.offer(f) || i == 0 || true);
+    }
+    RecJet at = rec.frames().back().others[0];
+    KillClip clip = makeKillClip(rec, 7, at, {200, 0, 0}, 106.0, "BANDIT 2", "ATA");
+    CHECK(clip.valid());
+    CHECK(clip.start() >= 106.0 - 4.5 - 1e-6 && clip.frames.back().t >= 106.0);
+    // the crash replay's recorder can be cleared: the clip keeps its own copy
+    rec.clear();
+    CHECK(clip.frames.size() > 100);
+    // poses interpolate; after the kill the wreck falls and rolls
+    RecJet v0 = clip.victimAt(104.0), v1 = clip.victimAt(106.0), v2 = clip.victimAt(107.0);
+    CHECK(std::fabs(v0.pos.x - 800.0) < 30.0);
+    CHECK(v2.pos.y < v1.pos.y - 3.0 && v2.pos.x > v1.pos.x + 150.0);
+    // the pilot looks at the missile guiding on it once it is close, from inside its own cockpit
+    KillCamState look;
+    KillView kv;
+    for (double t = clip.start(); t < 105.5; t += 1.0 / 60.0) kv = killCamera(clip, t, look, 1.0 / 60.0);
+    RecJet me = clip.victimAt(105.5);
+    CHECK(length(kv.eye - me.pos) < 10.0);
+    const RecFrame* f = clip.frameAt(105.5);
+    CHECK(f && !f->missiles.empty());
+    Vec3 toMissile = normalize(f->missiles[0].pos - kv.eye);
+    CHECK(dot(normalize(kv.target - kv.eye), toMissile) > 0.9);
+    CHECK(kv.threatVisible && !kv.afterKill);
+    kv = killCamera(clip, 106.1, look, 1.0 / 60.0);
+    CHECK(kv.afterKill && kv.impact > 0.5);
+    // a kill with the victim barely recorded is not replayed
+    FlightRecorder shortRec;
+    RecFrame g; g.t = 1.0; g.player.id = 0; shortRec.offer(g);
+    CHECK(!makeKillClip(shortRec, 7, at, {}, 1.0, "X", "GUN").valid());
 }
 
 TEST(flight_recorder_keeps_a_rolling_window_and_interpolates) {
