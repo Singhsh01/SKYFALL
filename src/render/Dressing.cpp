@@ -1,6 +1,7 @@
 #include "Dressing.hpp"
 
 #include "MeshBuilder.hpp"
+#include "Props.hpp"
 #include "raymath.h"
 
 #include <algorithm>
@@ -139,6 +140,45 @@ unsigned hash2(int a, int b) {
     return h;
 }
 
+/// Window panes on the four faces of a box building (local frame xf, footprint w x d). Vertex
+/// alpha flags them for the lit shader: 253 = lit at night (warm), 251 = dark. Towers get a
+/// continuous glazing band per floor; houses and shops get separate windows.
+void windows(MeshBuilder& m, Matrix xf, float w, float d, float y0, float y1, bool tower, bool industrial, unsigned seed) {
+    const float floorH = 3.2f;
+    int floor = 0;
+    for (float y = y0 + 1.3f; y + 1.1f < y1 - 0.6f; y += floorH, ++floor) {
+        for (int face = 0; face < 4; ++face) {
+            bool alongX = face < 2;
+            float len = alongX ? w : d;
+            float off = (alongX ? d : w) * 0.5f + 0.06f;
+            float sgn = (face & 1) ? 1.0f : -1.0f;
+            auto P = [&](float u, float v) {
+                Vector3 l = alongX ? Vector3{u, v, sgn * off} : Vector3{sgn * off, v, u};
+                return Vector3Transform(l, xf);
+            };
+            Vector3 out = Vector3Subtract(Vector3Transform(alongX ? Vector3{0, 0, sgn} : Vector3{sgn, 0, 0}, xf), Vector3Transform({0, 0, 0}, xf));
+            unsigned h = seed * 2654435761u ^ static_cast<unsigned>(floor * 97 + face * 13);
+            h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+            if (tower || industrial) {
+                bool lit = (h & 255) < (industrial ? 50u : 150u);
+                Color c = lit ? ((h >> 8) & 1 ? Color{210, 226, 255, 253} : Color{255, 214, 150, 253}) : Color{18, 22, 28, 251};
+                float hh = industrial ? 0.8f : 1.5f;
+                quadFacing(m, P(-len * 0.45f, y), P(len * 0.45f, y), P(len * 0.45f, y + hh), P(-len * 0.45f, y + hh), c, out);
+            } else {
+                int n = std::max(1, static_cast<int>(len / 3.6f));
+                for (int k = 0; k < n; ++k) {
+                    unsigned hk = h ^ static_cast<unsigned>(k * 0x9E3779B9u);
+                    hk ^= hk >> 11; hk *= 0x2C1B3C6Du; hk ^= hk >> 15;
+                    bool lit = (hk & 255) < 105u;
+                    Color c = lit ? ((hk >> 9) % 3 == 0 ? Color{255, 230, 180, 253} : Color{255, 190, 110, 253}) : Color{20, 24, 30, 251};
+                    float u = -len * 0.5f + (k + 0.5f) * len / n;
+                    quadFacing(m, P(u - 0.65f, y), P(u + 0.65f, y), P(u + 0.65f, y + 1.2f), P(u - 0.65f, y + 1.2f), c, out);
+                }
+            }
+        }
+    }
+}
+
 void town(const Terrain& t, const WorldLayout& L, const Town& tw, BuildingStyle style, std::vector<Dressing::Piece>& out) {
     Palette pal = paletteFor(style);
     Piecer pc{&out};
@@ -182,6 +222,8 @@ void town(const Terrain& t, const WorldLayout& L, const Town& tw, BuildingStyle 
             pc.mb.box({0, base + H * 0.5f, 0}, {static_cast<float>(w), H, static_cast<float>(d)}, wall, xf);
             pc.grow(Vector3{static_cast<float>(x), base + H, static_cast<float>(z)});
             pc.grow(Vector3{static_cast<float>(x), base, static_cast<float>(z)});
+            windows(pc.mb, xf, static_cast<float>(w), static_cast<float>(d), static_cast<float>(hiH), base + H,
+                    hgt > 25.0, tw.kind == TownKind::Industrial, h);
             Color roof = pal.roof[(h >> 3) % 3];
             float top = base + H;
             if (pal.pitched && hgt < 16.0 && tw.kind != TownKind::Industrial) {
@@ -197,10 +239,6 @@ void town(const Terrain& t, const WorldLayout& L, const Town& tw, BuildingStyle 
             } else {
                 pc.mb.box({0, top + 0.5f, 0}, {static_cast<float>(w) * 0.98f, 1.0f, static_cast<float>(d) * 0.98f}, roof, xf);
                 if (((h >> 12) & 7) == 0) pc.mb.cylinder({static_cast<float>(w * 0.2), top + 1.0f, 0}, 1.1f, 2.0f, 8, Color{190, 190, 186, 255}, xf);   // rooftop tank
-                if (hgt > 25.0) {   // window bands on towers
-                    for (float yy = base + 4.0f; yy < top - 2.0f; yy += 3.4f)
-                        pc.mb.box({0, yy, 0}, {static_cast<float>(w) + 0.15f, 1.1f, static_cast<float>(d) + 0.15f}, Color{70, 84, 96, 255}, xf);
-                }
             }
             // gardens: a tree beside some houses
             if (((h >> 15) & 3) == 0 && tw.kind != TownKind::Industrial) {
@@ -248,6 +286,10 @@ void Dressing::build(const Terrain& t, const WorldLayout& L, BuildingStyle style
         }
         pc.flush();
     }
+    // army compound, forward bases, street furniture, yards and ports
+    buildSceneProps(t, L, style == BuildingStyle::Desert, statics, beacons);
+    for (const LightPoint& lp : L.lights)
+        if (lp.kind == LightKind::Beacon) beacons.push_back(V(lp.pos));
     // wind turbines: merged towers + nacelles; rotors drawn separately so they can spin
     if (!L.turbines.empty()) {
         Piecer pc{&statics};
@@ -285,6 +327,7 @@ void Dressing::unload() {
     rotorHubs.clear();
     rotorYaw.clear();
     chimneyTops.clear();
+    beacons.clear();
 }
 
 }  // namespace sky

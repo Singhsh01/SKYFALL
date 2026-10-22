@@ -9,7 +9,18 @@
 
 namespace sky {
 
-enum class TimeOfDay { Morning = 0, GoldenHour = 1, Noon = 2, Count = 3, Storm = 4 };   // Storm: missions only
+enum class TimeOfDay { Morning = 0, GoldenHour = 1, Noon = 2, Count = 3, Storm = 4, Dusk = 5, Night = 6 };   // Storm: missions only
+
+/// Cycle order of the time-of-day key (T): day, evening and night.
+inline TimeOfDay nextTimeOfDay(TimeOfDay t) {
+    switch (t) {
+        case TimeOfDay::Morning: return TimeOfDay::GoldenHour;
+        case TimeOfDay::GoldenHour: return TimeOfDay::Noon;
+        case TimeOfDay::Noon: return TimeOfDay::Dusk;
+        case TimeOfDay::Dusk: return TimeOfDay::Night;
+        default: return TimeOfDay::Morning;
+    }
+}
 
 struct Lighting {
     Vector3 sunDir{0.5f, 0.5f, 0.5f};
@@ -22,6 +33,7 @@ struct Lighting {
     float cloudCover = 0.42f;
     float cirrus = 0.8f;
     float exposure = 1.0f;
+    float night = 0.0f;   // 0 day .. 1 full night: city lights, windows, stars, vehicle lights
     const char* name = "MORNING";
 
     static Lighting preset(TimeOfDay t) {
@@ -74,6 +86,35 @@ struct Lighting {
                 l.cirrus = 0.0f;
                 l.exposure = 1.25f;
                 l.name = "STORM";
+                l.night = 0.25f;   // dark enough for street and window lights
+                break;
+            case TimeOfDay::Dusk:
+                // sun just below the horizon: red afterglow in the west, lights coming on
+                l.sunDir = Vector3Normalize({0.95f, 0.035f, 0.30f});
+                l.sunColor = {1.9f, 0.82f, 0.42f};
+                l.zenith = {0.045f, 0.065f, 0.15f};
+                l.horizon = {0.78f, 0.40f, 0.26f};
+                l.groundHaze = {0.26f, 0.20f, 0.19f};
+                l.fogDensity = 9.0e-5f;
+                l.cloudCover = 0.44f;
+                l.cirrus = 0.6f;
+                l.exposure = 1.35f;
+                l.night = 0.6f;
+                l.name = "DUSK";
+                break;
+            case TimeOfDay::Night:
+                // clear night under a bright moon: blue moonlight, city lights, stars
+                l.sunDir = Vector3Normalize({-0.42f, 0.58f, -0.30f});
+                l.sunColor = {0.11f, 0.14f, 0.22f};
+                l.zenith = {0.004f, 0.007f, 0.02f};
+                l.horizon = {0.022f, 0.03f, 0.052f};
+                l.groundHaze = {0.012f, 0.015f, 0.022f};
+                l.fogDensity = 6.5e-5f;
+                l.cloudCover = 0.28f;
+                l.cirrus = 0.25f;
+                l.exposure = 2.0f;
+                l.night = 1.0f;
+                l.name = "NIGHT";
                 break;
         }
         return l;

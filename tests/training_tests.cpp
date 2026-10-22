@@ -1152,6 +1152,69 @@ TEST(campaign_is_winnable_over_other_locations) {
     std::printf("    %d/%d missions won\n", won, flown);
 }
 
+TEST(world_detail_is_populated_on_every_location) {
+    // Every map gets the army compound, forward bases, street lights, traffic and night lights;
+    // nothing stands on water, the runway or in front of an Academy gate.
+    auto tall = [](PropKind k) {
+        return k == PropKind::Crane || k == PropKind::RadarMast || k == PropKind::Antenna || k == PropKind::FloodMast ||
+               k == PropKind::WaterTower || k == PropKind::Watchtower || k == PropKind::Billboard;
+    };
+    for (const std::string& id : allLocationIds()) {
+        World& w = world(id);
+        const Terrain& t = *w.terrain;
+        const WorldLayout& L = *w.layout;
+        const RunwayInfo& rw = t.runway();
+        int fobs = 0, helis = 0, lamps = 0, armour = 0;
+        for (const MilitarySite& m : L.sites) if (!m.airbase) ++fobs;
+        for (const SceneProp& p : L.props) {
+            if (p.kind == PropKind::Helicopter || p.kind == PropKind::AttackHelicopter) ++helis;
+            if (p.kind == PropKind::Streetlamp) ++lamps;
+            if (p.kind == PropKind::Tank || p.kind == PropKind::Apc) ++armour;
+            bool onRunway = std::fabs(p.pos.x - rw.center.x) < rw.length * 0.5 + 60 && std::fabs(p.pos.z - rw.center.z) < rw.width * 0.5 + 60;
+            CHECK_MSG(!onRunway, "%s prop %d on the runway at (%.0f %.0f)", id.c_str(), (int)p.kind, p.pos.x, p.pos.z);
+            if (p.kind != PropKind::Fence && p.kind != PropKind::Hesco)
+                CHECK_MSG(t.height(p.pos.x, p.pos.z) > -0.5, "%s prop %d in the sea at (%.0f %.0f)", id.c_str(), (int)p.kind, p.pos.x, p.pos.z);
+        }
+        std::printf("    %-13s props %5zu lights %5zu cars %3zu lanes %2zu sites %zu (FOB %d) helis %d armour %d lamps %d\n", id.c_str(),
+                    L.props.size(), L.lights.size(), L.cars.size(), L.lanes.size(), L.sites.size(), fobs, helis, armour, lamps);
+        CHECK_MSG(L.sites.size() >= 1 && L.sites[0].airbase, "%s has no army compound", id.c_str());
+        CHECK_MSG(helis >= 3 && armour >= 6, "%s compound is empty", id.c_str());
+        CHECK_MSG(fobs >= 1, "%s has no forward base", id.c_str());
+        CHECK_MSG(!L.cars.empty() && L.lights.size() > 40, "%s has no traffic or lights", id.c_str());
+        for (const Car& c : L.cars) {
+            Vec3 f;
+            Vec3 p = L.carAt(c, 123.4, &f);
+            CHECK(std::fabs(length(f) - 1.0) < 1e-6);
+            CHECK(std::fabs(p.x) < Terrain::kHalfSize && std::fabs(p.z) < Terrain::kHalfSize);
+        }
+        // tall props never stand in the flight path between consecutive Academy gates
+        auto topOf = [](PropKind k) {
+            switch (k) {
+                case PropKind::Crane: return 44.0; case PropKind::Antenna: return 31.0; case PropKind::RadarMast: return 26.0;
+                case PropKind::WaterTower: return 21.0; case PropKind::FloodMast: return 18.0; default: return 11.0;
+            }
+        };
+        for (int lv = 1; lv <= kTrainingLevels; ++lv) {
+            Course c = buildCourse(lv, t, L);
+            for (size_t gi = 0; gi + 1 < c.gates.size(); ++gi) {
+                Vec3 a = c.gates[gi].pos, b = c.gates[gi + 1].pos;
+                double len = std::hypot(b.x - a.x, b.z - a.z);
+                for (const SceneProp& p : L.props) {
+                    if (!tall(p.kind)) continue;
+                    for (double u = 0; u <= len; u += 20) {
+                        Vec3 q = a + (b - a) * (len > 0 ? u / len : 0.0);
+                        double d = std::hypot(q.x - p.pos.x, q.z - p.pos.z);
+                        if (d < 45.0 && q.y < p.pos.y + topOf(p.kind) + 30.0) {
+                            CHECK_MSG(false, "%s level %d: prop %d in the path of gate %zu (%.0f m, %.0f m above)", id.c_str(), lv, (int)p.kind, gi, d, q.y - p.pos.y);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 TEST(map_store_installs_verifies_and_repairs) {
     // SHA-256 against the FIPS test vectors
     const std::string abc = "abc";

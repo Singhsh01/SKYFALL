@@ -23,6 +23,7 @@ public:
     std::vector<Vector3> rotorHubs;          // world position of each turbine hub
     std::vector<float> rotorYaw;
     std::vector<Vector3> chimneyTops;        // smoke sources
+    std::vector<Vector3> beacons;            // red obstruction lights (masts, cranes, towers)
     const WorldLayout* layout = nullptr;
 };
 

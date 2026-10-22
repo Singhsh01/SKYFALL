@@ -1022,7 +1022,7 @@ void Game::handleGlobalKeys() {
     if (in.hudToggle) settings_.hudStyle = 1 - settings_.hudStyle;
     if (in.debug) showDebug_ = !showDebug_;
     if (in.timeOfDay) {
-        tod_ = static_cast<TimeOfDay>((static_cast<int>(tod_) + 1) % static_cast<int>(TimeOfDay::Count));
+        tod_ = nextTimeOfDay(tod_);
         lighting_ = Lighting::preset(tod_);
     }
     if (in.screenshot) {
@@ -2713,6 +2713,59 @@ int Game::runCapture() {
             look(L.railway.at(lead), 300, 70, 2.2, "w_train");
         }
         look(Vec3{-6000, 0, 3600}, 2500, 500, 0.2, "w_overview");
+        hideHud_ = false;
+        return 0;
+    }
+    if (set == "populated") {
+        // populated world: army compound, forward base, streets, traffic, by day, dusk and night
+        hideHud_ = true;
+        const char* locEnv = std::getenv("SKYFALL_LOC");
+        if (locEnv) loadLocation(locEnv, false);
+        std::string tag = locEnv ? locEnv : "desert";
+        auto look = [&](Vec3 target, double dist, double agl, double ang, TimeOfDay tod, const std::string& name) {
+            startArena(false);
+            battle_.clearCombatants();
+            battle_.setAiEnabled(false);
+            tod_ = tod; lighting_ = Lighting::preset(tod_);
+            Vec3 from{target.x - std::cos(ang) * dist, 0, target.z - std::sin(ang) * dist};
+            from.y = std::max(terrain_.surfaceHeight(from.x, from.z), terrain_.surfaceHeight(target.x, target.z)) + agl;
+            double pitch = -std::atan2(from.y - terrain_.surfaceHeight(target.x, target.z), dist) * 0.85;
+            double hdg = ang + 0.32;
+            battle_.player().fm->resetAirborne(from, hdg, 200, 0.6);
+            battle_.player().fm->mutableState().q = Quat::fromEuler(hdg, pitch, 0.0);
+            battle_.player().fm->mutableState().vel = Quat::fromEuler(hdg, pitch, 0.0).forward() * 200.0;
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            scriptedStep(0.2, [&](double) { setInput(0, 0, 0, 0); });
+            snap("d_" + tag + "_" + name, 4);
+        };
+        const WorldLayout& L = layout_;
+        for (TimeOfDay tod : {TimeOfDay::Morning, TimeOfDay::Dusk, TimeOfDay::Night}) {
+            std::string sfx = tod == TimeOfDay::Morning ? "day" : (tod == TimeOfDay::Dusk ? "dusk" : "night");
+            if (!L.sites.empty()) look(L.sites[0].center + Vec3{-500, 0, 0}, 420, 75, -0.9, tod, "compound_" + sfx);
+            if (L.sites.size() > 1) look(L.sites[1].center, 280, 60, 0.7, tod, "fob_" + sfx);
+            if (!L.towns.empty()) look(L.towns[0].center, 1400, 300, 0.4, tod, "city_" + sfx);
+        }
+        if (!L.sites.empty()) {
+            look(L.sites[0].center + Vec3{-40, 0, 30}, 240, 45, -kPi / 2 + 0.25, TimeOfDay::Morning, "compound_helis");
+            look(L.sites[0].center + Vec3{-830, 0, 20}, 230, 45, -kPi / 2 + 0.25, TimeOfDay::Morning, "compound_armour");
+            look(L.sites[0].center + Vec3{-40, 0, 30}, 240, 45, -kPi / 2 + 0.25, TimeOfDay::Night, "compound_helis_night");
+        }
+        if (L.sites.size() > 1) look(L.sites[1].center, 170, 40, 2.2, TimeOfDay::Noon, "fob_close");
+        if (!L.cars.empty()) {
+            // a stretch of road with traffic near the first town
+            Vec3 best = L.towns.empty() ? Vec3{} : L.towns[0].center;
+            double bd = 1e18;
+            for (const Car& c : L.cars) {
+                Vec3 p = L.carAt(c, time_ + 1.0);
+                double d = L.towns.empty() ? 0 : std::fabs(std::hypot(p.x - L.towns[0].center.x, p.z - L.towns[0].center.z) - L.towns[0].radius - 300);
+                if (d < bd) { bd = d; best = p; }
+            }
+            look(best, 160, 35, 0.9, TimeOfDay::Morning, "traffic_day");
+            look(best, 160, 35, 0.9, TimeOfDay::Night, "traffic_night");
+        }
+        if (L.towns.size() > 1) look(L.towns[1].center, 500, 70, 1.1, TimeOfDay::Morning, "streets_day");
+        if (L.towns.size() > 1) look(L.towns[1].center, 500, 70, 1.1, TimeOfDay::Night, "streets_night");
+        look(terrain_.runway().center, 4200, 260, 0.05, TimeOfDay::Night, "runway_night");
         hideHud_ = false;
         return 0;
     }

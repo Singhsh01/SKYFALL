@@ -1,5 +1,6 @@
 #include "render/ShaderLoad.hpp"
 #include "Renderer.hpp"
+#include "Props.hpp"
 
 #include "Convert.hpp"
 #include "MeshBuilder.hpp"
@@ -328,6 +329,7 @@ void Renderer::resize(int width, int height) {
 void Renderer::shutdown() {
     world_.unload();
     dressing_.unload();
+    if (trafficCap_) { UnloadMesh(traffic_); traffic_ = Mesh{}; trafficCap_ = 0; }
     for (auto& j : jets_) unloadJetModel(j);
     UnloadMesh(flame_); UnloadMesh(missile_);
     UnloadMesh(tank_); UnloadMesh(truck_); UnloadMesh(aaa_); UnloadMesh(sam_); UnloadMesh(bunker_); UnloadMesh(radar_);
@@ -1023,6 +1025,7 @@ void Renderer::setAtmosphere(Prog& p, const FrameParams& f) {
     p.setF("uFogFalloff", f.L.fogFalloff);
     p.setF("uTime", static_cast<float>(f.time));
     p.setF("uCloudCover", f.L.cloudCover);
+    p.setF("uNight", f.L.night);
     p.setF("uShadowOn", (shadowsActive_ && f.shadows) ? 1.0f : 0.0f);
     p.setM("uLightVP", lightVP_);
     const FlashLight& fl = effects_.flash();
@@ -1244,6 +1247,8 @@ void Renderer::drawDressing(const FrameParams& f) {
     }
     const WorldLayout* L = dressing_.layout;
     if (!L) return;
+    drawTraffic(f);
+    if (f.L.night > 0.05f && !f.isPip) pushSceneLights(f);
     const Battle* gb = f.groundFrom ? f.groundFrom : f.battle;
     // factory halls (a mission may own them as targets, then they are drawn as ground targets)
     for (const Vec3& fc : L->factories) {
@@ -1280,6 +1285,182 @@ void Renderer::drawDressing(const FrameParams& f) {
             Matrix M = MatrixMultiply(MatrixRotateY(-yaw), MatrixTranslate(static_cast<float>(p.x), static_cast<float>(p.y + 0.4), static_cast<float>(p.z)));
             drawMeshC(k == 0 ? locomotive_ : wagon_, litMat_, M);
             ++drawCalls_;
+        }
+    }
+}
+
+namespace {
+constexpr int kTrafficVerts = 90000;
+}
+
+void Renderer::drawTraffic(const FrameParams& f) {
+    const WorldLayout* L = dressing_.layout;
+    if (!L || L->cars.empty()) return;
+    if (carTpl_[0].pos.empty()) {
+        const Color marker = {255, 0, 255, 255};
+        for (int k = 0; k < 6; ++k) {
+            MeshBuilder m;
+            buildCarBox(m, MatrixIdentity(), marker, k);
+            carTpl_[k].pos = m.pos; carTpl_[k].nrm = m.nrm; carTpl_[k].col = m.col;
+        }
+    }
+    if (trafficCap_ == 0) {
+        traffic_ = Mesh{};
+        traffic_.vertexCount = kTrafficVerts;
+        traffic_.triangleCount = kTrafficVerts / 3;
+        traffic_.vertices = static_cast<float*>(MemAlloc(sizeof(float) * 3 * kTrafficVerts));
+        traffic_.normals = static_cast<float*>(MemAlloc(sizeof(float) * 3 * kTrafficVerts));
+        traffic_.colors = static_cast<unsigned char*>(MemAlloc(4 * kTrafficVerts));
+        UploadMesh(&traffic_, true);
+        trafficCap_ = kTrafficVerts;
+    }
+    Vector3 cp = f.cam.position;
+    const float maxDist = std::min(6500.0f, qualityProfile(f.quality).sceneryDist * 0.5f);
+    // the vertex buffer is rebuilt once per frame (the PiP reuses it)
+    int n = 0;
+    {
+        float* P = traffic_.vertices;
+        float* N = traffic_.normals;
+        unsigned char* C = traffic_.colors;
+        bool night = f.L.night > 0.3f;
+        for (const Car& c : L->cars) {
+            Vec3 fw;
+            Vec3 p = L->carAt(c, f.time, &fw);
+            double gy = terrain_->surfaceHeight(p.x, p.z);
+            p.y = std::max(p.y - 0.1, gy);
+            Vector3 rp = toRl(p);
+            float dist = Vector3Distance(rp, cp);
+            if (dist > maxDist || !sphereVisible(f, rp, 8.0f)) continue;
+            const CarTemplate& tp = carTpl_[std::min<int>(c.kind, 5)];
+            size_t nv = dist < 1500.0f ? tp.pos.size() / 3 : 36;
+            if (n + static_cast<int>(nv) > trafficCap_) break;
+            float cs = static_cast<float>(fw.x), sn = static_cast<float>(fw.z);
+            Color body = sceneCarColor(c.color);
+            if (c.kind == 3) body = Color{214, 196, 60, 255};
+            if (nv == 36 && tp.pos.size() / 3 != 36) {
+                // far: one box the size of the vehicle
+                static CarTemplate far[6];
+                CarTemplate& ft = far[std::min<int>(c.kind, 5)];
+                if (ft.pos.empty()) {
+                    int k = std::min<int>(c.kind, 5);
+                    float len = k == 3 ? 11.5f : (k == 2 || k == 4 ? 7.0f : 4.4f), hgt = k >= 2 ? 3.0f : 1.5f;
+                    MeshBuilder mb;
+                    mb.box({0, hgt * 0.5f, 0}, {len, hgt, 2.2f}, WHITE);
+                    ft.pos = mb.pos; ft.nrm = mb.nrm;
+                }
+                for (size_t v = 0; v < 36; ++v) {
+                    float lx = ft.pos[v * 3], ly = ft.pos[v * 3 + 1], lz = ft.pos[v * 3 + 2];
+                    P[(n + v) * 3] = rp.x + lx * cs - lz * sn; P[(n + v) * 3 + 1] = rp.y + ly; P[(n + v) * 3 + 2] = rp.z + lx * sn + lz * cs;
+                    float nx = ft.nrm[v * 3], nz = ft.nrm[v * 3 + 2];
+                    N[(n + v) * 3] = nx * cs - nz * sn; N[(n + v) * 3 + 1] = ft.nrm[v * 3 + 1]; N[(n + v) * 3 + 2] = nx * sn + nz * cs;
+                    C[(n + v) * 4] = body.r; C[(n + v) * 4 + 1] = body.g; C[(n + v) * 4 + 2] = body.b; C[(n + v) * 4 + 3] = 255;
+                }
+            } else {
+                for (size_t v = 0; v < nv; ++v) {
+                    float lx = tp.pos[v * 3], ly = tp.pos[v * 3 + 1], lz = tp.pos[v * 3 + 2];
+                    P[(n + v) * 3] = rp.x + lx * cs - lz * sn; P[(n + v) * 3 + 1] = rp.y + ly; P[(n + v) * 3 + 2] = rp.z + lx * sn + lz * cs;
+                    float nx = tp.nrm[v * 3], nz = tp.nrm[v * 3 + 2];
+                    N[(n + v) * 3] = nx * cs - nz * sn; N[(n + v) * 3 + 1] = tp.nrm[v * 3 + 1]; N[(n + v) * 3 + 2] = nx * sn + nz * cs;
+                    const unsigned char* tc = &tp.col[v * 4];
+                    bool mk = tc[0] == 255 && tc[1] == 0 && tc[2] == 255;
+                    C[(n + v) * 4] = mk ? body.r : tc[0]; C[(n + v) * 4 + 1] = mk ? body.g : tc[1];
+                    C[(n + v) * 4 + 2] = mk ? body.b : tc[2]; C[(n + v) * 4 + 3] = 255;
+                }
+            }
+            n += static_cast<int>(nv);
+            if (night && dist < 7000.0f && !f.isPip) {
+                // headlights and tail lights
+                float half = c.kind == 3 ? 5.8f : (c.kind == 2 || c.kind == 4 ? 3.6f : 2.2f);
+                Vector3 fwd = {cs, 0, sn}, rt = {-sn, 0, cs};
+                Vector3 front = Vector3Add(rp, Vector3Add(Vector3Scale(fwd, half), {0, 0.8f, 0}));
+                Vector3 back = Vector3Add(rp, Vector3Add(Vector3Scale(fwd, -half), {0, 0.9f, 0}));
+                float px = dist * 0.0024f;
+                if (dist < 900.0f) {
+                    for (float sd : {-0.7f, 0.7f}) {
+                        lights_.push_back({Vector3Add(front, Vector3Scale(rt, sd)), std::max(0.55f, px), Color{255, 244, 214, 255}});
+                        lights_.push_back({Vector3Add(back, Vector3Scale(rt, sd)), std::max(0.35f, px * 0.8f), Color{255, 30, 20, 220}});
+                    }
+                } else {
+                    lights_.push_back({front, std::max(0.9f, px * 1.2f), Color{255, 244, 214, 230}});
+                    lights_.push_back({back, std::max(0.6f, px), Color{255, 30, 20, 200}});
+                }
+            }
+        }
+        UpdateMeshBuffer(traffic_, 0, traffic_.vertices, n * 3 * sizeof(float), 0);
+        UpdateMeshBuffer(traffic_, 2, traffic_.normals, n * 3 * sizeof(float), 0);
+        UpdateMeshBuffer(traffic_, 3, traffic_.colors, n * 4, 0);
+        traffic_.vertexCount = n;
+        traffic_.triangleCount = n / 3;
+    }
+    if (traffic_.vertexCount <= 0) return;
+    lit_.setF("uSpecular", 0.35f);
+    drawMeshC(traffic_, litMat_, MatrixIdentity());
+    lit_.setF("uSpecular", 0.0f);
+    ++drawCalls_;
+}
+
+void Renderer::pushSceneLights(const FrameParams& f) {
+    const WorldLayout* L = dressing_.layout;
+    Vector3 cp = f.cam.position;
+    const float night = std::clamp(f.L.night, 0.0f, 1.0f);
+    const float pxK = 2.0f * std::tan(f.cam.fovy * DEG2RAD * 0.5f) / std::max(1, h_);   // metres per pixel per metre
+    const Biome biome = terrain_->info().biome;
+    const bool sodium = biome == Biome::Desert || biome == Biome::Tropical;
+    auto push = [&](Vector3 p, float base, Color c, float maxD, float minPx) {
+        float d = Vector3Distance(p, cp);
+        if (d > maxD) return;
+        if (!sphereVisible(f, p, base * 2.0f)) return;
+        float fade = 1.0f - std::clamp((d - maxD * 0.6f) / (maxD * 0.4f), 0.0f, 1.0f);
+        c.a = static_cast<unsigned char>(c.a * fade * std::min(1.0f, night * 1.4f));
+        lights_.push_back({p, std::max(base, d * pxK * minPx), c});
+    };
+    // pools of light on the ground under lamps and floodlights (close range only)
+    auto pool = [&](const Vector3& p, float r, Color c) {
+        float d = Vector3Distance(p, cp);
+        if (d > 4500.0f || !sphereVisible(f, p, r)) return;
+        float gy = static_cast<float>(terrain_->surfaceHeight(p.x, p.z));
+        float fade = 1.0f - std::clamp((d - 2500.0f) / 2000.0f, 0.0f, 1.0f);
+        c.a = static_cast<unsigned char>(c.a * fade * std::min(1.0f, night * 1.3f));
+        pools_.push_back({{p.x, gy + 0.35f, p.z}, r, c});
+    };
+    for (const LightPoint& lp : L->lights) {
+        Vector3 p = toRl(lp.pos);
+        switch (lp.kind) {
+            case LightKind::Street:
+                push(p, 2.6f, sodium ? Color{255, 168, 74, 255} : Color{236, 238, 255, 255}, 11000.0f, 1.4f);
+                pool(p, 13.0f, sodium ? Color{255, 150, 60, 110} : Color{200, 210, 240, 90});
+                break;
+            case LightKind::Flood:
+                push(p, 5.5f, Color{255, 250, 236, 255}, 14000.0f, 2.0f);
+                pool(p, 42.0f, Color{235, 236, 226, 80});
+                break;
+            case LightKind::Helipad: push(p, 0.8f, Color{60, 255, 120, 255}, 5000.0f, 1.0f); break;
+            case LightKind::Canopy: push(p, 6.0f, Color{255, 252, 240, 255}, 9000.0f, 1.8f); pool(p, 16.0f, Color{255, 250, 236, 120}); break;
+            case LightKind::Billboard: push(p, 4.0f, Color{220, 236, 255, 230}, 8000.0f, 1.4f); break;
+            case LightKind::Checkpoint: push(p, 2.5f, Color{255, 220, 150, 255}, 7000.0f, 1.2f); pool(p, 12.0f, Color{255, 220, 150, 100}); break;
+            case LightKind::Beacon: break;   // drawn with the other obstruction beacons
+        }
+    }
+    // red obstruction beacons: masts, cranes, towers, wind turbines (slow blink, staggered)
+    for (size_t i = 0; i < dressing_.beacons.size(); ++i)
+        if (std::fmod(f.time + i * 0.37, 1.6) < 0.8) push(dressing_.beacons[i], 1.6f, Color{255, 40, 30, 255}, 16000.0f, 1.6f);
+    for (size_t i = 0; i < dressing_.rotorHubs.size(); ++i)
+        if (std::fmod(f.time, 2.0) < 1.0) push(Vector3Add(dressing_.rotorHubs[i], {0, 2.4f, 0}), 1.8f, Color{255, 40, 30, 255}, 16000.0f, 1.6f);
+    // runway: approach light bars with a sequenced strobe ("rabbit") and green threshold bars
+    const RunwayInfo& rw = terrain_->runway();
+    float y = static_cast<float>(rw.center.y) + 0.6f;
+    for (int end = -1; end <= 1; end += 2) {
+        float thx = static_cast<float>(rw.center.x + end * rw.length * 0.5);
+        float cz = static_cast<float>(rw.center.z);
+        for (int k = 0; k < 9; ++k) push({thx, y, cz - 20.0f + k * 5.0f}, 0.9f, Color{80, 255, 120, 255}, 12000.0f, 1.1f);
+        int rabbit = static_cast<int>(std::fmod(f.time * 2.0, 1.0) * 30.0);
+        for (int k = 1; k <= 30; ++k) {
+            float x = thx + end * k * 30.0f;
+            float gy = static_cast<float>(terrain_->surfaceHeight(x, cz)) + 1.2f;
+            push({x, gy, cz}, 1.1f, Color{255, 246, 220, 220}, 12000.0f, 1.2f);
+            if (k % 5 == 0)
+                for (float z : {-9.0f, -4.5f, 4.5f, 9.0f}) push({x, gy, cz + z}, 0.9f, Color{255, 246, 220, 200}, 9000.0f, 1.0f);
+            if (30 - k == rabbit) push({x, gy + 0.3f, cz}, 3.0f, Color{255, 255, 255, 255}, 12000.0f, 2.6f);
         }
     }
 }
@@ -1431,7 +1612,33 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
     }
 }
 
+void Renderer::drawLightPools(const FrameParams& f) {
+    if (pools_.empty()) return;
+    BeginShaderMode(particle_.sh);
+    particle_.setF("uIntensity", 1.6f);
+    rlDisableDepthMask();
+    BeginBlendMode(BLEND_ADDITIVE);
+    rlSetTexture(world_.glow.id);
+    rlBegin(RL_QUADS);
+    for (const LightSprite& l : pools_) {
+        float r = l.size;
+        rlColor4ub(l.col.r, l.col.g, l.col.b, l.col.a);
+        rlTexCoord2f(0, 0); rlVertex3f(l.pos.x - r, l.pos.y, l.pos.z - r);
+        rlTexCoord2f(0, 1); rlVertex3f(l.pos.x - r, l.pos.y, l.pos.z + r);
+        rlTexCoord2f(1, 1); rlVertex3f(l.pos.x + r, l.pos.y, l.pos.z + r);
+        rlTexCoord2f(1, 0); rlVertex3f(l.pos.x + r, l.pos.y, l.pos.z - r);
+    }
+    rlEnd();
+    rlSetTexture(0);
+    rlDrawRenderBatchActive();
+    EndBlendMode();
+    rlEnableDepthMask();
+    EndShaderMode();
+    pools_.clear();
+}
+
 void Renderer::drawLightSprites(const FrameParams& f) {
+    drawLightPools(f);
     if (!smokeSprites_.empty()) {
         // alpha-blended soft puffs (replay smoke trails): drawn before the glows
         std::swap(lights_, smokeSprites_);

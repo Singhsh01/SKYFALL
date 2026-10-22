@@ -19,6 +19,7 @@ option(SKYFALL_FETCH_RAYLIB "Download raylib 5.5 if it is not installed" ON)
 add_library(skyfall_core STATIC
   src/sim/Terrain.cpp
   src/sim/WorldLayout.cpp
+  src/sim/WorldDetail.cpp
   src/sim/Locations.cpp
   src/sim/TerrainAnalysis.cpp
   src/sim/MapStore.cpp
@@ -95,6 +96,7 @@ if(SKYFALL_BUILD_GAME)
     src/render/Effects.cpp
     src/render/WorldMeshes.cpp
     src/render/Dressing.cpp
+    src/render/Props.cpp
     src/ui/Hud.cpp
     src/ui/Cockpit.cpp
     src/ui/Menus.cpp

@@ -340,6 +340,7 @@ WorldLayout WorldLayout::build(const Terrain& t) {
         for (const Town& tw : L.towns) if (std::hypot(tw.center.x - hl.p.x, tw.center.z - hl.p.z) < tw.radius + 300) ok = false;
         if (ok) L.turbines.push_back({hl.p, 0.6});
     }
+    populateWorldDetail(t, L);
     return L;
 }
 

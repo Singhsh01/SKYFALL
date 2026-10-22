@@ -182,7 +182,8 @@ private:
     int obstacleVer_ = -1;
     std::vector<Vector3> mastLights_;
     struct LightSprite { Vector3 pos; float size; Color col; };
-    std::vector<LightSprite> lights_, smokeSprites_;
+    std::vector<LightSprite> lights_, smokeSprites_, pools_;   // pools: light cast on the ground at night
+    void drawLightPools(const FrameParams& f);
     struct Spin { float angle = 0; double t = -1; };
     std::unordered_map<int, Spin> wheelSpin_;
     void drawLightSprites(const FrameParams& f);
@@ -192,6 +193,13 @@ private:
     void drawRain(const FrameParams& f);
     void drawTanker(const FrameParams& f);
     void drawDressing(const FrameParams& f);
+    void drawTraffic(const FrameParams& f);
+    void pushSceneLights(const FrameParams& f);
+    Mesh traffic_{};
+    int trafficCap_ = 0;
+    struct CarTemplate { std::vector<float> pos, nrm; std::vector<unsigned char> col; };
+    CarTemplate carTpl_[6];
+    double lastTrafficTime_ = -1;
     Dressing dressing_;
     std::vector<CloudPuff> puffs_;
 

@@ -17,6 +17,7 @@ uniform vec3 uCamPos;
 uniform float uFogDensity;
 uniform float uFogFalloff;
 uniform float uTime;
+uniform float uNight;   // 0 day .. 1 night (city lights, stars)
 
 vec3 skyColor(vec3 d, float sunDisk) {
     float y = d.y;
@@ -97,6 +98,16 @@ void main() {
     vec4 p = uInvViewProj * vec4(ndc, 1.0, 1.0);
     vec3 dir = normalize(p.xyz / p.w - uCamPos);
     vec3 col = skyColor(dir, 1.0);
+    // stars on a clear night sky (hashed per direction cell, fading towards the horizon)
+    if (uNight > 0.05 && dir.y > 0.0) {
+        vec3 sd = dir * 420.0;
+        vec3 cell = floor(sd);
+        float hs = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+        vec3 fr = fract(sd) - 0.5;
+        float star = step(0.9965, hs) * smoothstep(0.30, 0.0, length(fr)) * (0.5 + 0.5 * fract(hs * 97.0));
+        float twinkle = 0.75 + 0.25 * sin(uTime * (2.0 + hs * 5.0) + hs * 60.0);
+        col += vec3(0.85, 0.9, 1.0) * star * twinkle * smoothstep(0.02, 0.25, dir.y) * smoothstep(0.3, 0.9, uNight) * 1.6;
+    }
     // high cirrus streaks
     if (dir.y > 0.0) {
         vec2 uv = dir.xz / (dir.y + 0.08) * 0.08 + vec2(uTime * 0.0006, 0.0);
@@ -449,18 +460,24 @@ out vec4 finalColor;
 void main() {
     vec3 n = normalize(vNormal);
     if (!gl_FrontFacing) n = -n;
-    vec3 albedo = vColor.rgb * colDiffuse.rgb;
+    // window panes are flagged by vertex alpha: 253 lit at night, 251 dark
+    float wa = vColor.a * 255.0;
+    float win = (wa > 250.5 && wa < 254.5) ? 1.0 : 0.0;
+    vec3 albedo = mix(vColor.rgb * colDiffuse.rgb, vec3(0.07, 0.085, 0.11), win);
     vec3 v = normalize(uCamPos - vPos);
     float ndl = max(dot(n, uSunDir), 0.0);
     vec3 h = normalize(uSunDir + v);
-    float spec = pow(max(dot(n, h), 0.0), 40.0) * uSpecular;
+    float spec = pow(max(dot(n, h), 0.0), win > 0.5 ? 120.0 : 40.0) * max(uSpecular, win * 1.4);
     float shd = shadowAt(vPos, ndl);
     vec3 col = albedo * (uSunColor * ndl * shd + ambientLight(n)) + uSunColor * spec * shd;
+    // sky reflected in the glass by day
+    col += win * skyColor(reflect(-v, n), 0.0) * 0.18 * (1.0 - uNight);
+    col += win * step(252.0, wa) * vColor.rgb * uNight * 2.4;
     float fd = length(uFlashPos - vPos);
     col += albedo * uFlashColor * (1.0 / (1.0 + fd * fd * 0.0004));
     col = mix(col, albedo * 3.0, uEmissive);
     if (uFogOn > 0.5) col = applyFog(col, vPos);
-    finalColor = vec4(col, vColor.a * colDiffuse.a);
+    finalColor = vec4(col, mix(vColor.a, 1.0, win) * colDiffuse.a);
 }
 )GLSL";
 

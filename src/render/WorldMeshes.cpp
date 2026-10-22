@@ -633,6 +633,7 @@ void WorldMeshes::build(const Terrain& t) {
         MeshBuilder mb;
         Vec3 c = t.townCenter();
         Rng rng(4242);
+        Rng wrng(777);   // windows: separate stream so the town layout stays as it was
         const double cell = 30.0;
         const Color palette[] = {{178, 166, 146, 255}, {196, 184, 160, 255}, {160, 142, 118, 255},
                                  {150, 146, 140, 255}, {186, 160, 130, 255}, {205, 196, 178, 255}};
@@ -653,8 +654,12 @@ void WorldMeshes::build(const Terrain& t) {
                 float baseY = static_cast<float>(h) - 3.0f;
                 mb.box({0, baseY + (hh + 3) / 2, 0}, {w, hh + 3, dd}, col, rot);
                 // windows band (darker strips)
-                for (float wy = baseY + 5.0f; wy < baseY + hh; wy += 3.4f)
-                    mb.box({0, wy, 0}, {w + 0.15f, 0.9f, dd + 0.15f}, {70, 74, 80, 255}, rot);
+                // (vertex alpha 253 = lit at night, 251 = dark: see the lit shader)
+                for (float wy = baseY + 5.0f; wy < baseY + hh; wy += 3.4f) {
+                    float r = static_cast<float>(wrng.uniform());
+                    Color wc = r < 0.45f ? Color{255, 200, 130, 253} : (r < 0.55f ? Color{210, 225, 255, 253} : Color{70, 74, 80, 251});
+                    mb.box({0, wy, 0}, {w + 0.15f, 0.9f, dd + 0.15f}, wc, rot);
+                }
                 if (hh < 14 && rng.uniform() < 0.9) {
                     Color rc = roofs[rng.next() % 4];
                     float top = baseY + hh + 3;
