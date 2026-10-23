@@ -35,9 +35,15 @@ void Input::update(double dt, const Settings& s) {
     if (IsKeyDown(KEY_D)) ky += 1;
     if (IsKeyDown(KEY_A)) ky -= 1;
     if (s.invertPitch) kp = -kp;
-    kPitch_ = approach(kPitch_, kp * s.sensitivity, kp == 0 ? 6.0 : 3.2, dt);
-    kRoll_ = approach(kRoll_, kr * s.sensitivity, kr == 0 ? 8.0 : 4.5, dt);
-    kYaw_ = approach(kYaw_, ky, 4.0, dt);
+    // keyboard keys reach full deflection in ~0.18 s (pitch) / ~0.13 s (roll), and the stick
+    // recentres twice as fast; reversing a key passes through centre at the recentre rate
+    auto key = [&](double v, double target, double press, double release) {
+        bool reversing = target != 0 && v * target < 0;
+        return approach(v, target, target == 0 || reversing ? release : press, dt);
+    };
+    kPitch_ = key(kPitch_, kp * s.sensitivity, 5.5, 10.0);
+    kRoll_ = key(kRoll_, kr * s.sensitivity, 7.5, 14.0);
+    kYaw_ = key(kYaw_, ky, 5.0, 9.0);
     n.pitch = std::clamp(kPitch_, -1.0, 1.0);
     n.roll = std::clamp(kRoll_, -1.0, 1.0);
     n.yaw = kYaw_;

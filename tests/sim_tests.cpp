@@ -467,6 +467,31 @@ TEST(mission_fails_on_crash) {
     CHECK(!m.failure().empty());
 }
 
+TEST(battle_roster_version_changes_when_jets_are_created_or_destroyed) {
+    // the renderer keeps Jet* across a frame (smooth motion); a menu that rebuilds the battle
+    // mid-frame (the HANGAR button) must be detectable, or the saved pointers dangle
+    Battle b(terrain());
+    b.createPlayer(AircraftId::F22);
+    auto v0 = b.rosterVersion();
+    int id = b.debugAddJet(Team::Red, AircraftId::Su35, {2500, 3100, 400}, 1.2, 200.0).id;
+    auto v1 = b.rosterVersion();
+    CHECK(v1 != v0);
+    b.removeJet(id);
+    auto v2 = b.rosterVersion();
+    CHECK(v2 != v1);
+    b.debugAddJet(Team::Red, AircraftId::Su35, {2500, 3100, 400}, 1.2, 200.0);
+    auto v3 = b.rosterVersion();
+    b.clearCombatants();
+    CHECK(b.rosterVersion() != v3);
+    auto v4 = b.rosterVersion();
+    b.createPlayer(AircraftId::F16);
+    CHECK(b.rosterVersion() != v4);
+    // a second Battle never reuses a version number
+    Battle c(terrain());
+    c.createPlayer(AircraftId::F22);
+    CHECK(c.rosterVersion() != b.rosterVersion());
+}
+
 TEST(proportional_navigation_missile_hits_non_manoeuvring_target) {
     Battle b(terrain());
     Jet& p = b.createPlayer(AircraftId::F22);

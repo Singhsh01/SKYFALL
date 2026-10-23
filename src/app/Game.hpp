@@ -77,6 +77,7 @@ private:
     std::vector<InterpSaved> interpJets_;
     std::vector<Vec3> interpMissiles_;
     bool interpActive_ = false;
+    unsigned long long interpRoster_ = 0;   // battle roster when the states were saved
     void beginRenderInterpolation();
     void endRenderInterpolation();
     void processEvents();

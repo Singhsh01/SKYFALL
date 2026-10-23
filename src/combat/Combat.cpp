@@ -280,8 +280,14 @@ int Battle::groundTotal(int group) const {
     return n;
 }
 
+void Battle::rosterChanged() {
+    static unsigned long long counter = 0;
+    roster_ = ++counter;
+}
+
 Jet& Battle::createPlayer(AircraftId id) {
     jets_.clear();
+    rosterChanged();
     missiles_.clear(); bullets_.clear(); flares_.clear(); ground_.clear(); events_.clear(); feed_.clear();
     nextJetId_ = 0;
     auto j = std::make_unique<Jet>();
@@ -320,18 +326,20 @@ Jet& Battle::debugAddJet(Team team, AircraftId id, const Vec3& pos, double headi
     if (team == Team::Red) j->callsign = std::string(kRedNames[j->id % 8]) + " " + std::to_string(1 + j->id % 4);
     else j->callsign = std::string(kBlueNames[j->id % 4]) + " " + std::to_string(2 + j->id % 3);
     jets_.push_back(std::move(j));
+    rosterChanged();
     return *jets_.back();
 }
 
 void Battle::clearCombatants() {
     if (jets_.size() > 1) jets_.erase(jets_.begin() + 1, jets_.end());
+    rosterChanged();
     missiles_.clear(); bullets_.clear(); flares_.clear(); ground_.clear();
     active_ = false;
 }
 
 void Battle::removeJet(int id) {
     for (size_t i = 1; i < jets_.size(); ++i)
-        if (jets_[i]->id == id) { jets_.erase(jets_.begin() + static_cast<long>(i)); break; }
+        if (jets_[i]->id == id) { jets_.erase(jets_.begin() + static_cast<long>(i)); rosterChanged(); break; }
     for (Missile& m : missiles_) if (m.targetJet == id) m.targetJet = -1;
     for (auto& j : jets_) {
         if (j->lockTarget == id) { j->lockTarget = -1; j->lockProgress = 0; }
@@ -1295,7 +1303,10 @@ void Battle::update(double dt, const ControlInputs& playerInput, const PlayerCom
     waveBanner_ = std::max(0.0, waveBanner_ - dt);
 
     // Remove long-dead AI jets, spawn next wave
-    jets_.erase(std::remove_if(jets_.begin() + 1, jets_.end(), [](const std::unique_ptr<Jet>& j) { return !j->alive && j->deadTimer > 12.0; }), jets_.end());
+    {
+        auto gone = std::remove_if(jets_.begin() + 1, jets_.end(), [](const std::unique_ptr<Jet>& j) { return !j->alive && j->deadTimer > 12.0; });
+        if (gone != jets_.end()) { jets_.erase(gone, jets_.end()); rosterChanged(); }
+    }
     if (active_ && cfg_.endlessWaves && enemiesAlive() == 0) {
         waveTimer_ += dt;
         if (waveTimer_ > 5.0) { waveTimer_ = 0; spawnWave(); }

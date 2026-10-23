@@ -154,7 +154,10 @@ private:
 struct FixedStepper {
     double dt = FlightModel::kDt;
     double accumulator = 0;
-    int maxStepsPerFrame = 10;   // 83 ms of simulation at most per rendered frame
+    // 250 ms of simulation at most per rendered frame (the frame time is clamped to that too):
+    // a slow frame on a busy machine catches up instead of putting the game in slow motion,
+    // which made the controls feel heavy and late below ~12 fps (one step costs < 0.1 ms)
+    int maxStepsPerFrame = 30;
     int droppedSteps = 0;
     /// Feed real elapsed time; returns how many fixed steps to run this frame.
     int advance(double frameSeconds) {

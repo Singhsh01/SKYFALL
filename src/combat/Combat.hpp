@@ -266,6 +266,9 @@ public:
     const Jet& player() const { return *jets_[0]; }
     std::vector<std::unique_ptr<Jet>>& jets() { return jets_; }
     const std::vector<std::unique_ptr<Jet>>& jets() const { return jets_; }
+    // changes whenever a jet is created or destroyed (unique across Battle objects), so a
+    // Jet* kept across a frame can be checked before it is used again
+    unsigned long long rosterVersion() const { return roster_; }
     const std::vector<Missile>& missiles() const { return missiles_; }
     std::vector<Missile>& missilesMut() { return missiles_; }   // render interpolation only
     const std::vector<Bullet>& bullets() const { return bullets_; }
@@ -311,6 +314,8 @@ private:
 
     const Terrain* terrain_;
     std::vector<std::unique_ptr<Jet>> jets_;
+    unsigned long long roster_ = 0;
+    void rosterChanged();
     std::vector<Missile> missiles_;
     std::vector<Bullet> bullets_;
     std::vector<Flare> flares_;

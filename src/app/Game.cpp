@@ -1001,19 +1001,25 @@ void Game::beginRenderInterpolation() {
         interpMissiles_.push_back(m.pos);
         if (m.prevValid && dot(m.pos - m.prevPos, m.pos - m.prevPos) < 300.0 * 300.0) m.pos = m.prevPos + (m.pos - m.prevPos) * a;
     }
+    interpRoster_ = battle_.rosterVersion();
     interpActive_ = true;
 }
 
 void Game::endRenderInterpolation() {
     if (!interpActive_) return;
+    interpActive_ = false;
+    // a menu action during this frame (start or restart a mission, leave to the title) rebuilt
+    // the battle: the saved jets no longer exist, and the new ones are already where they belong
+    if (battle_.rosterVersion() != interpRoster_) return;
     for (const InterpSaved& sv : interpJets_) {
+        if (!sv.jet->fm) continue;
         FlightState& s = sv.jet->fm->mutableState();
         s.pos = sv.pos;
         s.q = sv.q;
     }
     auto& ms = battle_.missilesMut();
-    for (size_t i = 0; i < ms.size() && i < interpMissiles_.size(); ++i) ms[i].pos = interpMissiles_[i];
-    interpActive_ = false;
+    if (ms.size() == interpMissiles_.size())
+        for (size_t i = 0; i < ms.size(); ++i) ms[i].pos = interpMissiles_[i];
 }
 
 void Game::handleGlobalKeys() {
@@ -2418,6 +2424,21 @@ int Game::runCapture() {
         auto expect = [&](bool ok, const char* what) { std::printf("flow: %s %s\n", ok ? "PASS" : "FAIL", what); if (!ok) ++fails; std::fflush(stdout); };
         auto run = [&](int frames) { for (int i = 0; i < frames; ++i) frame(1.0 / 60.0, false); };
         loadLocation("desert", false);
+        // HANGAR clicked on the title screen: the click is handled while the frame is drawn,
+        // between the smooth-motion save and restore, and replaces every jet (crashed in v0.9)
+        settings_.smoothMotion = true;
+        startTitle();
+        run(30);
+        beginRenderInterpolation();
+        hangarSel_ = settings_.aircraft;
+        startHangar();
+        endRenderInterpolation();
+        run(30);
+        expect(screen_ == Screen::Hangar && battle_.jets().size() == 1 && battle_.player().fm, "hangar opens from the title mid-frame");
+        for (int i = 0; i < static_cast<int>(AircraftId::Count); ++i) { beginRenderInterpolation(); hangarSel_ = i; startHangar(); endRenderInterpolation(); frame(1.0 / 60.0, false); }
+        expect(screen_ == Screen::Hangar, "browsing every aircraft in the hangar");
+        startTitle();
+        run(10);
         openAcademy();
         expect(screen_ == Screen::Academy, "academy opens");
         acLocation_ = "desert";
