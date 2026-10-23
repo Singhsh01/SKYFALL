@@ -67,7 +67,7 @@ locks**. Any level can be flown on any downloaded location except: levels 19 and
 * The exercise ends when every target is destroyed (or, defensively, when the time is survived).
   Weapons are reloaded to a full load at the start; gunnery is guns only, missile employment is
   missiles only; during a long fight the range slowly resupplies one missile of each kind and a
-  third of a gun belt every 15 s.
+  third of a gun belt every 15 s, and after the fight it tops your tanks up to 45 % for the way home.
 * Shot down: the replay, then **R** retries the exercise from its checkpoint with fresh enemies.
 * After a fight the route home is rejoined at the gate that makes the shortest way back (at least
   3 km away, with room to descend). Anywhere on a route, circling near a gate for 45 s without

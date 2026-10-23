@@ -3362,6 +3362,13 @@ void TrainingSession::endEngagement(Battle& battle, bool removeSurvivors) {
         }
     }
     engagement_ = -1;
+    // after a fight the range tops the tanks up to 45 % for the way home (afterburner fights
+    // drain small jets fast)
+    {
+        FlightState& fs = battle.player().fm->mutableState();
+        double minFuel = battle.player().fm->profile().fuelMassKg * 0.45;
+        if (battle.player().alive && fs.fuelKg < minFuel) fs.fuelKg = minFuel;
+    }
     // a full, unrestricted load for whatever comes next
     Jet& p = battle.player();
     p.missiles = playerMissiles_;
