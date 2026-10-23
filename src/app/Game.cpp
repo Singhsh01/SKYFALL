@@ -1724,13 +1724,13 @@ void Game::drawTitle() {
     float x = 70 * s, y = 222 * s, bw = 430 * s, bh = 48 * s, gap = 8 * s;
     if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "61 missions over any world location, your aircraft and paint")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; locStatus_.clear(); nav_.focus = 0; return; }
     y += bh + gap;
-    if (ui::button(nav_, 1, {x, y, bw, bh}, "TRAINING ACADEMY", "10 graded courses with an instructor: medals and scores")) { audio_.play(Sfx::Click); openAcademy(); return; }
+    if (ui::button(nav_, 1, {x, y, bw, bh}, "TRAINING ACADEMY", "20 courses with an instructor: flying, helicopters, air combat")) { audio_.play(Sfx::Click); openAcademy(); return; }
     y += bh + gap;
     if (ui::button(nav_, 2, {x, y, bw, bh}, "DOGFIGHT ARENA", "Bandit waves over " + terrain_.info().name)) { audio_.play(Sfx::Click); startArenaBriefed(); return; }
     y += bh + gap;
     if (ui::button(nav_, 3, {x, y, bw, bh}, "WORLD LOCATIONS", "Real terrain: Himalaya, Alps, Sahara, Andes, Rio...")) { audio_.play(Sfx::Click); screen_ = Screen::Locations; locStatus_.clear(); nav_.focus = 0; return; }
     y += bh + gap;
-    if (ui::button(nav_, 4, {x, y, bw, bh}, "HANGAR", "8 aircraft, 16 paint schemes")) { audio_.play(Sfx::Click); hangarSel_ = settings_.aircraft; startHangar(); nav_.focus = hangarSel_; return; }
+    if (ui::button(nav_, 4, {x, y, bw, bh}, "HANGAR", "8 aircraft, " + std::to_string(kSkinCount) + " paint schemes")) { audio_.play(Sfx::Click); hangarSel_ = settings_.aircraft; startHangar(); nav_.focus = hangarSel_; return; }
     y += bh + gap;
     if (ui::button(nav_, 5, {x, y, bw, bh}, "SETTINGS", "Audio, graphics, controls")) { audio_.play(Sfx::Click); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 0; return; }
     y += bh + gap;
