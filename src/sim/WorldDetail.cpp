@@ -501,7 +501,11 @@ void populateWorldDetail(const Terrain& t, WorldLayout& L) {
     L.sites.clear();
     L.lanes.clear();
     L.cars.clear();
-    unsigned seed = mix(static_cast<unsigned>(std::hash<std::string>{}(t.info().id)), 0x5EEDu);
+    // FNV-1a of the location id: the same seed on every compiler and standard library
+    // (std::hash differs between libstdc++ and libc++, which moved the bases on macOS)
+    unsigned fnv = 2166136261u;
+    for (unsigned char ch : t.info().id) { fnv ^= ch; fnv *= 16777619u; }
+    unsigned seed = mix(fnv, 0x5EEDu);
     Placer P(t, L);
     airbaseCompound(P, seed);
     // forward operating bases: dry, flat ground 2.5-9 km from a town, away from the airbase

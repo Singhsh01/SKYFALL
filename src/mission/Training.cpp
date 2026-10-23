@@ -1624,6 +1624,7 @@ struct Builder {
         double dist = std::hypot(area.x - cursor.x, area.z - cursor.z);
         if (dist < 4000.0) return;
         Vec3 d = hdir(area - cursor);
+        if (dot(d, cursorDir) < 0.3) return;   // behind: no gated U-turn, the HUD leads you to the fight
         legTo(area - d * 2200.0, RouteStyle::Navigation, title);
     }
     /// Climb to a safe fighting height before an air-to-air exercise.
