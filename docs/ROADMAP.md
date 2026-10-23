@@ -2,6 +2,24 @@
 
 Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ planned
 
+## v0.9 (this release)
+
+| Requirement | Status | Notes |
+|---|---|---|
+| VS Code build / run / debug tasks | ✅ | `.vscode/tasks.json`, `launch.json` |
+| SKYFALL.app with an original jet icon, Desktop alias, Release build | ✅ | `scripts/make_app.sh` |
+| Download all maps once, checksums, offline, verify / repair, incremental | ✅ | `MapStore`, IndexedDB on the web |
+| Arcade: top speed in 3-4 s, braking in 4-5 s, per-aircraft top speeds | ✅ | tested |
+| Sense of speed (FOV, shake, streaks, dust, rush, audio) | ✅ | |
+| Presets incl. Cinematic 4K and Performance 120, fps caps, VSync, interpolation | ✅ | |
+| 4K / 120 fps measured on the Mac | 🟡 | see BENCHMARKS.md for what has been measured |
+| Second (enemy-view) kill replay | ✅ | |
+| Non-critical HUD panels at 55 % | ✅ | |
+| Armour-inspired paint schemes for all 8 aircraft | ✅ | 8 new, 24 total |
+| Populated maps: military sites, civilian props, traffic, night lighting | ✅ | `WorldDetail`, tested on 14 maps |
+| 20-level Academy with helicopters and air combat, no medals / locks | ✅ | bot flies 472 / 480 combinations |
+| Reference video of the requested look | ⬜ | could not be opened from the build environment |
+
 ## Core (spec sections A–D)
 
 | Requirement | Status | Notes |

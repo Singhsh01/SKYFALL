@@ -37,6 +37,8 @@ copyrighted models, textures, sounds or code from commercial games.
 | ![High-G wing condensation](docs/screenshots/wing_vapour.jpg) | ![Gear, wheels and landing light](docs/screenshots/gear_lights.jpg) |
 | ![Forested valleys and fields, Glen Coe](docs/screenshots/landscape_glencoe.jpg) | ![Patchwork farmland below Mount Fuji](docs/screenshots/landscape_farmland.jpg) |
 | ![Training Academy: levels, record and route preview](docs/screenshots/academy_menu.jpg) | ![Campaign: 61 missions over any location, aircraft and paint](docs/screenshots/campaign_location.jpg) |
+| ![Academy combat: helicopters, an outpost, an F-16, the 20-level menu](docs/screenshots/academy_combat.jpg) | ![Dusk and night: city lights, the army compound, traffic](docs/screenshots/world_night.jpg) |
+| ![Armour-inspired paint schemes](docs/screenshots/skins_armor.jpg) | |
 | ![Academy level 4: pillar slalom with the instructor](docs/screenshots/academy_pillars.jpg) | ![Academy level 10: carrier approach guidance](docs/screenshots/academy_carrier_approach.jpg) |
 
 > Screenshots are captured from the running executable (`skyfall --capture`) on a Linux
@@ -44,9 +46,74 @@ copyrighted models, textures, sounds or code from commercial games.
 > performance. Measured on a MacBook Air (v0.3 build): 66 fps mean, p95 20 ms at 1680x1050 High.
 > See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
-## What you can do in this build (v0.8)
+## Install on a Mac: SKYFALL.app with a Desktop shortcut
 
-* **Training Academy** (title → TRAINING ACADEMY) — ten graded courses, about 17 minutes each,
+```bash
+./scripts/make_app.sh
+```
+
+builds the Release once (no rebuild on every launch), creates **SKYFALL.app** with its own jet
+icon in `~/Applications`, puts a **SKYFALL** alias on the Desktop (it survives restarts and
+updates) and registers the app with Spotlight and Launchpad. Run it again after pulling a new
+version. Settings, Academy and campaign progress, downloaded maps, logs and screenshots live in
+`~/Library/Application Support/SKYFALL`, outside the app, so they are kept.
+
+In **VS Code** (`Terminal → Run Task…`): *Build (Release)*, *Build (Debug)*, *Run tests*,
+*Play (Release build)*, *Install SKYFALL.app + Desktop shortcut*, *Benchmark all presets*,
+*Web build*; `F5` debugs with CodeLLDB (or the C/C++ extension's lldb). The browser and terminal
+scripts (`build_mac.sh`, `run.sh`, `build_web.sh`) work as before.
+
+## New in v0.9
+
+* **Twenty-level Training Academy** — flying (scramble, handling and rings, mountains, low level
+  and obstacles), then helicopters and weapons (helicopter interception, an attack on an outpost
+  defended by attack helicopters, cannon gunnery, missile employment), one-on-one fights against
+  the **F-16, Su-35, Su-57 and F-35**, a helicopter swarm, combined air and ground attack,
+  high-speed mountain combat, formation and interception, defensive flying, a strike with
+  refuelling, a carrier strike with recovery and the final qualification. Helicopters are new
+  flying targets (the air-to-air missile locks them). **All levels are open; there are no
+  medals or rewards**; completion, best score, attempts and times are kept per aircraft (records
+  of the old ten levels carry over). The instructor coaches the fights. See
+  [docs/TRAINING.md](docs/TRAINING.md).
+* **Populated worlds on every map** — an army compound beside every runway (barracks, a tank
+  park, helipads with transport and attack helicopters, motor pool, fuel, radar and antennas,
+  floodlights, perimeter fence, watchtowers and a gate checkpoint), two forward operating bases
+  out in the hills (blast-wall ring, tents, helipad, armour), street lights along the roads in
+  every town, billboards and filling stations at the town entrances, parked cars, container yards
+  and cranes, a port with quayside cranes on a coastal town, and **traffic**: cars, vans, trucks
+  and buses driving the roads, military vehicles on the base perimeter road. Placement keeps
+  clear of water, the runway, its approaches, roads and each other, and no tall prop stands in
+  any Academy route (tested on all 14 maps).
+* **Dusk and night** (`F5` cycles morning, golden hour, noon, dusk, night) — lit windows on every
+  building, sodium or LED street lights with pools of light on the ground, floodlights, helipad
+  and runway approach lights with a sequenced strobe, red obstruction beacons on masts, cranes,
+  towers and wind turbines, car headlights and tail lights, stars and a moonlit landscape.
+* **Arcade speed** — in Arcade handling every jet reaches its top speed in 3-4 s of afterburner
+  and slows down in 4-5 s with the throttle back (measured in the tests), with per-aircraft top
+  speeds (the F-22 about Mach 2 at altitude); Assisted and Simulation keep their physics.
+* **Sense of speed** — speed-dependent field of view and chase distance, buffeting, speed streaks,
+  low-level dust and spray, a short "rush" when you light the afterburner (edge blur, chromatic
+  split), wind roar and fly-by sounds.
+* **Second replay window** — when you shoot an enemy down, the shoot-down is replayed from the
+  enemy's point of view in a window the size of the existing replay, without pausing the game.
+* **Smaller HUD panels** — non-critical panels at 55 % (Settings), the minimap, replays and
+  warnings unchanged.
+* **Eight armour-inspired paint schemes** (24 in total) — crimson and gold armour, graphite with
+  glowing blue circuits, stealth silver, titanium, hex vector, nano crimson, gold titan, carbon
+  volt: original designs with metallic paint and glowing seams.
+* **Graphics presets** Low, Medium, High, Ultra, **Cinematic 4K** (native pixels up to 3840 wide,
+  longer draw distances) and **Performance 120** (a 120 Hz frame budget); frame-rate limit
+  *display* / none / 30 / 60 / 90 / 120, VSync toggle, render interpolation between the 120 Hz
+  physics steps (smooth at any refresh rate), dynamic resolution, frustum culling of scenery.
+* **Download all maps once** — World Locations → DOWNLOAD ALL MAPS stores every map in a
+  persistent map store (`~/Library/Application Support/SKYFALL/maps`, the browser's IndexedDB
+  on the web version), checked against SHA-256 checksums, usable offline; VERIFY ALL MAPS and
+  REPAIR re-check or re-fetch damaged files; new maps are added without touching the others.
+
+## Everything else in this build
+
+* **Training Academy** (title → TRAINING ACADEMY) — the original ten flying courses (now part of
+  the twenty levels above), about 17 minutes each,
   in any of the eight aircraft and all three handling modes, on any downloaded world location:
   scramble and takeoff, mountain navigation, low-altitude flight, an obstacle course (rock
   pillars, natural arches, under a bridge, a mast slalom, a compound), advanced aircraft control
@@ -56,10 +123,9 @@ copyrighted models, textures, sounds or code from commercial games.
   carrier trap. Each course is generated from the location's own terrain (routes follow the
   valleys; nothing teleports you), briefed over the radio and coached the whole way by an
   instructor in the neural voice (with captions). Gates are rings in the world, obstacles have
-  real collision, the approach has glide-path and line-up guidance, refuelling is guided. Seven
-  category scores, bronze / silver / gold medals, checkpoint retries after a crash (`R`),
-  history per aircraft and progressive unlocks. The menu shows each level's route on the map,
-  your record and the medals of every aircraft. Details: [docs/TRAINING.md](docs/TRAINING.md).
+  real collision, the approach has glide-path and line-up guidance, refuelling is guided.
+  Category scores, checkpoint retries after a crash (`R`), history per aircraft. The menu shows
+  each level's route on the map and your record. Details: [docs/TRAINING.md](docs/TRAINING.md).
 * **The 61-mission campaign over any world location** (title → CAMPAIGN) — the campaign screen
   of earlier releases, with three pickers under the mission grid: **location** (the Skyfall Desert
   or any of the 13 real-terrain maps), **aircraft** and **paint scheme**. In the desert the
@@ -99,9 +165,6 @@ copyrighted models, textures, sounds or code from commercial games.
   system voice reads the line instead.
 * **Download maps in the game** — Settings → DOWNLOAD WORLD MAPS (or click a location marked NOT
   DOWNLOADED) fetches and converts the real elevation data in the background with a progress bar.
-* **Ultra HD and 75 fps** — Settings → Quality ULTRA HD renders the 3D scene at the display's real
-  pixel count (Retina / 4K, up to 3840 wide); Settings → Frame rate limit 60 / 75 / 120 /
-  unlimited (default 75). Dynamic resolution holds the chosen frame rate.
 * **More realistic image** — filmic ACES tone mapping with proper sRGB output and a photographic
   grade, storm lighting with a slate-grey sea and whitecaps, rain, lightning, and real sea level
   on the real maps (fjords and coasts are water).
@@ -131,10 +194,10 @@ copyrighted models, textures, sounds or code from commercial games.
   embankments and bridges, a railway with viaducts and a freight train, an industrial zone with
   smoking chimneys, wind farms with turning rotors.
 * **All eight aircraft are flyable** (Hangar → select → FLY): F-22, F-35, Rafale, Su-57, Su-35,
-  MiG-29, Su-30, F-16, each with **sixteen paint schemes**: eight camouflages (factory, desert,
+  MiG-29, Su-30, F-16, each with **24 paint schemes**: eight camouflages (factory, desert,
   woodland, arctic, naval, digital urban, night, tiger) and eight modern ones (ghost grey and sand
   ghost counter-shading, stealth and polar shard splinters, midnight neon and demo red display
-  liveries, bare polished metal, carbon) — ← / → on an aircraft in the Hangar, or PAINT on the
+  liveries, bare polished metal, carbon) and the eight armour-inspired ones above — ← / → on an aircraft in the Hangar, or PAINT on the
   campaign screen. Choices are saved.
 * **Briefings over the radio, in the cockpit** — no briefing board: every campaign mission and the
   Dogfight Arena starts with you strapped in, and Operations briefs you over the radio ("Captain,
@@ -240,7 +303,7 @@ Command Line Tools linker/SDK mismatch by falling back to an older installed SDK
 `logs/skyfall.log` (GPU info, warnings, and a frame-time summary on exit).
 
 Useful flags: `--mode arena` / `--mode m01` (skip the menu), `--size 1440x900`, `--windowed`,
-`--quality 0|1|2|3` (3 = Ultra HD), `--bench 30` (writes `benchmarks/benchmark.json` + `frame_times.csv`),
+`--quality 0-5` (low, medium, high, ultra, cinematic 4K, performance 120), `--bench 30` (writes `benchmarks/benchmark.json` + `frame_times.csv`),
 `--capture shots/` (scripted screenshots from the real renderer).
 
 ## Controls
@@ -259,7 +322,7 @@ Useful flags: `--mode arena` / `--mode m01` (skip the menu), `--size 1440x900`, 
 | Hangar `←` / `→` | change paint scheme | | |
 | `C` | camera: cockpit → chase → external | right-drag, `I J K L` | look / orbit, wheel = zoom |
 | `R` | reset / respawn (Academy: retry from the last checkpoint) | `H` | help overlay |
-| `F3` | telemetry (p50/p95/p99 frame times, physics) | `F5` | time of day |
+| `F3` | telemetry (p50/p95/p99 frame times, physics) | `F5` | time of day (incl. dusk, night) |
 | `F12` | screenshot | `Esc` / `P` | pause menu (Esc again resumes) |
 
 Gamepad: left stick fly, triggers throttle, RB cannon, LB missile, A flares, B target,
@@ -294,9 +357,12 @@ X gear, Y camera, d-pad yaw.
   the session (gates, tasks, formation, refuelling, landing / trap, scoring, checkpoints) and the
   instructor; `src/mission/CampaignWorld` — the 61 missions fitted to any location's terrain;
   `src/mission/Progress`.
-* `tests/` — 54 simulation / campaign tests (`skyfall_tests`) and 7 Academy / campaign-location
-  tests (plus course-debugging tools) (`skyfall_training_tests`), including an autopilot that flies
-  all 240 level / aircraft / mode combinations, a check of all 61 missions on all 14 locations and
+* `src/sim/WorldDetail` — the props, night lights, military sites and traffic of every map
+  (deterministic, collision-aware placement); `src/sim/MapStore` — the persistent, checksummed
+  map store.
+* `tests/` — 56 simulation / campaign tests (`skyfall_tests`) and 15 Academy / world /
+  campaign-location tests (plus course-debugging tools) (`skyfall_training_tests`), including an
+  autopilot that flies (and fights) all 480 level / aircraft / mode combinations, a check of all 61 missions on all 14 locations and
   the combat bot flying the campaign over other locations (`ctest`).
 
 Read more: [Architecture](docs/ARCHITECTURE.md) · [Physics](docs/PHYSICS.md) ·
@@ -312,7 +378,7 @@ procedural and fictional. Aircraft are original procedural meshes (not licensed 
 are clean silhouettes rather than photoreal assets. OpenGL is deprecated on macOS; a Metal renderer
 is a roadmap item. The Computer
 Vision Laboratory is planned, not implemented yet. Academy and campaign-location limits (Everest,
-sea for level 10, the missions and combinations the test bots do not complete) are listed in
+sea for levels 19-20, the missions and combinations the test bots do not complete) are listed in
 [docs/TRAINING.md](docs/TRAINING.md#known-limits).
 
 ## License

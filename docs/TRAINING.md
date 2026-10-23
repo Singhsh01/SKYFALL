@@ -1,38 +1,73 @@
 # Training Academy and the Campaign on Every Location
 
-Two additions to SKYFALL v0.8: a **Training Academy** of ten graded courses with a live
-instructor, and the **61-mission campaign over any world location** (with your choice of aircraft
-and paint scheme). In the Skyfall Desert the campaign is exactly the original.
+The **Training Academy** has twenty courses with a live instructor: flying first, then
+helicopters and weapons, one-on-one air combat against the F-16, Su-35, Su-57 and F-35, mixed
+missions and a carrier finale. The **61-mission campaign** flies over any world location (with
+your choice of aircraft and paint scheme); in the Skyfall Desert it is exactly the original.
 
 ## Where to find them
 
-* Title → **TRAINING ACADEMY**: level list (medals, locks), location, aircraft, handling mode,
-  optional corridor markers, level details, a route preview drawn on the map of the loaded
-  location, your record for the chosen aircraft (best score, medal, attempts, best time) and the
-  medals of all eight aircraft, then **LAUNCH**.
+* Title → **TRAINING ACADEMY**: all twenty levels in two columns (all open, a green dot marks a
+  completed level), location, aircraft, handling mode, optional corridor markers, level details,
+  a route preview drawn on the map of the loaded location, your record for the chosen aircraft
+  (completed or not, best score, attempts, best time) and which aircraft have completed the level,
+  then **LAUNCH**.
 * Title → **CAMPAIGN**: the 61-mission grid of earlier releases, with **LOCATION**, **AIRCRAFT**
   and **PAINT** pickers below it (arrow keys, Enter, or click the left / right half). Completed
   missions are ticked per location.
 
-## The ten levels
+## The twenty levels
 
 | # | Level | Recommended location | Content |
 |---|---|---|---|
 | 1 | Scramble & Takeoff | Skyfall Desert | cold start, takeoff, climb-out, navigation circuit, runway landing |
-| 2 | Mountain Navigation | Matterhorn | valley navigation with speed and altitude discipline |
-| 3 | Low-Altitude Flight | Glen Coe | low-level glens and passes under a ceiling |
-| 4 | Obstacle Manoeuvring | Guilin | pillar slalom, arches, under a bridge, mast slalom, compound overflight |
-| 5 | Advanced Aircraft Control | Mount Fuji | level / climbing / descending turns, high G, loop, roll, unusual-attitude recovery |
-| 6 | Precision Terrain Following | Geirangerfjord | tight height windows, arches |
-| 7 | High-Speed Tactical Navigation | Grand Canyon | fast canyon run, compounds, masts, viaduct |
-| 8 | Challenging Refuelling Approach | Torres del Paine | mountain route, tanker rendezvous, guided refuelling |
-| 9 | Long-Distance Tactical Flight | Aconcagua | terrain navigation, obstacles, formation with a lead, refuelling, precision waypoints |
-| 10 | Final Pilot Qualification | Musandam | everything, ending with a carrier trap |
+| 2 | Handling & Rings | Mount Fuji | level / climbing / descending turns, high G, loop, roll, recovery, then ring gates |
+| 3 | Mountain Navigation | Matterhorn | valley navigation with speed and altitude discipline |
+| 4 | Low-Level & Obstacles | Guilin | low-level valleys under a ceiling, pillar slalom, arches |
+| 5 | Helicopter Interception | Geirangerfjord | valley transit, two transport helicopters flying low |
+| 6 | Outpost Attack | Wadi Rum | two armed attack helicopters over a forward outpost, then its armour (ATS missiles) |
+| 7 | Cannon Gunnery | Erg Chebbi | guns only: three target drones on a racetrack |
+| 8 | Missile Employment | Rio de Janeiro | missiles only: four drones, then two ground targets |
+| 9 | F-16 Engagement | Grand Canyon | one-on-one against an armed F-16 (veteran) |
+| 10 | Su-35 Engagement | Aconcagua | one-on-one against an armed Su-35 (veteran) |
+| 11 | Su-57 Engagement | Torres del Paine | one-on-one against an Su-57 flown by an ace |
+| 12 | F-35 Engagement | Glen Coe | one-on-one against an F-35 flown by an ace |
+| 13 | Helicopter Swarm | Musandam (at dusk) | six helicopters, two of them armed |
+| 14 | Combined Air & Ground | Mount Fuji | two fighters over an outpost, then its armour and anti-aircraft guns (they fire back) |
+| 15 | High-Speed Mountain Combat | Grand Canyon | high-speed canyon run, then two bandits |
+| 16 | Formation & Interception | Geirangerfjord | terrain following, formation with a lead, intercept of two bandits |
+| 17 | Defensive Flying | Rio de Janeiro (at dusk) | survive 90 s with two attackers behind you (flares, breaks), then shoot them down |
+| 18 | Multi-Target & Refuel | Torres del Paine | strike on an outpost with a fighter, attack helicopters and ground targets, then the tanker |
+| 19 | Carrier Strike & Recovery | Rio de Janeiro | sink three armed patrol boats near the fleet, then a carrier trap |
+| 20 | Final Pilot Qualification | Musandam | valleys, pillars and arches, an intercept, the tanker, a carrier trap |
 
 Every level starts with a radio briefing (the captain), then aircraft- and mode-specific advice
-from the instructor; it ends with a debrief card (seven category scores, total, medal, new-best
-flag). Any level can be flown on any downloaded location except: level 10 needs open sea (Skyfall
-Desert, Musandam, Rio de Janeiro), and **Everest is not offered in the Academy** (see limits).
+from the instructor; it ends with a debrief card (category scores including COMBAT, total score,
+kills, a new-best flag) and a spoken remark on the score. There are **no medals, rewards or
+locks**. Any level can be flown on any downloaded location except: levels 19 and 20 need open sea
+(Skyfall Desert, Musandam, Rio de Janeiro), and **Everest is not offered in the Academy**.
+
+### How the combat exercises work
+
+* A combat exercise is a COMBAT section (`SectionKind::Engage`, `Engagement` in `Training.hpp`).
+  Bandits are spawned 7.5 km ahead of you when the section begins (in the defensive exercise,
+  2.6 km behind you), at a safe height above the terrain; target drones fly a fixed racetrack.
+  Helicopters fly circles 60-150 m above the ground around the target area (they climb ahead of
+  rising ground), attack helicopters fire their cannon inside 1.5 km; ground targets stand at
+  the area (one of the map's forward operating bases, see the world detail), ships sail circles.
+* Helicopters are new flying targets (`GroundKind::Helicopter`): the air-to-air missile locks them
+  like an aircraft (the air-to-surface missile and the gun work too); shot down, they fall and
+  spin to the ground.
+* The exercise ends when every target is destroyed (or, defensively, when the time is survived).
+  Weapons are reloaded to a full load at the start; gunnery is guns only, missile employment is
+  missiles only; during a long fight the range slowly resupplies one missile of each kind and a
+  third of a gun belt every 15 s.
+* Shot down: the replay, then **R** retries the exercise from its checkpoint with fresh enemies.
+* After a fight the route home is rejoined at the gate that makes the shortest way back (at least
+  3 km away, with room to descend). Anywhere on a route, circling near a gate for 45 s without
+  getting through it moves the route on (counted as a miss), so nobody is trapped at one gate.
+* The instructor coaches the fight: splash calls and targets left, missile and bandit-on-your-six
+  warnings, too low, out of missiles, overshooting a helicopter, the switch to the ATS missile.
 
 ## How a course is built (`src/mission/Training.cpp`)
 
@@ -65,7 +100,7 @@ same course):
 The instructor talks continuously and in context: section intros, upcoming turns and headings,
 passes and canyons, speed / height / ceiling corrections, terrain and obstacle warnings, gate hits
 and misses, manoeuvre coaching, formation and refuelling cues, the approach (glide path, line-up,
-speed), touchdown or trap and the medal. The tower, your lead and the tanker have their own calls.
+speed), touchdown or trap, combat calls and the closing remark on the score. The tower, your lead and the tanker have their own calls.
 Every line is fixed text from a finite vocabulary, so all of it is in the neural voice pack
 (`assets/voice`, Kokoro-82M); captions are always shown, and the system voice reads any line that
 has no recording. Urgent calls interrupt; chatter only plays into silence.
@@ -75,13 +110,17 @@ obstacle gates blue, approach rings amber), HUD markers with distance and gate n
 height window and speed band, optional corridor beads (Academy menu toggle), the section list with
 progress, and approach guidance.
 
-## Scoring, medals, retries, progress (`src/mission/Progress.cpp`)
+## Scoring, retries, progress (`src/mission/Progress.cpp`)
 
 Categories (0-100, only those the level uses): waypoint accuracy, manoeuvring, altitude / speed
-discipline, terrain clearance, stability / control, refuelling, landing. Medals: bronze 62,
-silver 78, gold 90. A crash shows the replay and then **R retries from the last checkpoint** (the
-start of the section, with the aircraft state saved there). History is kept per level and per
-aircraft (best score, best medal, attempts, best time); a medal on level N unlocks level N+1.
+discipline, terrain clearance, stability / control, refuelling, landing and combat (damage taken
+and time over the estimate). There are no medals and no locks: all twenty levels are open. A crash
+shows the replay and then **R retries from the last checkpoint** (the start of the section, with
+the aircraft state saved there). History is kept per level and per aircraft: completed (yes / no),
+best score, attempts and best time. Records of the earlier ten-level academy are carried over to
+the level that grew out of each one (old 1 → 1, 5 → 2, 2 → 3, 3 and 4 → 4, 7 → 15, 6 → 16,
+8 and 9 → 18, 10 → 20); the old keys stay in the settings file untouched, so older builds still
+read them.
 
 ## The campaign on every location (`src/mission/CampaignWorld.cpp`)
 
@@ -112,17 +151,24 @@ maps are 32 x 32 km, so a mission keeps its layout and is fitted to the location
 
 ## Tests (`tests/training_tests.cpp`, `skyfall_training_tests`)
 
-* `courses_are_valid_on_every_location` — all 10 levels × 14 locations (level 10 on the three sea
-  locations): builds, 15.5-20 min, on the map, ≥ 30 m above the ground, ≤ 4.5 g corners, glide
-  limits, no gate cut by an obstacle, tanker / formation / carrier present where expected.
+* `courses_are_valid_on_every_location` — all 20 levels × 14 locations (levels 19 and 20 on the
+  three sea locations): builds, 15.5-20 min, on the map, ≥ 30 m above the ground, ≤ 4.5 g corners,
+  glide limits, no gate cut by an obstacle, tanker / formation / carrier present where expected,
+  every combat level has its engagements with targets and an area on the map.
 * `courses_are_deterministic`.
 * `bot_flies_every_level_with_every_aircraft_in_every_mode` — an autopilot bot flies the real
-  flight model (no teleports) through all 10 levels × 8 aircraft × 3 handling modes on the
-  recommended locations: takeoff, gates, manoeuvres, formation, refuelling, runway landing or
-  carrier trap. It must land (or trap) without running the tanks dry.
+  flight model (no teleports) through all 20 levels × 8 aircraft × 3 handling modes on the
+  recommended locations: takeoff, gates, manoeuvres, formation, combat (it hunts every target with
+  the permitted weapons against the real AI, retrying from the checkpoint when shot down, as a
+  player would with R), refuelling, runway landing or carrier trap. It must destroy every target
+  and land (or trap) without running the tanks dry. `SKY_LEVELS=a-b` runs a range of levels.
 * `every_training_radio_call_is_in_the_voice_vocabulary` — every call heard in 40 real flights is
   in the voice pack's line list.
-* `academy_progress_medals_history_and_unlocks`.
+* `academy_progress_history_without_medals_or_locks` — all levels open, completion, best score,
+  per-aircraft history, the carry-over of the ten-level records, no medal words in the remarks.
+* `world_detail_is_populated_on_every_location` — the army compound, forward bases, traffic and
+  lights on every map; nothing on water or the runway; no tall prop in the path between any two
+  consecutive Academy gates.
 * `campaign_is_laid_out_on_every_location` — all 61 missions on all 14 locations (812 mission
   layouts): targets on suitable ground / water, waves, start and tanker clear of the terrain and
   on the map, the carrier on open water, the landing on the runway, every objective group
@@ -142,15 +188,21 @@ maps are 32 x 32 km, so a mission keeps its layout and is fitted to the location
 
 ## Known limits
 
-* The bot flies 239 of the 240 level / aircraft / mode combinations on the recommended locations;
-  the exception (Su-35, assisted, level 9 at Aconcagua: pillar slalom at 4.5 km) is listed in the
-  test. On other locations the bot completes most but not all combinations (it is a bot, not a
+* The bot flies 472 of the 480 level / aircraft / mode combinations on the recommended locations
+  (last full run). The eight it does not finish are listed in the test with the reason: it loses
+  the dogfight eight times in a row (F-35 ace in level 12 in the Su-30, simulation; the two
+  veterans of level 15 in the F-35 and Su-35, assisted), it chases a bandit into the sea (level 17,
+  Su-30, assisted), or its gate autopilot sinks a heavy jet into the terrain on the way home after
+  a fight (levels 10, 15, 16, 18 in the F-35 / Su-57). These are limits of the test bot's flying,
+  not of the courses: the same course is finished by the other aircraft and modes. On other locations the bot completes most but not all combinations (it is a bot, not a
   proof that a human cannot). Sweep over the 13 Academy locations (129 courses each): F-16 arcade
   127, F-16 assisted 125, F-16 simulation 122, Su-30 assisted 124, F-35 simulation 120; most
   failures are on Everest-like high terrain (Everest itself is in the sweep but not the Academy).
 * Everest is not offered in the Academy (5-8 km terrain: the low-level obstacle work exceeds
   several jets' performance in that air). The campaign does fly there.
-* Level 10 needs open sea: only Skyfall Desert, Musandam and Rio de Janeiro.
+* Levels 19 and 20 need open sea: only Skyfall Desert, Musandam and Rio de Janeiro.
+* The AI pilots are the campaign's: an ace is genuinely hard. A fast, clean bot flight finishes a
+  combat level in 10-15 minutes; the 15-20 minute estimates assume a human-paced fight.
 * The estimate is 15.5-20 min; a fast, clean flight (like the bot's, especially in arcade mode)
   takes less, about 12-17 minutes.
 * Campaign over other locations: the combat bot (assisted, F-22, up to 3 attempts) wins 48 of

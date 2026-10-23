@@ -59,6 +59,15 @@
 * **Scene resolution is decoupled from window pixels**: the 3D scene renders at the window size
   in points × quality scale; the HUD is drawn at native Retina resolution.
 
+## World detail
+
+* `sim/WorldDetail` (called at the end of `WorldLayout::build`) places props (`SceneProp`), night
+  lights (`LightPoint`), military sites and traffic lanes / cars on every map, deterministically.
+  Cars are a pure function of time (`WorldLayout::carAt`), so replays and every view agree.
+* `render/Props` merges all props into culled static meshes (a few draw calls per km²); traffic
+  is one dynamic mesh rebuilt per frame; windows carry a vertex-alpha flag the lit shader turns
+  into glass by day and lit windows at night (`Lighting::night`).
+
 ## Training Academy and the campaign on every location
 
 * `mission/Training` builds a `Course` (sections, gates, obstacles, tanker, formation loop,
