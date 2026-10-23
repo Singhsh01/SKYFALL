@@ -62,6 +62,7 @@ struct Engagement {
     bool jetsArmed = true;
     bool jetsOnRoute = false;              // fly a fixed racetrack (gunnery / missile drones)
     int transportHelis = 0, attackHelis = 0;
+    int friendlyHelis = 0;                 // own helicopters among them (IFF: green, never targets)
     bool helisArmed = false;
     std::vector<int> ground;               // GroundKind of each ground target / ship
     bool groundArmed = false;
@@ -71,6 +72,7 @@ struct Engagement {
     WeaponRule rule = WeaponRule::Any;
     double surviveSeconds = 0;             // > 0: defensive exercise, survive this long
     int continueFrom = -1;                 // >= 0: fight the survivors of that engagement (no new spawns)
+    bool fromBase = false;                 // bandits launch in formation from an enemy base and fly at you
 };
 
 enum class RouteStyle { Navigation, Valley, LowLevel, Precision, HighSpeed, Obstacles, Transit, Approach };
@@ -98,6 +100,7 @@ struct Course {
     std::vector<Obstacle> obstacles;
     std::vector<Prop> props;               // military compound (static, unarmed)
     bool coldStart = false;
+    bool carrierStart = false;             // catapult launch from the carrier (deck)
     Vec3 startPos;                         // takeoff position on the runway (CG height excluded)
     double startHeading = 0;               // takeoff heading (rad, 0 = +X)
     // tanker
@@ -274,14 +277,14 @@ private:
     double flightTime_ = 0;
     bool refuelRequired_ = false, refuelDone_ = false;
     // combat
-    struct Spawned { std::vector<int> jets, ground; };
+    struct Spawned { std::vector<int> jets, ground, friendly; };
     std::vector<Spawned> spawned_;          // per engagement
     int engagement_ = -1;                   // the running one
     int kills_ = 0, targets_ = 0;
     double combatTime_ = 0, combatDamage_ = 0, lastHealth_ = 100;
     std::vector<double> combatScores_;
     int playerMissiles_ = 6, playerAgms_ = 4, playerRounds_ = 480, playerFlares_ = 3;
-    double surviveTimer_ = 0, resupply_ = 0;
+    double surviveTimer_ = 0, resupply_ = 0, routeRefresh_ = 0;
     int lastAlive_ = -1;
     // checkpoints
     struct Checkpoint {

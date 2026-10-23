@@ -17,7 +17,7 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 | Non-critical HUD panels at 55 % | ✅ | |
 | Armour-inspired paint schemes for all 8 aircraft | ✅ | 8 new, 24 total |
 | Populated maps: military sites, civilian props, traffic, night lighting | ✅ | `WorldDetail`, tested on 14 maps |
-| 20-level Academy with helicopters and air combat, no medals / locks | ✅ | bot flies 472 / 480 combinations |
+| 20-level Academy with helicopters and air combat, no medals / locks | ✅ | carrier launches, IFF, formations from bases; bot finishes 465 / 480 |
 | Reference video of the requested look | ⬜ | could not be opened from the build environment |
 
 ## Core (spec sections A–D)

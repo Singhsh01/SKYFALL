@@ -20,26 +20,26 @@ your choice of aircraft and paint scheme); in the Skyfall Desert it is exactly t
 
 | # | Level | Recommended location | Content |
 |---|---|---|---|
-| 1 | Scramble & Takeoff | Skyfall Desert | cold start, takeoff, climb-out, navigation circuit, runway landing |
-| 2 | Handling & Rings | Mount Fuji | level / climbing / descending turns, high G, loop, roll, recovery, then ring gates |
-| 3 | Mountain Navigation | Matterhorn | valley navigation with speed and altitude discipline |
-| 4 | Low-Level & Obstacles | Guilin | low-level valleys under a ceiling, pillar slalom, arches |
-| 5 | Helicopter Interception | Geirangerfjord | valley transit, two transport helicopters flying low |
-| 6 | Outpost Attack | Wadi Rum | two armed attack helicopters over a forward outpost, then its armour (ATS missiles) |
-| 7 | Cannon Gunnery | Erg Chebbi | guns only: three target drones on a racetrack |
-| 8 | Missile Employment | Rio de Janeiro | missiles only: four drones, then two ground targets |
-| 9 | F-16 Engagement | Grand Canyon | one-on-one against an armed F-16 (veteran) |
-| 10 | Su-35 Engagement | Aconcagua | one-on-one against an armed Su-35 (veteran) |
-| 11 | Su-57 Engagement | Torres del Paine | one-on-one against an Su-57 flown by an ace |
-| 12 | F-35 Engagement | Glen Coe | one-on-one against an F-35 flown by an ace |
-| 13 | Helicopter Swarm | Musandam (at dusk) | six helicopters, two of them armed |
-| 14 | Combined Air & Ground | Mount Fuji | two fighters over an outpost, then its armour and anti-aircraft guns (they fire back) |
+| 1 | Carrier Scramble & Safe Takeoff | Skyfall Desert | catapult launch from the carrier (a runway cold start on maps without sea), climb-out, navigation circuit, runway landing |
+| 2 | Aircraft Handling & Waypoint Rings | Mount Fuji | level / climbing / descending turns, high G, loop, roll, recovery, then ring gates |
+| 3 | Mountain Navigation & Terrain Avoidance | Matterhorn | valley navigation with speed and altitude discipline |
+| 4 | Low-Altitude Tactical Flight | Guilin | low-level valleys under a ceiling, pillar slalom, arches |
+| 5 | Helicopter Identification & Interception | Geirangerfjord | four helicopters in the valleys: two hostile (red), two of ours (green IFF, never lockable) |
+| 6 | Helicopter Attack at a Military Outpost | Wadi Rum | two armed attack helicopters over a forward outpost, then its armour (ATS missiles) |
+| 7 | Cannon Targeting & Precision Engagement | Erg Chebbi | guns only: three target drones on a racetrack |
+| 8 | Missile Locking & Air-to-Air Combat | Rio de Janeiro | missiles only on four drones, then a fight with an armed bandit |
+| 9 | F-16 Interception | Grand Canyon | one-on-one against an armed F-16 (veteran) |
+| 10 | Su-35 Dogfight Training | Aconcagua | one-on-one against an armed Su-35 (veteran) |
+| 11 | Advanced Su-57 Interception | Torres del Paine | one-on-one against an Su-57 flown by an ace |
+| 12 | F-35 Tactical Engagement | Glen Coe | one-on-one against an F-35 flown by an ace |
+| 13 | Multiple Helicopter Threats | Musandam (at dusk) | six hostile helicopters, two of them armed, with one of ours among them |
+| 14 | Combined Air & Ground Attack | Mount Fuji | two fighters launch in formation from their base to cover an outpost, then its armour and anti-aircraft guns |
 | 15 | High-Speed Mountain Combat | Grand Canyon | high-speed canyon run, then two bandits |
-| 16 | Formation & Interception | Geirangerfjord | terrain following, formation with a lead, intercept of two bandits |
-| 17 | Defensive Flying | Rio de Janeiro (at dusk) | survive 90 s with two attackers behind you (flares, breaks), then shoot them down |
-| 18 | Multi-Target & Refuel | Torres del Paine | strike on an outpost with a fighter, attack helicopters and ground targets, then the tanker |
-| 19 | Carrier Strike & Recovery | Rio de Janeiro | sink three armed patrol boats near the fleet, then a carrier trap |
-| 20 | Final Pilot Qualification | Musandam | valleys, pillars and arches, an intercept, the tanker, a carrier trap |
+| 16 | Enemy Formation Interception | Geirangerfjord | terrain following, then a three-ship formation launching from its base (it breaks and turns in at 9 km) |
+| 17 | Advanced Defensive Flying | Rio de Janeiro (at dusk) | survive 90 s with two attackers behind you (flares, breaks), then shoot them down |
+| 18 | Multi-Target Combat & Refuelling | Torres del Paine | low-level route, strike on an outpost with a fighter, attack helicopters and ground targets, then the tanker |
+| 19 | Carrier Strike Mission & Recovery | Rio de Janeiro | catapult launch, sink three armed patrol boats near the fleet, then a carrier trap |
+| 20 | Final Advanced Combat Qualification | Musandam | valleys, pillars and arches, bandits launching from their base, the tanker, a carrier trap |
 
 Every level starts with a radio briefing (the captain), then aircraft- and mode-specific advice
 from the instructor; it ends with a debrief card (category scores including COMBAT, total score,
@@ -55,6 +55,12 @@ locks**. Any level can be flown on any downloaded location except: levels 19 and
   Helicopters fly circles 60-150 m above the ground around the target area (they climb ahead of
   rising ground), attack helicopters fire their cannon inside 1.5 km; ground targets stand at
   the area (one of the map's forward operating bases, see the world detail), ships sail circles.
+* Bandits "from a base" (levels 14, 16, 20) take off in echelon from the farthest military site
+  within 16 km and fly at you in formation; they break and engage at 9 km (or as soon as one is
+  hit). Own helicopters (levels 5 and 13) fly among the hostiles: the IFF marks them green on the
+  HUD and minimap and no weapon locks or hits them, so the job is to tell them apart.
+* Levels 1 and 19 start on the carrier's catapult (afterburner, brake off, the shot) on maps with
+  open sea; level 1 falls back to a runway cold start elsewhere.
 * Helicopters are new flying targets (`GroundKind::Helicopter`): the air-to-air missile locks them
   like an aircraft (the air-to-surface missile and the gun work too); shot down, they fall and
   spin to the ground.
@@ -188,13 +194,13 @@ maps are 32 x 32 km, so a mission keeps its layout and is fitted to the location
 
 ## Known limits
 
-* The bot flies 472 of the 480 level / aircraft / mode combinations on the recommended locations
-  (last full run). The eight it does not finish are listed in the test with the reason: it loses
-  the dogfight eight times in a row (F-35 ace in level 12 in the Su-30, simulation; the two
-  veterans of level 15 in the F-35 and Su-35, assisted), it chases a bandit into the sea (level 17,
-  Su-30, assisted), or its gate autopilot sinks a heavy jet into the terrain on the way home after
-  a fight (levels 10, 15, 16, 18 in the F-35 / Su-57). These are limits of the test bot's flying,
-  not of the courses: the same course is finished by the other aircraft and modes. On other locations the bot completes most but not all combinations (it is a bot, not a
+* Last full run: the bot finishes 465 of the 480 level / aircraft / mode combinations on the
+  recommended locations. In 11 it loses the fight (shot down nine times in a row by the AI in
+  levels 12-17 and 20; the test reports these and fails if they exceed 5 %), and 4 are listed
+  bot limitations (its gate autopilot sinks a heavy jet into the terrain on the way home in
+  levels 9, 10 and 18, or it chases a bandit into the sea in level 17). These are limits of the
+  test bot's flying, not of the courses: the same course is finished by the other aircraft and
+  modes, and which fights it loses changes from run to run. On other locations the bot completes most but not all combinations (it is a bot, not a
   proof that a human cannot). Sweep over the 13 Academy locations (129 courses each): F-16 arcade
   127, F-16 assisted 125, F-16 simulation 122, Su-30 assisted 124, F-35 simulation 120; most
   failures are on Everest-like high terrain (Everest itself is in the sweep but not the Academy).

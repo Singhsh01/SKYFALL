@@ -38,7 +38,7 @@ copyrighted models, textures, sounds or code from commercial games.
 | ![Forested valleys and fields, Glen Coe](docs/screenshots/landscape_glencoe.jpg) | ![Patchwork farmland below Mount Fuji](docs/screenshots/landscape_farmland.jpg) |
 | ![Training Academy: levels, record and route preview](docs/screenshots/academy_menu.jpg) | ![Campaign: 61 missions over any location, aircraft and paint](docs/screenshots/campaign_location.jpg) |
 | ![Academy combat: helicopters, an outpost, an F-16, the 20-level menu](docs/screenshots/academy_combat.jpg) | ![Dusk and night: city lights, the army compound, traffic](docs/screenshots/world_night.jpg) |
-| ![Armour-inspired paint schemes](docs/screenshots/skins_armor.jpg) | |
+| ![Armour-inspired paint schemes](docs/screenshots/skins_armor.jpg) | ![Academy: catapult scramble, IFF, an enemy formation from its base](docs/screenshots/academy_carrier_iff_formation.jpg) |
 | ![Academy level 4: pillar slalom with the instructor](docs/screenshots/academy_pillars.jpg) | ![Academy level 10: carrier approach guidance](docs/screenshots/academy_carrier_approach.jpg) |
 
 > Screenshots are captured from the running executable (`skyfall --capture`) on a Linux
@@ -65,12 +65,14 @@ scripts (`build_mac.sh`, `run.sh`, `build_web.sh`) work as before.
 
 ## New in v0.9
 
-* **Twenty-level Training Academy** — flying (scramble, handling and rings, mountains, low level
-  and obstacles), then helicopters and weapons (helicopter interception, an attack on an outpost
-  defended by attack helicopters, cannon gunnery, missile employment), one-on-one fights against
-  the **F-16, Su-35, Su-57 and F-35**, a helicopter swarm, combined air and ground attack,
-  high-speed mountain combat, formation and interception, defensive flying, a strike with
-  refuelling, a carrier strike with recovery and the final qualification. Helicopters are new
+* **Twenty-level Training Academy** — a carrier scramble off the catapult, handling and waypoint
+  rings, mountains and terrain avoidance, low-altitude tactical flight, helicopter identification
+  (own helicopters among the hostiles, IFF) and interception, a helicopter attack at an outpost,
+  cannon and missile training with an armed bandit, one-on-one fights against the **F-16, Su-35,
+  Su-57 and F-35**, multiple helicopter threats, combined air and ground attack, high-speed
+  mountain combat, an enemy formation launching from its base, advanced defensive flying,
+  multi-target combat with refuelling, a carrier strike from the catapult with carrier recovery,
+  and the final combat qualification. Helicopters are new
   flying targets (the air-to-air missile locks them). **All levels are open; there are no
   medals or rewards**; completion, best score, attempts and times are kept per aircraft (records
   of the old ten levels carry over). The instructor coaches the fights. See
@@ -362,7 +364,7 @@ X gear, Y camera, d-pad yaw.
   map store.
 * `tests/` — 56 simulation / campaign tests (`skyfall_tests`) and 15 Academy / world /
   campaign-location tests (plus course-debugging tools) (`skyfall_training_tests`), including an
-  autopilot that flies (and fights) all 480 level / aircraft / mode combinations, a check of all 61 missions on all 14 locations and
+  autopilot that flies (and fights) all 480 level / aircraft / mode combinations (465 finished in the last run), a check of all 61 missions on all 14 locations and
   the combat bot flying the campaign over other locations (`ctest`).
 
 Read more: [Architecture](docs/ARCHITECTURE.md) · [Physics](docs/PHYSICS.md) ·

@@ -1724,7 +1724,7 @@ void Game::drawTitle() {
     float x = 70 * s, y = 222 * s, bw = 430 * s, bh = 48 * s, gap = 8 * s;
     if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "61 missions over any world location, your aircraft and paint")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; locStatus_.clear(); nav_.focus = 0; return; }
     y += bh + gap;
-    if (ui::button(nav_, 1, {x, y, bw, bh}, "TRAINING ACADEMY", "20 courses with an instructor: flying, helicopters, air combat")) { audio_.play(Sfx::Click); openAcademy(); return; }
+    if (ui::button(nav_, 1, {x, y, bw, bh}, "TRAINING ACADEMY", "20 courses: carrier, flying, helicopters, air combat")) { audio_.play(Sfx::Click); openAcademy(); return; }
     y += bh + gap;
     if (ui::button(nav_, 2, {x, y, bw, bh}, "DOGFIGHT ARENA", "Bandit waves over " + terrain_.info().name)) { audio_.play(Sfx::Click); startArenaBriefed(); return; }
     y += bh + gap;
@@ -2514,7 +2514,7 @@ int Game::runCapture() {
                 run(2);
                 std::vector<int> js, gs;
                 training_.engagementTargets(js, gs);
-                expect(gs.size() == 2 && battle_.ground().size() == before + 2 && battle_.ground()[static_cast<size_t>(gs[0])].airborne(), "two helicopters in the air");
+                expect(gs.size() == 2 && battle_.ground().size() == before + 4 && battle_.ground()[static_cast<size_t>(gs[0])].airborne(), "two hostile and two friendly helicopters in the air");
             }
         }
         startTitle();
@@ -2737,11 +2737,17 @@ int Game::runCapture() {
     if (set == "combat") {
         // Academy combat exercises: the targets of levels 5, 6, 9 and 13 seen from the cockpit view
         hideHud_ = false;
-        for (int lv : {5, 6, 9, 13}) {
+        for (int lv : {1, 5, 16, 13}) {
             acLocation_ = trainingLevel(lv).location;
             startTraining(lv);
             for (int k = 0; k < 5; ++k) frame(1.0 / 60.0, false);   // the world switch happens in frame()
             if (mode_ != GameMode::Training || !mission_) continue;
+            if (lv == 1) {   // on the catapult
+                camMode_ = CameraMode::Chase; chaseInit_ = false;
+                scriptedStep(2.0, [&](double) { updateRadioQueue(); setInput(0, 0, 0, 1.0); });
+                snap("combat_l1_catapult", 3);
+                continue;
+            }
             const Course& c = training_.course();
             size_t eng = c.sections.size();
             for (size_t k = 0; k < c.sections.size(); ++k) if (c.sections[k].kind == SectionKind::Engage) { eng = k; break; }
@@ -2755,7 +2761,7 @@ int Game::runCapture() {
             p.fm->resetAirborne(at, hdg, 200, 0.7);
             mission_->skipTo(eng);
             camMode_ = CameraMode::Chase; chaseInit_ = false;
-            scriptedStep(e.jets.empty() ? 6.0 : 14.0, [&](double) { updateRadioQueue(); setInput(0, 0, 0, 0); });
+            scriptedStep(e.jets.empty() ? 6.0 : (e.fromBase ? 40.0 : 14.0), [&](double) { updateRadioQueue(); setInput(0, 0, 0, 0); });
             snap("combat_l" + std::to_string(lv), 3);
         }
         return 0;

@@ -283,7 +283,7 @@ void Game::startTraining(int level) {
     lighting_ = Lighting::preset(tod_);
     rain_ = false;
     terrain_.setObstacles(course.obstacles);
-    if (course.carrier) terrain_.setDeck(course.deck);
+    if (course.carrier || course.carrierStart) terrain_.setDeck(course.deck);
     else terrain_.clearDeck();
     const int aircraft = settings_.aircraft;
     Jet& p = battle_.createPlayer(static_cast<AircraftId>(aircraft));
@@ -292,6 +292,7 @@ void Game::startTraining(int level) {
     FlightState& st = p.fm->mutableState();
     st.pos = {course.startPos.x, course.startPos.y + FlightModel::kGearHeight, course.startPos.z};
     st.q = Quat::fromEuler(course.startHeading, 0, 0);
+    if (course.carrierStart) p.fm->resetOnCatapult();
     applySettings();
     training_ = TrainingSession{};
     training_.begin(course, battle_, aircraft, settings_.handling);
