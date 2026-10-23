@@ -2734,6 +2734,32 @@ int Game::runCapture() {
         hideHud_ = false;
         return 0;
     }
+    if (set == "combat") {
+        // Academy combat exercises: the targets of levels 5, 6, 9 and 13 seen from the cockpit view
+        hideHud_ = false;
+        for (int lv : {5, 6, 9, 13}) {
+            acLocation_ = trainingLevel(lv).location;
+            startTraining(lv);
+            for (int k = 0; k < 5; ++k) frame(1.0 / 60.0, false);   // the world switch happens in frame()
+            if (mode_ != GameMode::Training || !mission_) continue;
+            const Course& c = training_.course();
+            size_t eng = c.sections.size();
+            for (size_t k = 0; k < c.sections.size(); ++k) if (c.sections[k].kind == SectionKind::Engage) { eng = k; break; }
+            if (eng >= c.sections.size()) continue;
+            const Engagement& e = c.engagements[static_cast<size_t>(c.sections[eng].value)];
+            Jet& p = battle_.player();
+            Vec3 at = e.jets.empty() ? e.area + Vec3{-2600, 0, -900} : p.fm->state().pos;
+            if (!e.jets.empty()) at.y = std::max(at.y, terrain_.surfaceHeight(at.x, at.z) + 1500.0);
+            else at.y = terrain_.surfaceHeight(at.x, at.z) + 420.0;
+            double hdg = e.jets.empty() ? std::atan2(e.area.z - at.z, e.area.x - at.x) : toEuler(p.fm->state().q).heading;
+            p.fm->resetAirborne(at, hdg, 200, 0.7);
+            mission_->skipTo(eng);
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            scriptedStep(e.jets.empty() ? 6.0 : 14.0, [&](double) { updateRadioQueue(); setInput(0, 0, 0, 0); });
+            snap("combat_l" + std::to_string(lv), 3);
+        }
+        return 0;
+    }
     if (set == "populated") {
         // populated world: army compound, forward base, streets, traffic, by day, dusk and night
         hideHud_ = true;
