@@ -1346,7 +1346,6 @@ struct Builder {
         // go-around pattern (flown only after a miss): climb out straight ahead, then a
         // constant-radius turn back round to the same run-in point as the first approach
         {
-            Vec3 preGate = c.gates.back().pos;   // last gate of the return leg
             // the pattern rejoins the return leg a few km before the run-in point and then flies
             // its last gates again: those were built clear of the terrain on the way in
             int rEnd = static_cast<int>(c.gates.size());
@@ -3211,7 +3210,6 @@ void TrainingSession::beginEngagement(const Section& s, const MissionContext& ct
         }
         if (e.friendlyHelis > 0) say(Speaker::Instructor, kIff, 1, "iff", 60);
         // ground targets / ships around the area (on suitable ground or water)
-        int placed = 0;
         for (size_t k = 0; k < e.ground.size(); ++k) {
             GroundKind kind = static_cast<GroundKind>(e.ground[k]);
             bool naval = groundIsNaval(kind);
@@ -3233,7 +3231,6 @@ void TrainingSession::beginEngagement(const Section& s, const MissionContext& ct
             if (naval) { g.pathCenter = e.area; g.pathRadius = std::hypot(p.x - e.area.x, p.z - e.area.z) + 1.0; g.pathAngle = std::atan2(p.z - e.area.z, p.x - e.area.x); }
             g.label = std::string(groundKindName(kind)) + " " + std::to_string(k + 1);
             sp.ground.push_back(battle.addGround(g));
-            ++placed;
         }
     }
     // weapons for the exercise: a full load, restricted by the rule

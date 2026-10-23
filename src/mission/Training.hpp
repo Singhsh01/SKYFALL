@@ -251,7 +251,6 @@ private:
     std::vector<double> manoeuvreScores_;
     // formation
     int leadId_ = -1;
-    size_t leadRouteBase_ = 0;
     double slotTime_ = 0, formationTime_ = 0;
     bool inSlot_ = false;
     // refuel
@@ -268,9 +267,8 @@ private:
     std::vector<double> gateScores_;
     int gatesHit_ = 0, gatesMissed_ = 0;
     double disciplineTime_ = 0, disciplineGood_ = 0;
-    double gpwsTime_ = 0, lowTime_ = 0, unstableTime_ = 0;
+    double lowTime_ = 0, unstableTime_ = 0;
     int nearMisses_ = 0;
-    double obstacleNearTimer_ = 0;
     int crashes_ = 0;
     int handling_ = 1;
     double unstableHold_ = 0;
@@ -301,12 +299,10 @@ private:
     std::vector<std::pair<std::string, double>> cooldowns_;
     double clock_ = 0;
     int variantCounter_ = 0;
-    int lastHeadingCalled_ = -1;
     double offCourseTimer_ = 0;
     double prevDist_ = 1e18;
     int announcedCueGate_ = -1;
     bool briefedApproach_ = false;
-    double landingCallTimer_ = 0;
     double sectionStartSim_ = 0, sectionClock_ = 0;
     double refuelScore_ = 0;
     int boltersSeen_ = 0, goArounds_ = 0, wire_ = 0;

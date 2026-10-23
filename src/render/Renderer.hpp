@@ -199,7 +199,6 @@ private:
     int trafficCap_ = 0;
     struct CarTemplate { std::vector<float> pos, nrm; std::vector<unsigned char> col; };
     CarTemplate carTpl_[6];
-    double lastTrafficTime_ = -1;
     Dressing dressing_;
     std::vector<CloudPuff> puffs_;
 
