@@ -1,5 +1,5 @@
-// Player progress for the Training Academy (best medal / score / attempts per level and aircraft,
-// progressive unlocks) and the campaign on each world location (completed missions per location).
+// Player progress for the Training Academy (completion, best score, attempts and time per level
+// and aircraft) and the campaign on each world location (completed missions per location).
 // Stored in the settings file's free-form key/value section, so older builds keep it intact.
 #pragma once
 
@@ -11,20 +11,22 @@
 namespace sky {
 
 struct AcademyRecord {
-    int medal = 0;          // Medal as int (0 none .. 3 gold)
+    bool done = false;      // finished the level at least once (completion status)
     double best = 0;        // best total score
     int attempts = 0;
     double seconds = 0;     // flight time of the best run
 };
+/// The record of a level for one aircraft. Records from the ten-level academy are carried over
+/// to the level that grew out of each of them (see Progress.cpp).
 AcademyRecord academyRecord(const Settings& s, int level, int aircraft);
 /// Records a finished run; returns true if it is a new best for this level and aircraft.
 bool recordAcademyResult(Settings& s, int level, int aircraft, const ScoreCard& card);
 /// Counts an attempt (started run) without a result.
 void recordAcademyAttempt(Settings& s, int level, int aircraft);
-/// Best medal on a level over all aircraft.
-int academyBestMedal(const Settings& s, int level);
-/// Level 1 is open; level n opens with at least a bronze medal on level n-1 (any aircraft).
-bool academyUnlocked(const Settings& s, int level);
+/// Finished in any aircraft.
+bool academyCompleted(const Settings& s, int level);
+/// Every level is open: there are no locks, medals or rewards.
+inline bool academyUnlocked(const Settings&, int level) { return level >= 1 && level <= kTrainingLevels; }
 
 /// Campaign missions completed on a world location (the Skyfall Desert keeps the original
 /// campaign_done record).

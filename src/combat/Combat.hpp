@@ -125,6 +125,7 @@ enum class GroundKind { Tank, Truck, AAA, SAM, Bunker, Radar,
                         ParkedJet,  // aircraft parked on an airfield
                         Ammo,       // earth-covered ammunition bunker
                         Substation, // electrical transformer yard
+                        Helicopter, // flying: transport or (armed) attack helicopter, targetable by ATA and ATS
                         Count };
 
 /// Display name, missile aim height above the base, hit radius and default health per kind.
@@ -134,7 +135,7 @@ double groundHitRadius(GroundKind k);
 double groundMaxHealth(GroundKind k);
 inline bool groundIsNaval(GroundKind k) { return k == GroundKind::OilRig || k == GroundKind::Ship; }
 /// Kinds that shoot at aircraft when armed.
-inline bool groundShootsAir(GroundKind k) { return k == GroundKind::AAA || k == GroundKind::Gun || k == GroundKind::Ship || k == GroundKind::SAM; }
+inline bool groundShootsAir(GroundKind k) { return k == GroundKind::AAA || k == GroundKind::Gun || k == GroundKind::Ship || k == GroundKind::SAM || k == GroundKind::Helicopter; }
 inline bool groundOnRail(GroundKind k) { return k == GroundKind::Locomotive || k == GroundKind::Wagon; }
 
 struct GroundTarget {
@@ -155,6 +156,12 @@ struct GroundTarget {
     double length = 0;        // bridges: span length (m); heading gives the span direction
     int group = 0;            // mission objective group (0 = not an objective)
     bool armed = true;        // false for range targets that never shoot back
+    // helicopters: fly a circle (pathCenter / pathRadius) at flyAgl above the ground
+    double flyAgl = 0;        // > 0: airborne
+    double flySpeed = 38;     // m/s along the circle
+    bool attack = false;      // attack helicopter (fires its cannon at aircraft when armed)
+    double fallV = 0;         // shot down: vertical speed of the falling wreck
+    bool airborne() const { return kind == GroundKind::Helicopter && alive && flyAgl > 0; }
 };
 
 enum class EventType { Explosion, SmallExplosion, Hit, JetKilled, GroundKilled, MissileLaunch, FlaresOut,
@@ -222,6 +229,11 @@ public:
     Jet& createPlayer(AircraftId id);
     void start(const BattleConfig& cfg);   // spawn allies, enemies and ground forces
     void clearCombatants();                // remove everything except the player
+    /// Removes one aircraft (not the player); missiles aimed at it go ballistic.
+    void removeJet(int id);
+    /// Takes a ground target out of play without an explosion (training retries).
+    void retireGround(int index);
+    GroundTarget& groundMut(int index) { return ground_[static_cast<size_t>(index)]; }
 
     // ---- scripted scenarios (campaign) ----
     /// Adds a ground target; y is set from the terrain (sea surface for naval kinds), health from the kind.

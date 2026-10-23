@@ -334,7 +334,7 @@ void Renderer::shutdown() {
     UnloadMesh(flame_); UnloadMesh(missile_);
     UnloadMesh(tank_); UnloadMesh(truck_); UnloadMesh(aaa_); UnloadMesh(sam_); UnloadMesh(bunker_); UnloadMesh(radar_);
     for (Mesh* m : {&gun_, &artillery_, &oilRig_, &fuelTank_, &hangar_, &command_, &ship_, &powerPlant_, &refinery_, &bridgeDeck_,
-                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_, &carrier_})
+                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_, &carrier_, &heli_, &heliAttack_, &heliRotor_})
         UnloadMesh(*m);
     if (obstacleMeshValid_) UnloadMesh(obstacleMesh_);
     if (ringMesh_.vertexCount) { UnloadMesh(ringMesh_); UnloadMesh(beaconMesh_); }
@@ -609,6 +609,18 @@ void Renderer::buildGroundModels() {
         for (int i = 0; i < 4; ++i) m.box({-15.0f + i * 10.0f, 8.0f, 8.0f}, {0.6f, 16.0f, 0.6f}, darkSteel);
         m.box({0, 15.5f, 8.0f}, {32.0f, 0.5f, 0.5f}, darkSteel);
         substation_ = m.build();
+    }
+    {
+        // helicopters (flying targets): bodies without the main rotor, which spins separately
+        MeshBuilder a, b, r;
+        buildHelicopter(a, MatrixIdentity(), Color{92, 98, 84, 255}, false, false);
+        buildHelicopter(b, MatrixIdentity(), Color{70, 76, 66, 255}, true, false);
+        heli_ = a.build();
+        heliAttack_ = b.build();
+        Color blade = {40, 42, 44, 255};
+        for (int k = 0; k < 4; ++k) r.box({3.9f, 0, 0}, {7.8f, 0.07f, 0.5f}, blade, MatrixRotateY(k * PI / 2));
+        r.cylinder({0, -0.15f, 0}, 0.45f, 0.3f, 8, blade);
+        heliRotor_ = r.build();
     }
     {
         MeshBuilder m;  // four-engine tanker / transport (original), nose towards +X
@@ -1223,6 +1235,21 @@ void Renderer::drawGroundTargets(const FrameParams& f) {
                 drawMeshC(bridgePier_, litMat_, MatrixMultiply(MatrixMultiply(MatrixTranslate(x, 0, 0), R), T));
             }
             drawCalls_ += piers + 1;
+            continue;
+        }
+        if (g.kind == GroundKind::Helicopter) {
+            // tilted nose-down in forward flight; the main rotor spins (stops on the wreck)
+            Matrix tilt = MatrixRotateZ(g.airborne() ? -0.10f : 0.0f);
+            Matrix body = MatrixMultiply(MatrixMultiply(tilt, R), T);
+            drawMeshC(g.attack ? heliAttack_ : heli_, litMat_, body);
+            float hub = g.attack ? 4.12f : 4.9f;
+            float spin = g.alive ? static_cast<float>(f.time * 21.0) : 0.6f;
+            drawMeshC(heliRotor_, litMat_, MatrixMultiply(MatrixMultiply(MatrixRotateY(spin), MatrixTranslate(g.attack ? -0.2f : -0.4f, hub, 0)), body));
+            drawCalls_ += 2;
+            if (g.alive && f.L.night > 0.2f) {
+                Vector3 c = toRl(g.pos);
+                if (std::fmod(f.time + g.pathAngle, 1.2) < 0.15) lights_.push_back({Vector3Add(c, {0, 1.0f, 0}), 1.2f, Color{255, 40, 30, 255}});
+            }
             continue;
         }
         drawMeshC(*m, litMat_, MatrixMultiply(R, T));

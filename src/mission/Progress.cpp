@@ -5,14 +5,37 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 namespace sky {
 
 namespace {
+// v2 records (twenty levels): "done,best,attempts,seconds"
 std::string academyKey(int level, int aircraft) {
+    char b[48];
+    std::snprintf(b, sizeof b, "academy2_l%02d_a%d", level, aircraft);
+    return b;
+}
+// v1 records (the ten-level academy): "medal,best,attempts,seconds", kept untouched for older builds
+std::string academyKeyV1(int level, int aircraft) {
     char b[48];
     std::snprintf(b, sizeof b, "academy_l%02d_a%d", level, aircraft);
     return b;
+}
+/// The old levels each new level grew out of (scramble 1, control 5, mountains 2, low level 3 and
+/// obstacles 4, high speed 7, terrain following 6, refuelling 8, long distance 9, final 10).
+std::vector<int> oldLevelsFor(int level) {
+    switch (level) {
+        case 1: return {1};
+        case 2: return {5};
+        case 3: return {2};
+        case 4: return {3, 4};
+        case 15: return {7};
+        case 16: return {6};
+        case 18: return {8, 9};
+        case 20: return {10};
+        default: return {};
+    }
 }
 std::string campKey(const std::string& loc) { return "campaign_" + loc; }
 }  // namespace
@@ -20,15 +43,29 @@ std::string campKey(const std::string& loc) { return "campaign_" + loc; }
 AcademyRecord academyRecord(const Settings& s, int level, int aircraft) {
     AcademyRecord r;
     auto it = s.extra.find(academyKey(level, aircraft));
-    if (it == s.extra.end()) return r;
-    std::sscanf(it->second.c_str(), "%d,%lf,%d,%lf", &r.medal, &r.best, &r.attempts, &r.seconds);
-    r.medal = std::clamp(r.medal, 0, 3);
+    if (it != s.extra.end()) {
+        int done = 0;
+        std::sscanf(it->second.c_str(), "%d,%lf,%d,%lf", &done, &r.best, &r.attempts, &r.seconds);
+        r.done = done != 0;
+        return r;
+    }
+    // carried over from the ten-level academy
+    for (int old : oldLevelsFor(level)) {
+        auto o = s.extra.find(academyKeyV1(old, aircraft));
+        if (o == s.extra.end()) continue;
+        int medal = 0, attempts = 0;
+        double best = 0, sec = 0;
+        std::sscanf(o->second.c_str(), "%d,%lf,%d,%lf", &medal, &best, &attempts, &sec);
+        r.attempts += attempts;
+        if (best > r.best) { r.best = best; r.seconds = sec; }
+        if (medal > 0 || best > 0) r.done = true;
+    }
     return r;
 }
 
 static void store(Settings& s, int level, int aircraft, const AcademyRecord& r) {
     char b[96];
-    std::snprintf(b, sizeof b, "%d,%.1f,%d,%.0f", r.medal, r.best, r.attempts, r.seconds);
+    std::snprintf(b, sizeof b, "%d,%.1f,%d,%.0f", r.done ? 1 : 0, r.best, r.attempts, r.seconds);
     s.extra[academyKey(level, aircraft)] = b;
 }
 
@@ -45,21 +82,15 @@ bool recordAcademyResult(Settings& s, int level, int aircraft, const ScoreCard& 
         r.best = card.total;
         r.seconds = card.flightSeconds;
     }
-    r.medal = std::max(r.medal, static_cast<int>(card.medal));
+    r.done = true;
     store(s, level, aircraft, r);
     return best;
 }
 
-int academyBestMedal(const Settings& s, int level) {
-    int m = 0;
-    for (int a = 0; a < static_cast<int>(AircraftId::Count); ++a) m = std::max(m, academyRecord(s, level, a).medal);
-    return m;
-}
-
-bool academyUnlocked(const Settings& s, int level) {
-    if (level <= 1) return true;
-    if (level > kTrainingLevels) return false;
-    return academyBestMedal(s, level - 1) >= static_cast<int>(Medal::Bronze);
+bool academyCompleted(const Settings& s, int level) {
+    for (int a = 0; a < static_cast<int>(AircraftId::Count); ++a)
+        if (academyRecord(s, level, a).done) return true;
+    return false;
 }
 
 bool campaignCompletedAt(const Settings& s, const std::string& loc, int n) {

@@ -2441,7 +2441,7 @@ int Game::runCapture() {
         run(30);
         expect(trainingDone_, "course completion shows the debrief");
         AcademyRecord rec = academyRecord(settings_, 1, settings_.aircraft);
-        std::printf("flow: level 1 record medal %d best %.0f attempts %d\n", rec.medal, rec.best, rec.attempts);
+        std::printf("flow: level 1 record done %d best %.0f attempts %d\n", rec.done ? 1 : 0, rec.best, rec.attempts);
         openAcademy();
         expect(screen_ == Screen::Academy && mode_ == GameMode::None, "back to the academy");
         // the campaign in the desert: the original mission, completion saved
@@ -2455,11 +2455,11 @@ int Game::runCapture() {
         // a level at another location: the world is switched first
         if (locationAvailable("fuji")) {
             acLocation_ = "fuji";
-            startTraining(5);
+            startTraining(2);
             run(5);
-            expect(terrain_.info().id == "fuji" && mode_ == GameMode::Training && trainingLevel_ == 5, "level 5 at Mount Fuji (location switch)");
+            expect(terrain_.info().id == "fuji" && mode_ == GameMode::Training && trainingLevel_ == 2, "level 2 at Mount Fuji (location switch)");
             run(120);
-            expect(!playerDead_, "level 5 runs");
+            expect(!playerDead_, "level 2 runs");
         }
         // the campaign over another location: the world is switched first, progress kept apart
         if (locationAvailable("guilin")) {
@@ -2492,13 +2492,31 @@ int Game::runCapture() {
         // carrier level at Musandam
         if (locationAvailable("musandam")) {
             acLocation_ = "musandam";
-            startTraining(10);
+            startTraining(20);
             run(5);
-            expect(terrain_.info().id == "musandam" && mode_ == GameMode::Training && training_.course().carrier && terrain_.deck().active, "level 10 with the carrier at Musandam");
+            expect(terrain_.info().id == "musandam" && mode_ == GameMode::Training && training_.course().carrier && terrain_.deck().active, "level 20 with the carrier at Musandam");
         }
-        // L10 refuses a location without sea
+        // the carrier levels refuse a location without sea
         acLocation_ = "matterhorn";
-        expect(academyLocationFor(10) == "musandam", "level 10 keeps a sea location");
+        expect(academyLocationFor(20) == "musandam" && academyLocationFor(19) == "rio", "the carrier levels keep a sea location");
+        // a combat level: the engagement spawns its targets when its section begins
+        if (locationAvailable("geiranger")) {
+            acLocation_ = "geiranger";
+            startTraining(5);
+            run(5);
+            const Course& c5 = training_.course();
+            size_t eng = c5.sections.size();
+            for (size_t k = 0; k < c5.sections.size(); ++k) if (c5.sections[k].kind == SectionKind::Engage) { eng = k; break; }
+            expect(eng < c5.sections.size(), "level 5 has a combat section");
+            if (eng < c5.sections.size()) {
+                size_t before = battle_.ground().size();
+                mission_->skipTo(eng);
+                run(2);
+                std::vector<int> js, gs;
+                training_.engagementTargets(js, gs);
+                expect(gs.size() == 2 && battle_.ground().size() == before + 2 && battle_.ground()[static_cast<size_t>(gs[0])].airborne(), "two helicopters in the air");
+            }
+        }
         startTitle();
         std::printf("flow: %d failures\n", fails);
         return fails == 0 ? 0 : 1;
@@ -2512,16 +2530,16 @@ int Game::runCapture() {
         startTitle(); nav_.focus = 1;
         snap("academy_00_title", 2);
         acLocation_ = loc;
-        for (int lv : {1, 4, 9}) {
+        for (int lv : {1, 6, 14}) {
             openAcademy(); acLevel_ = lv; nav_.focus = lv - 1;
             snap("academy_01_menu_l" + std::to_string(lv), 2);
         }
         setCampaignLocation(loc);
         startTitle(); screen_ = Screen::Campaign; nav_.focus = 13;
         snap("academy_02_campaign", 2);
-        // in flight: level 4 (obstacles) and level 10 (carrier) at this location
+        // in flight: level 4 (obstacles) and level 20 (carrier) at this location
         hideHud_ = false;
-        for (int lv : {4, 9, 10}) {
+        for (int lv : {4, 20}) {
             if (!academyLocationAllowed(loc, lv)) continue;
             startTraining(lv);
             if (mode_ != GameMode::Training) continue;
@@ -2535,7 +2553,7 @@ int Game::runCapture() {
                 const Section& sec = c.sections[k];
                 bool obstacle = sec.style == RouteStyle::Obstacles && sec.gateEnd > sec.gateBegin;
                 bool landing = sec.kind == SectionKind::Landing || sec.kind == SectionKind::CarrierLanding;
-                if ((lv == 10 && landing) || (lv != 10 && obstacle)) { target = k; break; }
+                if ((lv == 20 && landing) || (lv != 20 && obstacle)) { target = k; break; }
             }
             if (target == 0) continue;
             const Section& sec = c.sections[target];

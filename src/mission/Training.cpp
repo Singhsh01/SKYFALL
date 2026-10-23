@@ -16,57 +16,109 @@ namespace sky {
 // Levels
 // =============================================================================================
 const std::vector<TrainingLevelDef>& trainingLevels() {
+    // Flying first (1-4), then helicopters and weapons (5-8), one-on-one air combat against the
+    // F-16, Su-35, Su-57 and F-35 (9-12), then mixed missions (13-18) and the carrier finale.
     static const std::vector<TrainingLevelDef> k = {
         {1, "Scramble & Takeoff", "Cold start, takeoff, climb-out and a navigation circuit, then a runway landing.", 1, "desert", false,
          {"Captain, welcome to the Training Academy. Today is a scramble: cold start, takeoff, climb-out and a navigation circuit around the range.",
           "Start the engine with E, release the brakes with B and run the throttle up with W. Rotate at flying speed, climb, gear up.",
           "Then fly the navigation gates at a comfortable height and bring it back to the runway. Fly it smooth, Captain."},
          {"Engine start", "Takeoff and climb", "High-level navigation", "Runway landing"}},
-        {2, "Mountain Navigation", "Waypoints through mountain valleys at controlled speed and altitude.", 2, "matterhorn", false,
+        {2, "Handling & Rings", "Banked turns, climbing and descending turns, high G, loop, roll and recovery, then the rings.", 2, "fuji", false,
+         {"Captain, aircraft control today. Coordinated banked turns, a climbing turn, a descending turn, high G, a loop, a roll and an unusual attitude recovery.",
+          "I want precise bank angles and you holding your height in the level turn. Smooth on the stick, positive on the recovery.",
+          "Between the exercises you will fly short legs around the mountain."},
+         {"Level turns", "Climbing / descending turns", "High G", "Loop and roll", "Recovery", "Ring gates"}},
+        {3, "Mountain Navigation", "Waypoints through mountain valleys at controlled speed and altitude.", 2, "matterhorn", false,
          {"Captain, today you navigate the high valleys. The gates follow the valley floors between the peaks.",
           "Hold your speed in the band and keep the height I give you. Look ahead to the next gate before you reach this one.",
           "Finish with a landing back at base."},
          {"Valley navigation", "Speed discipline", "Altitude discipline", "Runway landing"}},
-        {3, "Low-Altitude Flight", "Narrow valleys, mountain passes and steep terrain, low and fast.", 3, "glencoe", false,
-         {"Captain, low level today. You stay down in the glens, under the ceiling, through the passes and the steep ground.",
+        {4, "Low-Level & Obstacles", "Narrow valleys and passes, low and fast, then pillars and arches.", 3, "guilin", false,
+         {"Captain, low level today. You stay down in the valleys, under the ceiling, through the passes and the steep ground.",
           "The ground comes up fast here. Keep the wings level when you can and use small corrections; big inputs at low level kill.",
-          "If I call terrain, pull up first and think later."},
-         {"Low-level valleys", "Mountain passes", "Terrain clearance", "Runway landing"}},
-        {4, "Obstacle Manoeuvring", "Rock pillars, arches, a bridge, masts and a military compound.", 4, "guilin", false,
-         {"Captain, the obstacle course. Rock pillars to slalom, natural arches to fly through, a bridge to go under and masts in the industrial zone.",
-          "Slow down for the obstacles; speed makes the turns wide. Line up early and look through the gap, not at the rock.",
-          "Then overfly the military compound above the minimum height and come home."},
-         {"Pillar slalom", "Arches", "Under the bridge", "Mast slalom", "Compound overflight"}},
-        {5, "Advanced Aircraft Control", "Banked turns, climbing and descending turns, high G, loop, roll and recovery.", 3, "fuji", false,
-         {"Captain, aircraft control today. Coordinated banked turns, a climbing turn, a descending turn, high G, a loop, a roll and an unusual attitude recovery.",
-          "I want precise bank angles and you holding your height in the level turn. Smooth on the stick, positive on the recovery.",
-          "Between the exercises you will fly short legs around the mountain."},
-         {"Level turns", "Climbing / descending turns", "High G", "Loop and roll", "Recovery"}},
-        {6, "Precision Terrain Following", "Winding valleys with tight altitude windows, gate after gate.", 4, "geiranger", false,
-         {"Captain, precision terrain following through the fjords. Every gate has a height window; stay inside it.",
-          "The gates come quickly. Manage your speed so the turns stay tight, and fly the line between the gates, not just the gates.",
-          "There are arches on the way. Bring it home clean."},
-         {"Terrain following", "Altitude windows", "Speed management", "Arches"}},
-        {7, "High-Speed Tactical Navigation", "Fast routes through canyons, compounds and industry.", 4, "grand_canyon", false,
-         {"Captain, high-speed tactical navigation. You will run the canyon fast, overfly the compounds and thread the industrial zone.",
-          "At this speed your turns are wide. Start them early and use the whole gate.",
-          "Watch the minimum heights over the compounds."},
-         {"High-speed canyon run", "Compound overflights", "Mast slalom", "Runway landing"}},
-        {8, "Challenging Refuelling Approach", "A demanding mountain route, then a climb to the tanker and guided refuelling.", 4, "torres_paine", false,
-         {"Captain, a demanding mountain route first, then a climb to the tanker for air-to-air refuelling.",
-          "On the tanker, match its speed, stabilise behind the basket and push the probe in gently. Small corrections only.",
-          "When the transfer is complete, clear the tanker and come home."},
-         {"Low-level mountain route", "Tanker rendezvous", "Air-to-air refuelling", "Runway landing"}},
-        {9, "Long-Distance Tactical Flight", "Terrain navigation, obstacles, formation, refuelling and precision waypoints.", 5, "aconcagua", false,
-         {"Captain, a long tactical flight: terrain navigation, an obstacle course, formation with your lead, refuelling and precision waypoints.",
-          "In formation you fly right echelon: behind and to the right of the lead. Hold it there.",
-          "Then the tanker, and the precision waypoints are small. Fly them carefully."},
-         {"Terrain navigation", "Obstacles", "Formation flying", "Refuelling", "Precision waypoints"}},
-        {10, "Final Pilot Qualification", "Takeoff, valleys, mountains, obstacles, the tanker and a carrier landing.", 5, "musandam", true,
+          "Then the rock pillars and the arches. Slow down for them, line up early and look through the gap."},
+         {"Low-level valleys", "Terrain clearance", "Pillar slalom", "Arches", "Runway landing"}},
+        {5, "Helicopter Interception", "Find and shoot down two transport helicopters flying low through the valleys.", 3, "geiranger", false,
+         {"Captain, two helicopters are moving low through the valleys. Find them and shoot them down.",
+          "Helicopters are slow and they hug the ground. Do not overshoot: slow down, come in from above and behind, and use the gun or the air-to-air missile.",
+          "Watch the terrain while you hunt. Then bring it home."},
+         {"Valley transit", "Helicopter search", "Slow-speed gunnery", "Runway landing"}},
+        {6, "Outpost Attack", "Attack helicopters and armour defend a forward outpost. Destroy them all.", 3, "wadi_rum", false,
+         {"Captain, an enemy outpost in the hills. Attack helicopters patrol over it and armour is dug in inside the walls.",
+          "Kill the helicopters first, they shoot back. Then switch to the air-to-surface missile with Q and take out the armour from a shallow dive.",
+          "Keep moving over the outpost and do not fly low and slow over the guns."},
+         {"Navigation to the outpost", "Attack helicopters", "Air-to-surface missiles", "Runway landing"}},
+        {7, "Cannon Gunnery", "Guns only: three target drones on a racetrack.", 3, "erg_chebbi", false,
+         {"Captain, gunnery today. Three target drones fly a racetrack over the range. Guns only.",
+          "Get in close, inside six hundred metres, put the pipper on the target and give it short bursts. Lead the turn.",
+          "Watch your speed: do not overshoot, and do not fly through the debris."},
+         {"Pursuit", "Gun tracking", "Energy management", "Runway landing"}},
+        {8, "Missile Employment", "Missiles only: four airborne drones, then two ground targets.", 3, "rio", false,
+         {"Captain, missile employment. Four drones in the air, then two ground targets on the range.",
+          "Air-to-air missiles: get the target in front of you, wait for the lock tone, then fire. One missile per target.",
+          "For the ground targets switch to the air-to-surface missile with Q, lock and fire."},
+         {"Lock and launch", "Target cycling", "Air-to-surface", "Runway landing"}},
+        {9, "F-16 Engagement", "One-on-one against an F-16: light, quick in the roll, a hard turner.", 4, "grand_canyon", false,
+         {"Captain, your first real fight. One F-16, armed, flown by an experienced pilot.",
+          "The Viper turns hard and rolls fast. Do not try to out-turn it at low speed: use the vertical and keep your energy.",
+          "If he launches, flares and break turn. Kill him and come home."},
+         {"Basic fighter manoeuvres", "Missile defence", "Guns kill", "Runway landing"}},
+        {10, "Su-35 Engagement", "One-on-one against an Su-35: big, powerful and super-manoeuvrable.", 4, "aconcagua", false,
+         {"Captain, today the Flanker. An Su-35, armed, with thrust vectoring.",
+          "At low speed it can point its nose almost anywhere. Stay fast, make him bleed energy, and take the shot when he slows down.",
+          "Flares and break turn if he launches. Then home."},
+         {"Energy fighting", "Missile defence", "Missile kill", "Runway landing"}},
+        {11, "Su-57 Engagement", "One-on-one against an Su-57 flown by an ace.", 5, "torres_paine", false,
+         {"Captain, the Felon. An Su-57 flown by an ace.",
+          "He is fast, stealthy and he will not make many mistakes. Fight at your best speed, watch your six and use the terrain.",
+          "Get the kill, then come home."},
+         {"Ace opponent", "Defensive manoeuvres", "Weapons employment", "Runway landing"}},
+        {12, "F-35 Engagement", "One-on-one against an F-35: sensors and missiles first, then a turning fight.", 5, "glencoe", false,
+         {"Captain, the Lightning. An F-35 flown by an ace.",
+          "He will try to shoot you from range. Deny him the shot: use the valleys, close the distance, and fight him close in.",
+          "Kill him and come home."},
+         {"Ace opponent", "Missile defence", "Close-in fight", "Runway landing"}},
+        {13, "Helicopter Swarm", "Six helicopters over the hills, two of them armed.", 4, "musandam", false,
+         {"Captain, six helicopters over the hills, two of them attack helicopters that will shoot back.",
+          "Work methodically: take the attack helicopters first, then the transports. Do not fixate on one target and fly into the ground.",
+          "Then come home."},
+         {"Multiple targets", "Attack helicopters", "Target priority", "Runway landing"}},
+        {14, "Combined Air & Ground", "A forward outpost with armour and guns, protected by two fighters.", 4, "fuji", false,
+         {"Captain, combined operations. Two fighters protect an enemy outpost with armour and anti-aircraft guns.",
+          "Deal with the fighters first, then attack the outpost with the air-to-surface missile and the gun.",
+          "The guns at the outpost shoot back. Keep your speed up over the target and do not loiter."},
+         {"Air superiority", "Ground attack", "Threat avoidance", "Runway landing"}},
+        {15, "High-Speed Mountain Combat", "A fast canyon run, then a fight with two bandits among the peaks.", 5, "grand_canyon", false,
+         {"Captain, a high-speed canyon run, then two bandits waiting among the peaks.",
+          "Fight around the terrain: use the ridges to break their lock, and never pull into the rock.",
+          "Then come home."},
+         {"High-speed canyon run", "Two-versus-one", "Terrain masking", "Runway landing"}},
+        {16, "Formation & Interception", "Formation with your lead, then intercept two bandits.", 4, "geiranger", false,
+         {"Captain, formation today, then an intercept. Join on your lead's right wing and hold the position.",
+          "When the lead breaks away, two bandits are inbound. Intercept them and shoot them down.",
+          "Then come home."},
+         {"Terrain following", "Formation flying", "Intercept", "Runway landing"}},
+        {17, "Defensive Flying", "Survive ninety seconds against two attackers, then turn the fight.", 5, "rio", false,
+         {"Captain, defensive flying. Two attackers, and they start behind you.",
+          "For ninety seconds, survive: flares and hard turns into each missile, change altitude, use your speed.",
+          "Then turn the fight around and shoot them down."},
+         {"Missile defence", "Flares and break turns", "Reversal", "Runway landing"}},
+        {18, "Multi-Target & Refuel", "A mountain route, a mixed strike on air and ground targets, then the tanker.", 5, "torres_paine", false,
+         {"Captain, a long mission: a mountain route, a strike on an enemy outpost with its fighter cover, then the tanker.",
+          "Watch your fuel and your weapons. After the strike, climb to the tanker, refuel and come home.",
+          "Fly it like a real mission, Captain."},
+         {"Mountain route", "Mixed targets", "Air-to-air refuelling", "Runway landing"}},
+        {19, "Carrier Strike & Recovery", "Strike the patrol boats near the fleet, then recover aboard the carrier.", 5, "rio", true,
+         {"Captain, a carrier strike. Enemy patrol boats are threatening the fleet. Sink them.",
+          "The boats are armed: attack from a shallow dive with the air-to-surface missile and keep moving.",
+          "Then recover aboard the carrier. Fly the ball, keep your line-up and do not flare."},
+         {"Maritime strike", "Air-to-surface", "Carrier approach", "Carrier landing"}},
+        {20, "Final Pilot Qualification", "Valleys, obstacles, air combat, the tanker and a carrier landing.", 5, "musandam", true,
          {"Captain, this is your final qualification. Everything you have learned, in one flight.",
-          "Valleys, mountain navigation, the obstacle course and the tanker. Then you recover aboard the carrier.",
+          "Valleys, mountain navigation, the obstacle course, an intercept and the tanker. Then you recover aboard the carrier.",
           "On the carrier approach, fly the ball, keep your line-up and do not flare. Good luck, Captain."},
-         {"Valleys and mountains", "Obstacle course", "Refuelling", "Carrier landing"}},
+         {"Valleys and obstacles", "Air combat", "Refuelling", "Carrier landing"}},
     };
     return k;
 }
@@ -74,22 +126,6 @@ const std::vector<TrainingLevelDef>& trainingLevels() {
 const TrainingLevelDef& trainingLevel(int number) {
     const auto& L = trainingLevels();
     return L[std::clamp(number, 1, kTrainingLevels) - 1];
-}
-
-const char* medalName(Medal m) {
-    switch (m) {
-        case Medal::Gold: return "GOLD";
-        case Medal::Silver: return "SILVER";
-        case Medal::Bronze: return "BRONZE";
-        default: return "NOT QUALIFIED";
-    }
-}
-
-Medal medalFor(double total) {
-    if (total >= 90.0) return Medal::Gold;
-    if (total >= 78.0) return Medal::Silver;
-    if (total >= 62.0) return Medal::Bronze;
-    return Medal::None;
 }
 
 double approachHeight(const Course& c, double d) {
@@ -101,13 +137,12 @@ double approachHeight(const Course& c, double d) {
 double approachSlope(const Course& c, double d) { return std::tan((d <= c.glideBreak ? c.glideDeg : c.glideOuterDeg) * kDeg); }
 
 ScoreCard finalizeScore(ScoreCard c) {
-    const double w[7] = {25, 15, 15, 15, 10, 10, 10};
-    const double v[7] = {c.accuracy, c.manoeuvre, c.discipline, c.clearance, c.stability, c.refuel, c.landing};
+    const double w[8] = {25, 15, 15, 15, 10, 10, 10, 25};
+    const double v[8] = {c.accuracy, c.manoeuvre, c.discipline, c.clearance, c.stability, c.refuel, c.landing, c.combat};
     double sum = 0, wsum = 0;
-    for (int i = 0; i < 7; ++i)
+    for (int i = 0; i < 8; ++i)
         if (v[i] >= 0) { sum += w[i] * clampd(v[i], 0.0, 100.0); wsum += w[i]; }
     c.total = wsum > 0 ? sum / wsum : 0.0;
-    c.medal = medalFor(c.total);
     return c;
 }
 
@@ -199,6 +234,8 @@ std::string styleIntro(RouteStyle st) {
 // =============================================================================================
 // Builder
 // =============================================================================================
+const char* combatIntroText(int i);   // the combat intro lines (voiced), defined with the vocabulary
+
 struct Builder {
     const Terrain& t;
     const WorldLayout& L;
@@ -1545,6 +1582,60 @@ struct Builder {
         }
     }
 
+    // ---- combat -------------------------------------------------------------------------------
+    /// The forward outpost of the layout nearest the cursor (or low ground ahead if there is none).
+    Vec3 outpostArea() {
+        const MilitarySite* best = nullptr;
+        double bd = 1e18;
+        for (const MilitarySite& m : L.sites) {
+            if (m.airbase) continue;
+            double d = std::hypot(m.center.x - cursor.x, m.center.z - cursor.z);
+            for (const Vec3& u : used) if (std::hypot(u.x - m.center.x, u.z - m.center.z) < 500) d += 20000;   // not the same one twice
+            if (d < bd && insideMap(m.center, 2500.0)) { bd = d; best = &m; }
+        }
+        Vec3 a = best ? best->center : pickAnchor(6000, 11000, true);
+        a.y = surf(a.x, a.z);
+        used.push_back(a);
+        return a;
+    }
+    /// Navigation leg towards an area, ending short of it so no gate stands in the fight.
+    void toArea(Vec3 area, const std::string& title) {
+        double dist = std::hypot(area.x - cursor.x, area.z - cursor.z);
+        if (dist < 4000.0) return;
+        Vec3 d = hdir(area - cursor);
+        legTo(area - d * 2200.0, RouteStyle::Navigation, title);
+    }
+    /// Climb to a safe fighting height before an air-to-air exercise.
+    void climbToFight() {
+        climbTo(safeAltitudeHere(9000.0, 1500.0), "CLIMB TO THE COMBAT AREA", "Climb to a safe manoeuvring height.", 1100.0);
+    }
+    void engage(Engagement e, const std::string& title, const std::string& instruction, int intro, double est) {
+        if (e.jetAlt <= 0 && !e.jets.empty()) e.jetAlt = std::max(cursor.y, safeAltitudeHere(9000.0, 1300.0));
+        Section& s = add(SectionKind::Engage, RouteStyle::Transit, title, instruction, "", combatIntroText(intro), est);
+        s.value = static_cast<double>(c.engagements.size());
+        s.value2 = e.surviveSeconds;
+        c.engagements.push_back(e);
+    }
+    /// Open sea near the carrier for a maritime strike (deep water, a few km from the deck).
+    Vec3 seaArea(const DeckInfo& deck) {
+        Vec3 best = deck.center;
+        double bs = 1e18;
+        for (int k = 0; k < 24; ++k) {
+            double a = k * kPi / 12.0;
+            for (double r : {5000.0, 6500.0, 8000.0}) {
+                Vec3 p{deck.center.x + std::cos(a) * r, 0, deck.center.z + std::sin(a) * r};
+                if (!insideMap(p, 2000.0)) continue;
+                double deep = 0;
+                for (int q = 0; q < 8; ++q) deep = std::max(deep, t.height(p.x + std::cos(q * kPi / 4) * 900, p.z + std::sin(q * kPi / 4) * 900));
+                if (deep > -6.0) continue;   // every point around it must be sea
+                double sc = std::hypot(p.x - cursor.x, p.z - cursor.z) * 0.2 + r;
+                if (sc < bs) { bs = sc; best = p; }
+            }
+        }
+        best.y = 0;
+        return best;
+    }
+
     void finalize() {
         insertRidgeClimbs();
         clearObstacles();
@@ -1623,54 +1714,23 @@ void buildLevel(Builder& b, int level, int flex, const DeckInfo* deck, bool lite
             b.leg(st, n > 1 ? buf : title);
         }
     };
+    auto fight = [&](std::vector<int> jets, int skill, const std::string& title, int intro, double est) {
+        Engagement e;
+        e.jets = std::move(jets);
+        e.skill = skill;
+        b.engage(e, title, "Destroy the bandit" + std::string(e.jets.size() > 1 ? "s" : "") + ". Missiles and gun.", intro, est);
+    };
+    using AI = AircraftId;
+    auto I = [](AI a) { return static_cast<int>(a); };
+    auto G = [](GroundKind k) { return static_cast<int>(k); };
     switch (level) {
-        case 1:
+        case 1:   // scramble: cold start, navigation, landing
             b.departure(true);
             legs(RouteStyle::Navigation, flex, "NAVIGATION LEG");
             legs(RouteStyle::Valley, 1, "VALLEY INTRODUCTION");
             b.landRunway();
             break;
-        case 2:
-            b.departure(false);
-            legs(RouteStyle::Navigation, 1, "TO THE VALLEYS");
-            legs(RouteStyle::Valley, flex, "VALLEY NAVIGATION");
-            b.landRunway();
-            break;
-        case 3:
-            b.departure(false);
-            legs(RouteStyle::Valley, 1, "VALLEY WARM-UP");
-            legs(RouteStyle::LowLevel, flex, "LOW-LEVEL RUN");
-            b.landRunway();
-            break;
-        case 4: {
-            b.departure(false);
-            // obstacle blocks in a sensible order: the fixed sites (industrial masts, viaduct)
-            // are flown when the route passes near them, the free-standing ones near the cursor
-            const Town* it = b.L.industrialTown();
-            int bi = b.L.largestBridge(true);
-            if (bi < 0) bi = b.L.largestBridge(false);
-            bool mastsDone = false, viaductDone = lite;
-            auto nearFixed = [&](double range) {
-                if (!mastsDone && (!it || std::hypot(it->center.x - b.cursor.x, it->center.z - b.cursor.z) < range)) { b.masts(lite ? 4 : 5); mastsDone = true; }
-                if (!viaductDone && bi >= 0) {
-                    Vec3 m = (b.L.bridges[bi].a + b.L.bridges[bi].b) * 0.5;
-                    if (std::hypot(m.x - b.cursor.x, m.z - b.cursor.z) < range) { b.viaduct(); viaductDone = true; }
-                }
-            };
-            b.slalom(lite ? 5 : 6);
-            nearFixed(7000.0);
-            b.arches(lite ? 2 : 3);
-            nearFixed(7000.0);
-            b.spanBridge();
-            nearFixed(7000.0);
-            b.compound();
-            nearFixed(1e9);
-            nearFixed(1e9);
-            legs(RouteStyle::Valley, flex, "VALLEY RUN");
-            b.landRunway();
-            break;
-        }
-        case 5: {
+        case 2: {   // aircraft handling, then rings (gated legs)
             b.departure(false);
             {
                 // the manoeuvres are flown over the lowest ground in reach: on a high map the
@@ -1694,56 +1754,206 @@ void buildLevel(Builder& b, int level, int flex, const DeckInfo* deck, bool lite
                 b.climbTo(safe, "CLIMB FOR THE RECOVERY", "Climb to a safe manoeuvring height.", 1600.0);
                 b.manoeuvre(SectionKind::Recovery);
             }
-            legs(RouteStyle::Valley, flex, "VALLEY RUN");
+            legs(RouteStyle::Valley, flex, "RING RUN");
             b.landRunway();
             break;
         }
-        case 6:
+        case 3:   // mountain navigation
+            b.departure(false);
+            legs(RouteStyle::Navigation, 1, "TO THE VALLEYS");
+            legs(RouteStyle::Valley, flex, "VALLEY NAVIGATION");
+            b.landRunway();
+            break;
+        case 4:   // low level, then pillars and arches
             b.departure(false);
             legs(RouteStyle::Valley, 1, "VALLEY WARM-UP");
-            legs(RouteStyle::Precision, std::max(1, flex / 2), "TERRAIN FOLLOWING");
+            legs(RouteStyle::LowLevel, flex, "LOW-LEVEL RUN");
+            b.slalom(lite ? 4 : 5);
             b.arches(2);
-            legs(RouteStyle::Precision, flex - flex / 2, "TERRAIN FOLLOWING");
             b.landRunway();
             break;
-        case 7:
+        case 5: {   // helicopter interception in the valleys
             b.departure(false);
-            legs(RouteStyle::HighSpeed, std::max(1, flex / 2), "HIGH-SPEED RUN");
-            b.compound();
-            b.masts(4);
-            legs(RouteStyle::HighSpeed, flex - flex / 2, "HIGH-SPEED RUN");
-            b.viaduct();
+            legs(RouteStyle::Valley, flex, "VALLEY TRANSIT");
+            Vec3 area = b.pickAnchor(4500, 9000, true);
+            b.toArea(area, "TO THE HELICOPTERS");
+            Engagement e;
+            e.transportHelis = 2;
+            e.area = area;
+            e.radius = 900;
+            b.engage(e, "INTERCEPT THE HELICOPTERS", "Find and shoot down both helicopters. Slow down: gun or air-to-air missile.", 0, 170);
             b.landRunway();
             break;
-        case 8:
+        }
+        case 6: {   // attack helicopters and armour at an outpost
+            b.departure(false);
+            legs(RouteStyle::Navigation, flex, "NAVIGATION LEG");
+            Vec3 area = b.outpostArea();
+            b.toArea(area, "TO THE OUTPOST");
+            Engagement e;
+            e.attackHelis = 2;
+            e.helisArmed = true;
+            e.ground = {G(GroundKind::Tank), G(GroundKind::Tank), G(GroundKind::Truck)};
+            e.area = area;
+            e.radius = 700;
+            b.engage(e, "ATTACK THE OUTPOST", "Destroy the attack helicopters, then the armour (air-to-surface missile: Q).", 1, 230);
+            b.landRunway();
+            break;
+        }
+        case 7: {   // gunnery: guns only, drones on a racetrack
+            b.departure(false);
+            legs(RouteStyle::Navigation, flex, "NAVIGATION LEG");
+            b.climbToFight();
+            Engagement e;
+            e.jets = {I(AI::Su30), I(AI::MiG29), I(AI::Su30)};
+            e.skill = 0;
+            e.jetsArmed = false;
+            e.jetsOnRoute = true;
+            e.rule = WeaponRule::GunsOnly;
+            b.engage(e, "GUNNERY: THREE DRONES", "Guns only. Close in behind each drone and shoot it down.", 2, 220);
+            b.landRunway();
+            break;
+        }
+        case 8: {   // missiles: drones, then ground targets
+            b.departure(false);
+            legs(RouteStyle::Navigation, flex, "NAVIGATION LEG");
+            b.climbToFight();
+            Engagement e;
+            e.jets = {I(AI::MiG29), I(AI::Su30), I(AI::MiG29), I(AI::Su30)};
+            e.skill = 0;
+            e.jetsArmed = false;
+            e.jetsOnRoute = true;
+            e.rule = WeaponRule::MissilesOnly;
+            b.engage(e, "MISSILES: FOUR DRONES", "Missiles only. Lock each drone and fire.", 3, 170);
+            Vec3 area = b.pickAnchor(3500, 7000, true);
+            Engagement g;
+            g.ground = {G(GroundKind::Tank), G(GroundKind::Truck)};
+            g.area = area;
+            g.radius = 250;
+            g.rule = WeaponRule::MissilesOnly;
+            b.engage(g, "MISSILES: GROUND TARGETS", "Switch to the air-to-surface missile (Q), lock and fire.", 4, 110);
+            b.cursor = area;
+            b.landRunway();
+            break;
+        }
+        case 9: case 10: case 11: case 12: {   // one-on-one air combat
+            b.departure(false);
+            legs(level <= 10 ? RouteStyle::Navigation : RouteStyle::Valley, flex, level <= 10 ? "NAVIGATION LEG" : "VALLEY RUN");
+            b.climbToFight();
+            AI who = level == 9 ? AI::F16 : level == 10 ? AI::Su35 : level == 11 ? AI::Su57 : AI::F35;
+            fight({I(who)}, level <= 10 ? 1 : 2, std::string("ENGAGE THE ") + profile(who).shortName, 5 + (level - 9), level <= 10 ? 210 : 250);
+            b.landRunway();
+            break;
+        }
+        case 13: {   // helicopter swarm
+            b.departure(false);
+            legs(RouteStyle::Valley, flex, "VALLEY RUN");
+            Vec3 area = b.outpostArea();
+            b.toArea(area, "TO THE HELICOPTERS");
+            Engagement e;
+            e.transportHelis = 4;
+            e.attackHelis = 2;
+            e.helisArmed = true;
+            e.area = area;
+            e.radius = 1300;
+            b.engage(e, "HELICOPTER SWARM", "Shoot down all six helicopters. Attack helicopters first.", 9, 270);
+            b.landRunway();
+            break;
+        }
+        case 14: {   // fighters over an outpost, then the outpost
+            b.departure(false);
+            legs(RouteStyle::Navigation, flex, "NAVIGATION LEG");
+            Vec3 area = b.outpostArea();
+            b.toArea(area, "TO THE OUTPOST");
+            b.climbToFight();
+            fight({I(AI::MiG29), I(AI::Su30)}, 1, "AIR SUPERIORITY", 10, 230);
+            Engagement g;
+            g.ground = {G(GroundKind::Tank), G(GroundKind::Tank), G(GroundKind::Gun), G(GroundKind::Gun), G(GroundKind::Truck)};
+            g.groundArmed = true;
+            g.area = area;
+            g.radius = 350;
+            b.engage(g, "ATTACK THE OUTPOST", "Destroy the armour and the guns. Air-to-surface missile (Q) and gun.", 11, 170);
+            b.cursor = area;
+            b.landRunway();
+            break;
+        }
+        case 15:   // high-speed canyon run, then two bandits
+            b.departure(false);
+            legs(RouteStyle::HighSpeed, std::max(1, flex), "HIGH-SPEED RUN");
+            b.climbToFight();
+            fight({I(AI::Su35), I(AI::MiG29)}, 1, "TWO BANDITS", 12, 260);
+            b.landRunway();
+            break;
+        case 16:   // terrain following, formation, intercept
+            b.departure(false);
+            legs(RouteStyle::Valley, 1, "VALLEY WARM-UP");
+            legs(RouteStyle::Precision, flex, "TERRAIN FOLLOWING");
+            b.formation();
+            fight({I(AI::Su30), I(AI::MiG29)}, 1, "INTERCEPT", 12, 230);
+            b.landRunway();
+            break;
+        case 17: {   // defensive flying, then the reversal
+            b.departure(false);
+            legs(RouteStyle::Navigation, flex, "NAVIGATION LEG");
+            b.climbToFight();
+            Engagement e;
+            e.jets = {I(AI::Su35), I(AI::F16)};
+            e.skill = 1;
+            e.surviveSeconds = 90;
+            b.engage(e, "SURVIVE 90 SECONDS", "Two attackers behind you. Survive: flares (X), break turns, change height.", 13, 95);
+            Engagement r;
+            r.continueFrom = static_cast<int>(b.c.engagements.size()) - 1;
+            b.engage(r, "TURN THE FIGHT", "Now shoot both attackers down.", 12, 180);
+            b.landRunway();
+            break;
+        }
+        case 18: {   // mountain route, mixed strike, tanker
             b.departure(false);
             legs(RouteStyle::LowLevel, flex, "MOUNTAIN ROUTE");
+            Vec3 area = b.outpostArea();
+            b.toArea(area, "TO THE TARGET");
+            Engagement e;
+            e.jets = {I(AI::MiG29)};
+            e.skill = 1;
+            e.attackHelis = 2;
+            e.helisArmed = true;
+            e.ground = {G(GroundKind::Tank), G(GroundKind::Truck), G(GroundKind::Radar)};
+            e.area = area;
+            e.radius = 600;
+            b.engage(e, "STRIKE", "Destroy the fighter, the helicopters and the ground targets.", 14, 300);
+            b.cursor = area;
             b.tanker();
             legs(RouteStyle::Transit, 1, "CLEAR THE TANKER");
             b.landRunway();
             break;
-        case 9:
+        }
+        case 19: {   // maritime strike, carrier recovery
             b.departure(false);
-            if (!b.directReturn) legs(RouteStyle::Valley, 1, "TERRAIN NAVIGATION");   // the shortest variant goes straight to the pillars
-            b.slalom(4);
-            if (!lite) b.arches(2);
-            b.formation();
-            b.tanker();
-            for (int i = 0; i < flex; ++i) {
-                char buf[48];
-                std::snprintf(buf, sizeof buf, "PRECISION WAYPOINTS %d", i + 1);
-                b.legTo(b.pickAnchor(8000, 13000, false), RouteStyle::Navigation, buf, 110.0);
+            legs(RouteStyle::Navigation, flex, "NAVIGATION LEG");
+            if (deck) {
+                Vec3 sea = b.seaArea(*deck);
+                b.toArea(sea, "TO THE FLEET");
+                Engagement e;
+                e.ground = {G(GroundKind::Ship), G(GroundKind::Ship), G(GroundKind::Ship)};
+                e.groundArmed = true;
+                e.area = sea;
+                e.radius = 700;
+                b.engage(e, "MARITIME STRIKE", "Sink the patrol boats: air-to-surface missile (Q) and gun.", 15, 200);
+                b.cursor = sea;
+                b.landCarrier(*deck);
+            } else {
+                b.landRunway();
             }
-            b.landRunway();
             break;
-        case 10:
-        default:
+        }
+        case 20:
+        default:   // final qualification
             b.departure(false);
-            legs(RouteStyle::LowLevel, 1, "VALLEY MANOEUVRES");
             legs(RouteStyle::Valley, flex, "MOUNTAIN NAVIGATION");
             b.slalom(4);
-            b.arches(2);
-            b.masts(4);
+            if (!lite) b.arches(2);
+            b.climbToFight();
+            fight({I(AI::Su35), I(AI::MiG29)}, 0, "INTERCEPT", 12, 230);   // the final tests everything: a fair fight, not the hardest
             b.tanker();
             if (deck) b.landCarrier(*deck);
             else b.landRunway();
@@ -1895,8 +2105,40 @@ const char* kOffRoute = "You're off the route. Turn back towards the marker.";
 const char* kRotate = "Rotate now. Gentle back pressure.";
 const char* kAirborne = "Airborne. Positive climb.";
 const char* kCourseComplete = "Course complete. Let's look at your score.";
-const char* const kMedal[4] = {"You did not qualify on this one. Fly it again, you'll get there.", "Bronze medal. A pass, Captain. There is more in you.",
-                               "Silver medal. Good flying, Captain.", "Gold medal! Outstanding flying, Captain."};
+const char* const kRemark[4] = {"There's plenty to work on. Fly it again when you're ready.", "Solid flying, Captain.",
+                                "Good flying, Captain. Very clean.", "Outstanding flying, Captain."};
+// combat
+const std::vector<std::string> kSplash = {"Splash one. Good kill.", "Target destroyed.", "Good hit. Target down."};
+const char* kAllDestroyed = "All targets destroyed. Well done.";
+const char* kMissileInbound = "Missile inbound! Flares and break hard!";
+const char* kBanditSix = "Bandit on your six! Break turn now!";
+const char* kGunsOnly = "Guns only on this exercise. Get in close and put the pipper on him.";
+const char* kMissilesOnly = "Missiles only. Wait for the lock tone, then fire.";
+const char* kUseAts = "Ground targets. Switch to the air-to-surface missile with Q.";
+const char* kOutOfMissiles = "You're out of missiles. Use the gun.";
+const char* kSurvived = "Good, you survived it. Now turn the fight around and shoot them down.";
+const char* kTooLowCombat = "You're too low to fight here. Climb!";
+const char* kHeliSlow = "Slow down, you're overshooting the helicopter.";
+const char* kKeepSurviving = "Keep it moving. Don't give him a steady target.";
+const char* kTargetsLeft[7] = {"", "One target left.", "Two targets left.", "Three targets left.", "Four targets left.", "Five targets left.", "Six targets left."};
+const char* const kCombatIntros[] = {
+    "Helicopters ahead, low in the valley. Slow down and hunt them.",
+    "Outpost ahead. Attack helicopters first, then the armour.",
+    "Drones on the range. Guns only. Close in behind them.",
+    "Drones on the range. Missiles only. Lock and fire.",
+    "Ground targets on the range. Switch to the air-to-surface missile.",
+    "Bandit ahead, one F-16. Fight's on.",
+    "Bandit ahead, one Su-35. Fight's on.",
+    "Bandit ahead, one Su-57. Fight's on.",
+    "Bandit ahead, one F-35. Fight's on.",
+    "Six helicopters in the area. Attack helicopters first.",
+    "Two fighters are covering the outpost. Kill them first.",
+    "Now the outpost. Armour and guns. Attack from a shallow dive.",
+    "Two bandits ahead. Fight's on.",
+    "Two attackers behind you! Survive ninety seconds. Break, flares!",
+    "Enemy outpost ahead, with fighter cover. Clear the air, then hit the ground targets.",
+    "Patrol boats ahead. Attack with the air-to-surface missile and keep moving.",
+};
 const char* const kFixedIntros[] = {
     "Arch run. Line up early and fly through the middle of each arch, below the rock.",
     "Brakes off, run it up to full power.",
@@ -1926,6 +2168,11 @@ const char* const kFixedIntros[] = {
     "High ground ahead. Climb now, full power.",
 };
 }  // namespace say_
+
+const char* combatIntroText(int i) {
+    const int n = static_cast<int>(sizeof(say_::kCombatIntros) / sizeof(say_::kCombatIntros[0]));
+    return say_::kCombatIntros[std::clamp(i, 0, n - 1)];
+}
 
 std::string headingCall(bool right, int deg10) {
     return std::string(right ? "Right" : "Left") + " turn coming up, heading " + TrainingSession::headingWords(deg10) + ".";
@@ -1965,9 +2212,12 @@ int compassTens(Vec3 d) {
 }  // namespace
 
 const char* trainingCourseCompleteLine() { return say_::kCourseComplete; }
-const char* trainingMedalLine(Medal m) { return say_::kMedal[std::clamp(static_cast<int>(m), 0, 3)]; }
+const char* trainingRemarkLine(double total) {
+    int k = total >= 90.0 ? 3 : (total >= 78.0 ? 2 : (total >= 62.0 ? 1 : 0));
+    return say_::kRemark[k];
+}
 bool academyLocationAllowed(const std::string& id, int level) {
-    if (id == "everest") return false;
+    if (id == "everest") return false;   // 5-8 km up: too thin for low-level work and air combat
     if (trainingLevel(level).needsSea) return id == "desert" || id == "musandam" || id == "rio";
     return true;
 }
@@ -2023,7 +2273,12 @@ std::vector<VoiceLine> trainingVoiceLines() {
                           kGearDown, kOnGlide, kHigh, kLow, kFastApproach, kSlowApproach, kLineLeft, kLineRight, kTouchdown, kGoAround, kLanded, kHardTouchdown,
                           kRetry, kCrashed, kOffRoute, kRotate, kAirborne, kCourseComplete, kHookDown})
         add(I, s);
-    for (const char* s : kMedal) add(I, s);
+    for (const char* s : kRemark) add(I, s);
+    for (const auto& s : kSplash) add(I, s);
+    for (const char* s : {kAllDestroyed, kMissileInbound, kBanditSix, kGunsOnly, kMissilesOnly, kUseAts, kOutOfMissiles, kSurvived, kTooLowCombat, kHeliSlow, kKeepSurviving})
+        add(I, s);
+    for (int n = 1; n <= 6; ++n) add(I, kTargetsLeft[n]);
+    for (const char* s : kCombatIntros) add(I, s);
     for (const char* s : {kLeadJoin, kMoveRight, kMoveLeft, kComeUp, kGoDown, kAddPower, kReducePower, kInSlot, kTooClose, kFormationDone}) add(Speaker::Wingman, s);
     for (const char* s : {kPaddles, kLsoHigh, kLsoLow, kLsoLeft, kLsoRight, kLsoFast, kLsoSlow, kLsoGood, kBolter}) add(Speaker::Tower, s);
     for (const char* s : kTrap) add(Speaker::Tower, s);
@@ -2067,6 +2322,13 @@ void TrainingSession::begin(Course course, Battle& battle, int aircraftId, int h
     for (const Section& s : course_.sections)
         if (s.kind == SectionKind::Refuel) refuelRequired_ = true;
     if (course_.tanker) battle.startTanker(course_.tankerCenter, course_.tankerRadius, course_.tankerSpeed, 0.0);
+    spawned_.assign(course_.engagements.size(), Spawned{});
+    for (const Engagement& e : course_.engagements)
+        if (e.continueFrom < 0) targets_ += static_cast<int>(e.jets.size() + e.ground.size()) + e.transportHelis + e.attackHelis;
+    {
+        const Jet& p = battle.player();
+        playerMissiles_ = p.missiles; playerAgms_ = p.agms; playerRounds_ = p.rounds; playerFlares_ = p.flareCharges;
+    }
     for (const Prop& p : course_.props) {
         GroundTarget g;
         g.kind = p.kind;
@@ -2126,9 +2388,48 @@ void TrainingSession::beginSection(size_t idx, const MissionContext& ctx, Battle
         SectionKind pk = course_.sections[section_].kind;
         if (pk == SectionKind::Route) sayVariant(Speaker::Instructor, kSectionDone, 0, "secdone", 20);
     }
+    if (engagement_ >= 0) {
+        // leaving an engagement: a survive exercise hands its attackers to the next section
+        bool handOver = idx < course_.sections.size() && course_.sections[idx].kind == SectionKind::Engage &&
+                        course_.engagements[static_cast<size_t>(course_.sections[idx].value)].continueFrom == engagement_;
+        if (!handOver) endEngagement(battle, false);
+        else engagement_ = -1;
+    }
     section_ = idx;
     const Section& s = course_.sections[idx];
     gate_ = (s.kind == SectionKind::Landing || s.kind == SectionKind::CarrierLanding) ? s.gateStart : s.gateBegin;
+    // after a fight the player can be anywhere: rejoin the route at the gate that makes the
+    // shortest way home (at least 3 km away, so there is room to descend onto it)
+    // (also after the tanker or any exercise that leaves the player well above or away from it)
+    bool rejoin = false;
+    if (s.kind == SectionKind::Route && idx > 0 && s.gateEnd - s.gateBegin > 1) {
+        SectionKind pk = course_.sections[idx - 1].kind;
+        const Vec3& g0 = course_.gates[s.gateBegin].pos;
+        double hd0 = std::hypot(g0.x - f.pos.x, g0.z - f.pos.z);
+        rejoin = pk == SectionKind::Engage;
+        (void)hd0;
+    }
+    if (rejoin) {
+        double rest = 0;
+        std::vector<double> remain(static_cast<size_t>(s.gateEnd - s.gateBegin), 0.0);
+        for (int k = s.gateEnd - 1; k >= s.gateBegin; --k) {
+            remain[static_cast<size_t>(k - s.gateBegin)] = rest;
+            if (k > s.gateBegin) rest += length(course_.gates[k].pos - course_.gates[k - 1].pos);
+        }
+        double best = 1e18;
+        int bk = s.gateBegin;
+        const int half = s.gateEnd - 1;
+        for (int k = s.gateBegin; k < half; ++k) {
+            const Vec3& gp = course_.gates[k].pos;
+            double hd = std::hypot(gp.x - f.pos.x, gp.z - f.pos.z);
+            double drop = std::max(0.0, f.pos.y - gp.y);
+            if (hd < std::max(3000.0, drop * 4.0) && k + 1 < half) continue;   // room for a gentle descent
+            double cost = hd + remain[static_cast<size_t>(k - s.gateBegin)];
+            if (cost < best) { best = cost; bk = k; }
+        }
+        gate_ = bk;
+    }
+    gateLinger_ = 0;
     prevS_ = -1e9;
     sectionComplete_ = false;
     taskAcc_ = taskAcc2_ = taskTimer_ = 0;
@@ -2159,6 +2460,8 @@ void TrainingSession::beginSection(size_t idx, const MissionContext& ctx, Battle
     cp_.manoeuvreScores = manoeuvreScores_.size();
     cp_.hit = gatesHit_;
     cp_.missed = gatesMissed_;
+    cp_.combatScores = combatScores_.size();
+    cp_.kills = kills_;
     checkpointValid_ = !f.crashed;
 
     const AircraftProfile& prof = *ctx.aircraft;
@@ -2227,6 +2530,9 @@ void TrainingSession::beginSection(size_t idx, const MissionContext& ctx, Battle
             wasContact_ = false;
             disconnects_ = 0;
             break;
+        case SectionKind::Engage:
+            beginEngagement(s, ctx, battle);
+            break;
         case SectionKind::Landing:
         case SectionKind::CarrierLanding:
             baseBolters_ = f.bolters;
@@ -2259,6 +2565,7 @@ void TrainingSession::update(const MissionContext& ctx, Battle& battle, size_t s
             updateLanding(ctx, dt);
             break;
         case SectionKind::Formation: updateFormation(ctx, battle, dt); break;
+        case SectionKind::Engage: updateEngagement(s, ctx, battle, dt); break;
         case SectionKind::Rendezvous: {
             const Tanker& tk = battle.tanker();
             double d = length(f.pos - tk.pos);
@@ -2318,6 +2625,7 @@ void TrainingSession::updateGates(const MissionContext& ctx, double dt) {
     if (prevS_ < -1e8) { prevS_ = sd; return; }
     auto advance = [&]() {
         ++gate_;
+        gateLinger_ = 0;
         prevS_ = -1e9;
         if (gate_ < s.gateEnd) {
             const Gate& n = course_.gates[gate_];
@@ -2353,6 +2661,19 @@ void TrainingSession::updateGates(const MissionContext& ctx, double dt) {
         }
         gateScores_.push_back(score);
         if (obstacleGate) manoeuvreScores_.push_back(score);
+        advance();
+        return;
+    }
+    // circling near a gate without getting through it (or round it): after 45 s the
+    // instructor moves the route on, so nobody is ever trapped at one gate
+    if (std::hypot(f.pos.x - g.pos.x, f.pos.z - g.pos.z) < 2000.0) gateLinger_ += dt;
+    if (gateLinger_ > 45.0 && gate_ + 1 < s.gateEnd) {
+        ++gatesMissed_;
+        gateScores_.push_back(0);
+        if (obstacleGate) manoeuvreScores_.push_back(0);
+        events_.push_back({TrainingEventKind::GateMissed, gate_, 0});
+        sayVariant(Speaker::Instructor, say_::kGateMiss, 1, "gatemiss", 6);
+        gateLinger_ = 0;
         advance();
         return;
     }
@@ -2646,6 +2967,9 @@ ScoreCard TrainingSession::liveScore() const {
     c.stability = clampd(100.0 - unstableTime_ * 4.0 - crashes_ * 10.0, 0.0, 100.0);
     c.refuel = refuelRequired_ ? (refuelDone_ ? refuelScore_ : 0.0) : -1;
     c.landing = landingScore_;
+    c.combat = course_.engagements.empty() ? -1 : (combatScores_.empty() ? -1 : avg(combatScores_));
+    c.kills = kills_;
+    c.targets = targets_;
     c.gatesHit = gatesHit_;
     c.gatesMissed = gatesMissed_;
     int total = 0;
@@ -2666,11 +2990,303 @@ ScoreCard TrainingSession::finalScore() const {
     for (const Section& s : course_.sections)
         if (s.kind == SectionKind::Landing || s.kind == SectionKind::CarrierLanding) hasLanding = true;
     if (hasLanding && c.landing < 0) c.landing = 0;
+    if (!course_.engagements.empty() && c.combat < 0) c.combat = 0;
     return finalizeScore(c);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Combat exercises
+// ---------------------------------------------------------------------------------------------
+int TrainingSession::engagementAlive(const Battle& battle) const {
+    if (engagement_ < 0 || engagement_ >= static_cast<int>(spawned_.size())) return 0;
+    const Spawned& sp = spawned_[static_cast<size_t>(engagement_)];
+    int n = 0;
+    for (int id : sp.jets) {
+        const Jet* j = nullptr;
+        for (const auto& jp : battle.jets()) if (jp->id == id) j = jp.get();
+        if (j && j->alive) ++n;
+    }
+    for (int gi : sp.ground)
+        if (gi >= 0 && gi < static_cast<int>(battle.ground().size()) && battle.ground()[static_cast<size_t>(gi)].alive) ++n;
+    return n;
+}
+
+void TrainingSession::engagementTargets(std::vector<int>& jets, std::vector<int>& ground) const {
+    jets.clear();
+    ground.clear();
+    if (engagement_ < 0 || engagement_ >= static_cast<int>(spawned_.size())) return;
+    jets = spawned_[static_cast<size_t>(engagement_)].jets;
+    ground = spawned_[static_cast<size_t>(engagement_)].ground;
+}
+
+double TrainingSession::surviveRemaining() const {
+    if (section_ >= course_.sections.size()) return 0;
+    const Section& s = course_.sections[section_];
+    if (s.kind != SectionKind::Engage || s.value2 <= 0) return 0;
+    return std::max(0.0, s.value2 - surviveTimer_);
+}
+
+void TrainingSession::beginEngagement(const Section& s, const MissionContext& ctx, Battle& battle) {
+    using namespace say_;
+    const int ei = static_cast<int>(s.value);
+    const Engagement& e = course_.engagements[static_cast<size_t>(ei)];
+    const FlightState& f = *ctx.flight;
+    const Terrain& t = *ctx.terrain;
+    engagement_ = ei;
+    combatTime_ = 0;
+    combatDamage_ = 0;
+    surviveTimer_ = 0;
+    resupply_ = 0;
+    lastHealth_ = battle.player().health;
+    Spawned& sp = spawned_[static_cast<size_t>(ei)];
+    if (e.continueFrom >= 0) {
+        // fight the survivors of the earlier exercise (or fresh ones after a retry)
+        Spawned& from = spawned_[static_cast<size_t>(e.continueFrom)];
+        sp = from;
+        from = Spawned{};
+        bool any = false;
+        for (int id : sp.jets)
+            for (const auto& jp : battle.jets()) if (jp->id == id && jp->alive) any = true;
+        if (!any) {
+            sp = Spawned{};
+            const Engagement& src = course_.engagements[static_cast<size_t>(e.continueFrom)];
+            Engagement fresh = src;
+            fresh.surviveSeconds = 0;
+            // spawn as for a normal engagement below, using the original's aircraft
+            Vec3 fw = flat(f.vel);
+            if (length(fw) < 0.5) fw = {1, 0, 0};
+            Vec3 rt{-fw.z, 0, fw.x};
+            for (size_t k = 0; k < fresh.jets.size(); ++k) {
+                Vec3 p = f.pos + fw * 6500.0 + rt * ((static_cast<double>(k) - 0.5 * (fresh.jets.size() - 1)) * 900.0);
+                p.x = clampd(p.x, -Terrain::kHalfSize + 2500, Terrain::kHalfSize - 2500);
+                p.z = clampd(p.z, -Terrain::kHalfSize + 2500, Terrain::kHalfSize - 2500);
+                p.y = std::max(f.pos.y, t.surfaceHeight(p.x, p.z) + 900.0);
+                Jet& j = battle.debugAddJet(Team::Red, static_cast<AircraftId>(fresh.jets[k]), p, std::atan2(-fw.z, -fw.x), 230);
+                j.ai = AiState::Engage;
+                j.skill = static_cast<AiSkill>(std::clamp(fresh.skill, 0, 2));
+                sp.jets.push_back(j.id);
+            }
+        }
+    } else {
+        sp = Spawned{};
+        // bandits / drones ahead of the player
+        Vec3 fw = flat(f.vel);
+        if (length(fw) < 0.5) fw = {1, 0, 0};
+        Vec3 rt{-fw.z, 0, fw.x};
+        const bool defensive = e.surviveSeconds > 0;
+        Vec3 ctr = f.pos + fw * 5200.0;   // drone racetrack centre
+        ctr.x = clampd(ctr.x, -Terrain::kHalfSize + 5000, Terrain::kHalfSize - 5000);
+        ctr.z = clampd(ctr.z, -Terrain::kHalfSize + 5000, Terrain::kHalfSize - 5000);
+        double alt = std::max(e.jetAlt, f.pos.y);
+        for (size_t k = 0; k < e.jets.size(); ++k) {
+            double side = (static_cast<double>(k) - 0.5 * (e.jets.size() - 1)) * 900.0;
+            Vec3 p = defensive ? f.pos - fw * 2600.0 + rt * side : f.pos + fw * 7500.0 + rt * side;
+            double hdg = defensive ? std::atan2(fw.z, fw.x) : std::atan2(-fw.z, -fw.x);
+            if (e.jetsOnRoute) {
+                double a = 2.0 * kPi * static_cast<double>(k) / static_cast<double>(e.jets.size());
+                p = ctr + Vec3{std::cos(a), 0, std::sin(a)} * 2600.0;
+                hdg = a + kPi / 2;
+            }
+            p.x = clampd(p.x, -Terrain::kHalfSize + 2500, Terrain::kHalfSize - 2500);
+            p.z = clampd(p.z, -Terrain::kHalfSize + 2500, Terrain::kHalfSize - 2500);
+            p.y = std::max(alt + (e.jetsOnRoute ? 0.0 : 150.0 * static_cast<double>(k)), t.surfaceHeight(p.x, p.z) + 900.0);
+            Jet& j = battle.debugAddJet(Team::Red, static_cast<AircraftId>(e.jets[k]), p, hdg, e.jetsOnRoute ? 175 : 230);
+            j.ai = AiState::Engage;
+            j.skill = static_cast<AiSkill>(std::clamp(e.skill, 0, 2));
+            if (!e.jetsArmed) { j.missiles = 0; j.rounds = 0; j.flareCharges = 0; j.ai = AiState::Patrol; }
+            if (defensive) { j.missiles = std::max(j.missiles, 4); j.flareCharges = 0; }
+            if (e.jetsOnRoute) {
+                // a racetrack the drone flies for ever (smooth loop, steady speed)
+                j.route.clear();
+                for (int q = 0; q < 8; ++q) {
+                    double a = 2.0 * kPi * q / 8.0;
+                    Vec3 w = ctr + Vec3{std::cos(a) * 3200.0, 0, std::sin(a) * 2200.0};
+                    w.y = std::max(alt, maxSurfaceAround(t, w.x, w.z, 1500.0) + 700.0);
+                    j.route.push_back(w);
+                }
+                double a0 = 2.0 * kPi * static_cast<double>(k) / static_cast<double>(e.jets.size());
+                j.routeIdx = static_cast<size_t>(std::lround(a0 / (2.0 * kPi) * 8.0) + 1) % 8;
+                j.routeLoop = true;
+                j.formationLead = true;
+                j.routeSpeed = 175;
+                j.callsign = "DRONE " + std::to_string(k + 1);
+            }
+            sp.jets.push_back(j.id);
+        }
+        // helicopters orbiting the area
+        Rng rng(0xC0FFEEull + static_cast<unsigned long long>(ei) * 977ull);
+        int nh = e.transportHelis + e.attackHelis;
+        for (int k = 0; k < nh; ++k) {
+            GroundTarget g;
+            g.kind = GroundKind::Helicopter;
+            g.attack = k < e.attackHelis;
+            g.armed = e.helisArmed && g.attack;
+            double a = 2.0 * kPi * k / std::max(1, nh) + rng.range(-0.3, 0.3);
+            g.pathCenter = {e.area.x + std::cos(a) * e.radius * 0.45, 0, e.area.z + std::sin(a) * e.radius * 0.45};
+            g.pathRadius = rng.range(450.0, 800.0);
+            g.pathAngle = rng.range(0.0, 2.0 * kPi);
+            g.pos = {g.pathCenter.x + std::cos(g.pathAngle) * g.pathRadius, 0, g.pathCenter.z + std::sin(g.pathAngle) * g.pathRadius};
+            g.flyAgl = g.attack ? rng.range(60.0, 90.0) : rng.range(90.0, 150.0);
+            g.flySpeed = g.attack ? 45.0 : 38.0;
+            g.team = Team::Red;
+            g.label = std::string(g.attack ? "ATTACK HELO " : "HELO ") + std::to_string(k + 1);
+            sp.ground.push_back(battle.addGround(g));
+        }
+        // ground targets / ships around the area (on suitable ground or water)
+        int placed = 0;
+        for (size_t k = 0; k < e.ground.size(); ++k) {
+            GroundKind kind = static_cast<GroundKind>(e.ground[k]);
+            bool naval = groundIsNaval(kind);
+            Vec3 p = e.area;
+            for (int tries = 0; tries < 40; ++tries) {
+                double a = 2.0 * kPi * (static_cast<double>(k) + tries * 0.37) / std::max<size_t>(1, e.ground.size());
+                double r = e.radius * (naval ? 0.6 : 0.12) + tries * 6.0;
+                Vec3 q{e.area.x + std::cos(a) * r, 0, e.area.z + std::sin(a) * r};
+                double h = t.height(q.x, q.z);
+                bool ok = naval ? h < -4.0 : (h > 1.5 && t.normal(q.x, q.z, 8.0).y > 0.9);
+                if (ok) { p = q; break; }
+            }
+            GroundTarget g;
+            g.kind = kind;
+            g.pos = p;
+            g.heading = rng.range(0.0, 2.0 * kPi);
+            g.armed = e.groundArmed;
+            g.team = Team::Red;
+            if (naval) { g.pathCenter = e.area; g.pathRadius = std::hypot(p.x - e.area.x, p.z - e.area.z) + 1.0; g.pathAngle = std::atan2(p.z - e.area.z, p.x - e.area.x); }
+            g.label = std::string(groundKindName(kind)) + " " + std::to_string(k + 1);
+            sp.ground.push_back(battle.addGround(g));
+            ++placed;
+        }
+    }
+    // weapons for the exercise: a full load, restricted by the rule
+    Jet& p = battle.player();
+    p.missiles = playerMissiles_;
+    p.agms = playerAgms_;
+    p.rounds = playerRounds_;
+    p.flareCharges = std::max(playerFlares_, e.surviveSeconds > 0 ? 6 : playerFlares_);
+    if (e.rule == WeaponRule::GunsOnly) { p.missiles = 0; p.agms = 0; say(Speaker::Instructor, kGunsOnly, 1, "gunsonly", 60); }
+    if (e.rule == WeaponRule::MissilesOnly) { p.rounds = 0; say(Speaker::Instructor, kMissilesOnly, 1, "missilesonly", 60); }
+    p.weaponAG = false;
+    lastAlive_ = engagementAlive(battle);
+}
+
+void TrainingSession::updateEngagement(const Section& s, const MissionContext& ctx, Battle& battle, double dt) {
+    using namespace say_;
+    if (engagement_ < 0) return;
+    const Engagement& e = course_.engagements[static_cast<size_t>(engagement_)];
+    const FlightState& f = *ctx.flight;
+    combatTime_ += dt;
+    Jet& p = battle.player();
+    if (p.health < lastHealth_) combatDamage_ += lastHealth_ - p.health;
+    lastHealth_ = p.health;
+    // the range resupplies the exercise slowly (one missile of each kind and a gun belt every
+    // 15 s), so a long fight never ends with empty rails
+    resupply_ += dt;
+    if (resupply_ >= 15.0) {
+        resupply_ = 0;
+        if (e.rule != WeaponRule::GunsOnly) {
+            p.missiles = std::min(playerMissiles_, p.missiles + 1);
+            p.agms = std::min(playerAgms_, p.agms + 1);
+        }
+        if (e.rule != WeaponRule::MissilesOnly) p.rounds = std::min(playerRounds_, p.rounds + playerRounds_ / 3);
+    }
+    int alive = engagementAlive(battle);
+    const Spawned& sp = spawned_[static_cast<size_t>(engagement_)];
+    int total = static_cast<int>(sp.jets.size() + sp.ground.size());
+    if (lastAlive_ >= 0 && alive < lastAlive_) {
+        int n = lastAlive_ - alive;
+        kills_ += n;
+        for (int k = 0; k < n; ++k) events_.push_back({TrainingEventKind::TargetDestroyed, alive, 0});
+        if (alive > 0 && e.surviveSeconds <= 0) {
+            sayVariant(Speaker::Instructor, kSplash, 1, "splash", 2);
+            if (alive <= 6) say(Speaker::Instructor, kTargetsLeft[alive], 0, "left", 4);
+        }
+    }
+    lastAlive_ = alive;
+    // the ground targets are next: remind about the ATS missile once
+    bool airLeft = false;
+    for (int id : sp.jets) for (const auto& jp : battle.jets()) if (jp->id == id && jp->alive) airLeft = true;
+    for (int gi : sp.ground) if (battle.ground()[static_cast<size_t>(gi)].airborne()) airLeft = true;
+    if (!airLeft && alive > 0 && e.rule != WeaponRule::GunsOnly && !p.weaponAG && p.agms > 0) say(Speaker::Instructor, kUseAts, 1, "useats", 40);
+    // threat calls
+    for (const Missile& m : battle.missiles())
+        if (m.active && m.targetJet == p.id && length(m.pos - f.pos) < 4500.0) { say(Speaker::Instructor, kMissileInbound, 2, "inbound", 6); break; }
+    for (const auto& jp : battle.jets()) {
+        if (!jp->alive || jp->team == p.team) continue;
+        const FlightState& js = jp->fm->state();
+        Vec3 rel = f.pos - js.pos;
+        double d = length(rel);
+        if (d < 1200.0 && d > 1.0 && dot(js.q.forward(), rel * (1.0 / d)) > 0.94 && dot(f.q.forward(), rel * (1.0 / d)) > 0.5) {
+            say(Speaker::Instructor, kBanditSix, 2, "six", 10);
+            break;
+        }
+    }
+    if (f.agl < 250.0 && !sp.jets.empty() && airLeft) say(Speaker::Instructor, kTooLowCombat, 1, "lowcombat", 20);
+    if (p.missiles == 0 && e.rule == WeaponRule::Any && alive > 0 && airLeft) say(Speaker::Instructor, kOutOfMissiles, 1, "nomissiles", 60);
+    // helicopters: warn about overshooting
+    for (int gi : sp.ground) {
+        const GroundTarget& g = battle.ground()[static_cast<size_t>(gi)];
+        if (!g.airborne()) continue;
+        if (length(g.pos - f.pos) < 900.0 && f.airspeed > 230.0) { say(Speaker::Instructor, kHeliSlow, 1, "helislow", 30); break; }
+    }
+    if (e.surviveSeconds > 0) {
+        surviveTimer_ += dt;
+        taskProgress_ = clampd(surviveTimer_ / e.surviveSeconds, 0.0, 1.0);
+        char b[64];
+        std::snprintf(b, sizeof b, "SURVIVE %.0f S", std::max(0.0, e.surviveSeconds - surviveTimer_));
+        taskStatus_ = b;
+        if (surviveTimer_ > 25.0) say(Speaker::Instructor, kKeepSurviving, 0, "keepmoving", 30);
+        if (surviveTimer_ >= e.surviveSeconds && !sectionComplete_) {
+            sectionComplete_ = true;
+            combatScores_.push_back(clampd(100.0 - combatDamage_ * 0.6, 30.0, 100.0));
+            say(Speaker::Instructor, kSurvived, 2, "survived", 30);
+        }
+        return;
+    }
+    taskProgress_ = total > 0 ? clampd(1.0 - static_cast<double>(alive) / total, 0.0, 1.0) : 1.0;
+    char b[64];
+    std::snprintf(b, sizeof b, "TARGETS %d / %d", total - alive, total);
+    taskStatus_ = b;
+    if (alive == 0 && !sectionComplete_) {
+        sectionComplete_ = true;
+        double slow = std::max(0.0, combatTime_ - s.estSeconds);
+        combatScores_.push_back(clampd(100.0 - combatDamage_ * 0.5 - slow * 0.15, 30.0, 100.0));
+        say(Speaker::Instructor, kAllDestroyed, 2, "alldestroyed", 10);
+    }
+}
+
+void TrainingSession::endEngagement(Battle& battle, bool removeSurvivors) {
+    if (engagement_ >= 0 && engagement_ < static_cast<int>(spawned_.size())) {
+        Spawned& sp = spawned_[static_cast<size_t>(engagement_)];
+        if (removeSurvivors) {
+            for (int id : sp.jets) battle.removeJet(id);
+            for (int gi : sp.ground) battle.retireGround(gi);
+            sp = Spawned{};
+        }
+    }
+    engagement_ = -1;
+    // a full, unrestricted load for whatever comes next
+    Jet& p = battle.player();
+    p.missiles = playerMissiles_;
+    p.agms = playerAgms_;
+    p.rounds = playerRounds_;
+    p.flareCharges = playerFlares_;
 }
 
 void TrainingSession::retry(Battle& battle) {
     if (!checkpointValid_) return;
+    // an interrupted engagement starts again from scratch (its survivors leave)
+    if (engagement_ >= 0) endEngagement(battle, true);
+    if (cp_.section < course_.sections.size() && course_.sections[cp_.section].kind == SectionKind::Engage) {
+        int ei = static_cast<int>(course_.sections[cp_.section].value);
+        int from = course_.engagements[static_cast<size_t>(ei)].continueFrom;
+        if (from >= 0) {   // the reversal is flown again against fresh attackers
+            engagement_ = from;
+            endEngagement(battle, true);
+        }
+    }
+    combatScores_.resize(std::min(combatScores_.size(), cp_.combatScores));
+    kills_ = cp_.kills;
     Jet& p = battle.player();
     FlightModel& fm = *p.fm;
     if (cp_.onGround) {

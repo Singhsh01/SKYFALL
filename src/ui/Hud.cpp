@@ -1123,6 +1123,7 @@ const char* sectionWord(SectionKind k) {
         case SectionKind::Rendezvous: case SectionKind::Refuel: return "TANKER";
         case SectionKind::ColdStart: case SectionKind::Lineup: case SectionKind::Takeoff: case SectionKind::GearUp: return "DEPARTURE";
         case SectionKind::Climb: return "CLIMB";
+        case SectionKind::Engage: return "COMBAT";
         default: return "MANOEUVRE";
     }
 }
@@ -1302,17 +1303,17 @@ void Hud::trainingDebrief(const HudContext& c) {
     if (!c.trainingResult) return;
     const ScoreCard& sc = *c.trainingResult;
     float s = c.h / 720.0f;
-    Color medalCol = sc.medal == Medal::Gold ? Color{255, 210, 90, 255} : sc.medal == Medal::Silver ? Color{215, 222, 230, 255}
-                   : sc.medal == Medal::Bronze ? Color{220, 150, 90, 255} : Color{255, 120, 100, 255};
-    Rectangle d = {c.w * 0.5f - 230 * s, c.h * 0.14f, 460 * s, 330 * s};
+    // no medals: the score, the categories and the completion
+    Color medalCol = sc.total >= 78.0 ? Color{150, 255, 205, 255} : sc.total >= 62.0 ? Color{255, 225, 120, 255} : Color{255, 160, 110, 255};
+    Rectangle d = {c.w * 0.5f - 230 * s, c.h * 0.14f, 460 * s, 352 * s};
     ui::panel(d, Color{0, 0, 0, 190}, ui::withAlpha(medalCol, 0.5f));
     ui::textShadow("COURSE COMPLETE", d.x + d.width / 2, d.y + 12 * s, 26 * s, WHITE, Align::Center);
-    ui::textShadow(medalName(sc.medal), d.x + d.width / 2, d.y + 46 * s, 30 * s, medalCol, Align::Center);
-    ui::textShadow(fmti("SCORE %d", static_cast<int>(std::lround(sc.total))) + (c.trainingNewBest ? "   NEW BEST" : ""), d.x + d.width / 2, d.y + 84 * s, 16 * s,
-                   Color{255, 225, 120, 255}, Align::Center);
+    ui::textShadow(fmti("SCORE %d", static_cast<int>(std::lround(sc.total))), d.x + d.width / 2, d.y + 46 * s, 30 * s, medalCol, Align::Center);
+    ui::textShadow(c.trainingNewBest ? "NEW PERSONAL BEST" : "COMPLETED", d.x + d.width / 2, d.y + 84 * s, 16 * s, Color{255, 225, 120, 255}, Align::Center);
     struct Row { const char* k; double v; } rows[] = {
         {"WAYPOINT ACCURACY", sc.accuracy}, {"MANOEUVRING", sc.manoeuvre}, {"ALTITUDE / SPEED DISCIPLINE", sc.discipline},
         {"TERRAIN CLEARANCE", sc.clearance}, {"STABILITY / CONTROL", sc.stability}, {"REFUELLING", sc.refuel}, {"LANDING", sc.landing},
+        {"COMBAT", sc.combat},
     };
     float y = d.y + 112 * s;
     for (const Row& r : rows) {
@@ -1328,6 +1329,7 @@ void Hud::trainingDebrief(const HudContext& c) {
     }
     int secs = static_cast<int>(sc.flightSeconds);
     std::string foot = fmt2("GATES %d / %d", sc.gatesHit, sc.gatesTotal) + fmt2("     TIME %d:%02d", secs / 60, secs % 60);
+    if (sc.targets > 0) foot += fmt2("     KILLS %d / %d", sc.kills, sc.targets);
     if (sc.crashes) foot += fmti("     RETRIES %d", sc.crashes);
     if (sc.wire > 0) foot += fmti("     WIRE %d", sc.wire);
     ui::text(foot, d.x + d.width / 2, y + 6 * s, 12 * s, Color{220, 230, 230, 230}, Align::Center);

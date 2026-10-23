@@ -25,20 +25,10 @@ std::string upper(std::string s) {
     for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     return s;
 }
-Color medalColor(int m) {
-    switch (m) {
-        case 3: return Color{255, 214, 90, 255};
-        case 2: return Color{210, 220, 230, 255};
-        case 1: return Color{214, 140, 80, 255};
-        default: return Color{120, 130, 130, 200};
-    }
-}
-void medalBadge(float x, float y, float r, int m) {
-    if (m <= 0) return;
-    DrawCircleV({x, y}, r, medalColor(m));
+/// Completion mark (a filled green dot).
+void doneBadge(float x, float y, float r) {
+    DrawCircleV({x, y}, r, Color{120, 230, 160, 255});
     DrawCircleLinesV({x, y}, r, Color{0, 0, 0, 160});
-    const char* t = m == 3 ? "G" : m == 2 ? "S" : "B";
-    ui::text(t, x, y - r * 0.62f, r * 1.25f, Color{20, 20, 20, 255}, Align::Center);
 }
 std::vector<std::string> wrap(const std::string& s, float size, float maxW) {
     std::vector<std::string> out;
@@ -87,30 +77,31 @@ void Game::drawAcademy() {
     float s = h / 720.0f;
     DrawRectangleGradientH(0, 0, static_cast<int>(w), static_cast<int>(h), Color{0, 0, 0, 220}, Color{0, 0, 0, 140});
     ui::title("TRAINING ACADEMY", 50 * s, 22 * s, 32 * s);
-    const int kLoc = 10, kAc = 11, kMode = 12, kCorr = 13, kLaunch = 14, kBack = 15;
-    nav_.begin(16, in.up, in.down, in.confirm, in.left, in.right);
+    const int kLoc = kTrainingLevels, kAc = kLoc + 1, kMode = kLoc + 2, kCorr = kLoc + 3, kLaunch = kLoc + 4, kBack = kLoc + 5;
+    nav_.begin(kBack + 1, in.up, in.down, in.confirm, in.left, in.right);
     if (nav_.focus < kTrainingLevels) acLevel_ = nav_.focus + 1;
     const int lv = acLevel_;
     const TrainingLevelDef& L = trainingLevel(lv);
     int done = 0;
-    for (int i = 1; i <= kTrainingLevels; ++i) if (academyBestMedal(settings_, i) > 0) ++done;
-    ui::text(std::to_string(done) + " / 10 QUALIFIED", w - 50 * s, 34 * s, 15 * s, kAcc, Align::Right);
+    for (int i = 1; i <= kTrainingLevels; ++i) if (academyCompleted(settings_, i)) ++done;
+    ui::text(std::to_string(done) + " / " + std::to_string(kTrainingLevels) + " COMPLETED", w - 50 * s, 34 * s, 15 * s, kAcc, Align::Right);
 
-    // ---- levels ----
-    float x = 50 * s, y = 72 * s, bw = 420 * s, bh = 36 * s;
+    // ---- levels: two columns of ten, all open ----
+    float x = 50 * s, y0 = 72 * s, bw = 500 * s, bh = 30 * s;
+    float colW = (bw - 8 * s) / 2;
+    float y = y0;
     for (int i = 0; i < kTrainingLevels; ++i) {
         const TrainingLevelDef& d = trainingLevel(i + 1);
-        bool open = academyUnlocked(settings_, i + 1);
+        float bx = x + (i / 10) * (colW + 8 * s), by = y0 + (i % 10) * (bh + 3 * s);
         char label[96];
-        std::snprintf(label, sizeof label, "%02d  %s", d.number, d.title.c_str());
-        if (ui::button(nav_, i, {x, y, bw, bh}, open ? label : std::string(label) + "   (LOCKED)", "", open)) {
+        std::snprintf(label, sizeof label, "%02d  %s", d.number, upper(d.title).c_str());
+        if (ui::button(nav_, i, {bx, by, colW, bh}, label, "", true)) {
             audio_.play(Sfx::Click);
             nav_.focus = kLaunch;
             return;
         }
-        int m = academyBestMedal(settings_, i + 1);
-        if (m > 0) medalBadge(x + bw - 18 * s, y + bh / 2, 10 * s, m);
-        y += bh + 3 * s;
+        if (academyCompleted(settings_, i + 1)) doneBadge(bx + colW - 12 * s, by + bh / 2, 5 * s);
+        y = std::max(y, by + bh + 3 * s);
     }
     // ---- options ----
     y += 6 * s;
@@ -151,14 +142,12 @@ void Game::drawAcademy() {
         }
         y += oh + 8 * s;
     }
-    bool open = academyUnlocked(settings_, lv);
     std::string loc = academyLocationFor(lv);
     const LocationDef* ld = findLocation(loc);
     bool avail = locationAvailable(loc);
-    std::string launchSub = !open ? "Earn a medal on level " + std::to_string(lv - 1) + " to unlock"
-                          : !avail ? "Download " + (ld ? ld->name : loc) + " first (WORLD LOCATIONS)"
+    std::string launchSub = !avail ? "Download " + (ld ? ld->name : loc) + " first (WORLD LOCATIONS)"
                                    : std::string(allProfiles()[settings_.aircraft].name) + "  -  " + (ld ? ld->name : loc);
-    if (ui::button(nav_, kLaunch, {x, y, bw * 0.62f, 50 * s}, "LAUNCH", launchSub, open && avail)) {
+    if (ui::button(nav_, kLaunch, {x, y, bw * 0.62f, 50 * s}, "LAUNCH", launchSub, avail)) {
         audio_.play(Sfx::Click);
         startTraining(lv);
         return;
@@ -186,21 +175,20 @@ void Game::drawAcademy() {
     ty += 18 * s;
     AcademyRecord rec = academyRecord(settings_, lv, settings_.aircraft);
     char b[160];
-    if (rec.attempts == 0) std::snprintf(b, sizeof b, "Not flown in the %s yet.", allProfiles()[settings_.aircraft].shortName);
-    else if (rec.medal == 0 && rec.best <= 0) std::snprintf(b, sizeof b, "%s: %d attempt%s, not finished yet.", allProfiles()[settings_.aircraft].shortName, rec.attempts, rec.attempts == 1 ? "" : "s");
-    else std::snprintf(b, sizeof b, "%s: best %.0f  (%s), %d attempt%s, %s", allProfiles()[settings_.aircraft].shortName, rec.best, medalName(static_cast<Medal>(rec.medal)), rec.attempts,
+    if (rec.attempts == 0 && !rec.done) std::snprintf(b, sizeof b, "Not flown in the %s yet.", allProfiles()[settings_.aircraft].shortName);
+    else if (!rec.done) std::snprintf(b, sizeof b, "%s: %d attempt%s, not finished yet.", allProfiles()[settings_.aircraft].shortName, rec.attempts, rec.attempts == 1 ? "" : "s");
+    else std::snprintf(b, sizeof b, "%s: COMPLETED, best score %.0f, %d attempt%s, %s", allProfiles()[settings_.aircraft].shortName, rec.best, rec.attempts,
                        rec.attempts == 1 ? "" : "s", mmss(rec.seconds).c_str());
     ui::text(b, r.x + 16 * s, ty, 14 * s, WHITE, Align::Left, false);
     ty += 22 * s;
-    // per-aircraft medals
-    // per-aircraft medals: two rows of four
+    // completion per aircraft: two rows of four
     for (int a = 0; a < static_cast<int>(AircraftId::Count); ++a) {
-        float colW = (r.width * 0.5f - 24 * s) / 4.0f;
-        float mx = r.x + 16 * s + (a % 4) * colW, my = ty + (a / 4) * 22 * s;
-        int m = academyRecord(settings_, lv, a).medal;
+        float colW2 = (r.width * 0.5f - 24 * s) / 4.0f;
+        float mx = r.x + 16 * s + (a % 4) * colW2, my = ty + (a / 4) * 22 * s;
+        AcademyRecord ra = academyRecord(settings_, lv, a);
         ui::text(allProfiles()[a].shortName, mx, my, 12 * s, a == settings_.aircraft ? WHITE : kDim, Align::Left, false);
         float bx = mx + ui::measure(allProfiles()[a].shortName, 12 * s, false) + 12 * s;
-        if (m > 0) medalBadge(bx, my + 7 * s, 7 * s, m);
+        if (ra.done) doneBadge(bx, my + 7 * s, 5 * s);
         else ui::text("-", bx, my, 12 * s, kDim, Align::Center, false);
     }
     ty += 48 * s;
@@ -262,7 +250,7 @@ void Game::drawAcademy() {
         if (avail) ui::text("pick it under Location to see the route", mr.x + mr.width / 2, mr.y + mr.height / 2 + 6 * s, 12 * s, kDim, Align::Center, false);
     }
     if (!academyMsg_.empty()) ui::text(academyMsg_, r.x + 16 * s, r.y + r.height - 26 * s, 13 * s, Color{255, 170, 120, 240}, Align::Left, false);
-    else ui::text(L.needsSea ? "This level ends aboard the carrier: Skyfall Desert, Musandam and Rio have open sea." : "Medals: bronze 62, silver 78, gold 90. A medal unlocks the next level.",
+    else ui::text(L.needsSea ? "This level ends aboard the carrier: Skyfall Desert, Musandam and Rio have open sea." : "All twenty levels are open. Your completions, best scores and times are kept per aircraft.",
                   r.x + 16 * s, r.y + r.height - 26 * s, 12 * s, kDim, Align::Left, false);
 }
 
@@ -291,6 +279,7 @@ void Game::startTraining(int level) {
     campaignDef_ = nullptr;
     director_ = CampaignDirector{};
     tod_ = level % 3 == 2 ? TimeOfDay::GoldenHour : (level % 3 == 0 ? TimeOfDay::Noon : TimeOfDay::Morning);
+    if (level == 13 || level == 17) tod_ = TimeOfDay::Dusk;   // two combat levels in the evening (lights on)
     lighting_ = Lighting::preset(tod_);
     rain_ = false;
     terrain_.setObstacles(course.obstacles);
@@ -423,6 +412,7 @@ void Game::updateTrainingFrame(double /*dt*/) {
             case TrainingEventKind::GoAround: hud_.popup("GO AROUND", Color{255, 176, 60, 255}); break;
             case TrainingEventKind::Touchdown: hud_.popup("TOUCHDOWN", Color{150, 255, 205, 255}); break;
             case TrainingEventKind::SectionDone: audio_.play(Sfx::Radio, 0.3f); break;
+            case TrainingEventKind::TargetDestroyed: hud_.popup("TARGET DESTROYED", Color{150, 255, 205, 255}); break;
             default: break;
         }
     }
@@ -433,9 +423,9 @@ void Game::updateTrainingFrame(double /*dt*/) {
         settings_.save(settingsPath_);
         radioQueue_.clear();
         queueRadio(Speaker::Instructor, trainingCourseCompleteLine());
-        queueRadio(Speaker::Instructor, trainingMedalLine(trainingResult_.medal));
+        queueRadio(Speaker::Instructor, trainingRemarkLine(trainingResult_.total));
         radioNextAt_ = time_ + 0.5;
-        TraceLog(LOG_INFO, "SKYFALL: training level %d complete, score %.0f (%s)", trainingLevel_, trainingResult_.total, medalName(trainingResult_.medal));
+        TraceLog(LOG_INFO, "SKYFALL: training level %d complete, score %.0f, kills %d / %d", trainingLevel_, trainingResult_.total, trainingResult_.kills, trainingResult_.targets);
     }
 }
 

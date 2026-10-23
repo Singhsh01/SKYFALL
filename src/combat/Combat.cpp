@@ -59,6 +59,7 @@ const char* groundKindName(GroundKind k) {
         case GroundKind::ParkedJet: return "PARKED JET";
         case GroundKind::Ammo: return "AMMO BUNKER";
         case GroundKind::Substation: return "SUBSTATION";
+        case GroundKind::Helicopter: return "HELICOPTER";
         default: return "TARGET";
     }
 }
@@ -81,6 +82,7 @@ double groundAimHeight(GroundKind k) {
         case GroundKind::ParkedJet: return 2.0;
         case GroundKind::Ammo: return 2.5;
         case GroundKind::Substation: return 3.0;
+        case GroundKind::Helicopter: return 2.4;
         default: return 1.5;
     }
 }
@@ -97,6 +99,7 @@ double groundHitRadius(GroundKind k) {
         case GroundKind::CommTower: return 28.0;
         case GroundKind::Factory: return 30.0;
         case GroundKind::Substation: return 20.0;
+        case GroundKind::Helicopter: return 9.0;
         case GroundKind::Ammo: return 16.0;
         default: return 14.0;
     }
@@ -123,6 +126,7 @@ double groundMaxHealth(GroundKind k) {
         case GroundKind::ParkedJet: return 70;
         case GroundKind::Ammo: return 180;
         case GroundKind::Substation: return 160;
+        case GroundKind::Helicopter: return 70;
         default: return 100;
     }
 }
@@ -139,7 +143,13 @@ int Battle::addGround(GroundTarget g) {
     } else if (g.kind == GroundKind::Bridge && g.pos.y > 0) {
         // bridge deck height comes from the layout (already in pos.y)
     } else if (groundIsNaval(g.kind)) g.pos.y = std::max(Terrain::kSeaLevel, terrain_->height(g.pos.x, g.pos.z));
-    else g.pos.y = terrain_->height(g.pos.x, g.pos.z);
+    else if (g.kind == GroundKind::Helicopter && g.flyAgl > 0) {
+        if (g.pathRadius > 0) {
+            g.pathAngle = std::atan2(g.pos.z - g.pathCenter.z, g.pos.x - g.pathCenter.x);
+            if (std::hypot(g.pos.x - g.pathCenter.x, g.pos.z - g.pathCenter.z) < 1.0) g.pos = {g.pathCenter.x + g.pathRadius, 0, g.pathCenter.z};
+        }
+        g.pos.y = terrain_->surfaceHeight(g.pos.x, g.pos.z) + g.flyAgl;
+    } else g.pos.y = terrain_->height(g.pos.x, g.pos.z);
     g.maxHealth = groundMaxHealth(g.kind);
     g.health = g.maxHealth;
     g.alive = true;
@@ -186,6 +196,7 @@ Vec3 Battle::groundVelocity(int idx) const {
         return tan * g.railSpeed;
     }
     if (g.pathRadius <= 0 || !g.alive) return {};
+    if (g.kind == GroundKind::Helicopter) return Vec3{-std::sin(g.pathAngle), 0, std::cos(g.pathAngle)} * g.flySpeed;
     double speed = g.kind == GroundKind::Truck ? 9.0 : (g.kind == GroundKind::Ship ? 8.0 : 4.5);
     return Vec3{-std::sin(g.pathAngle), 0, std::cos(g.pathAngle)} * speed;
 }
@@ -316,6 +327,27 @@ void Battle::clearCombatants() {
     if (jets_.size() > 1) jets_.erase(jets_.begin() + 1, jets_.end());
     missiles_.clear(); bullets_.clear(); flares_.clear(); ground_.clear();
     active_ = false;
+}
+
+void Battle::removeJet(int id) {
+    for (size_t i = 1; i < jets_.size(); ++i)
+        if (jets_[i]->id == id) { jets_.erase(jets_.begin() + static_cast<long>(i)); break; }
+    for (Missile& m : missiles_) if (m.targetJet == id) m.targetJet = -1;
+    for (auto& j : jets_) {
+        if (j->lockTarget == id) { j->lockTarget = -1; j->lockProgress = 0; }
+        if (j->aiTarget == id) j->aiTarget = -1;
+    }
+}
+
+void Battle::retireGround(int index) {
+    if (index < 0 || index >= static_cast<int>(ground_.size())) return;
+    GroundTarget& g = ground_[static_cast<size_t>(index)];
+    g.alive = false;
+    g.flyAgl = 0;
+    g.pathRadius = 0;
+    g.pos = {g.pos.x, -5000.0, g.pos.z};   // out of sight below the map
+    for (Missile& m : missiles_) if (m.targetGround == index) m.targetGround = -1;
+    for (auto& j : jets_) if (j->lockTarget == -1000 - index) { j->lockTarget = -1; j->lockProgress = 0; }
 }
 
 void Battle::start(const BattleConfig& cfg) {
@@ -593,7 +625,9 @@ void Battle::updateLock(Jet& j, double dt, bool cycle) {
         Vec3 d = tp - s.pos;
         distOut = length(d);
         angleOut = std::acos(clampd(dot(normalize(d), fwd), -1.0, 1.0));
-        bool ag = tid <= -1000;
+        // helicopters in the air are locked with the air-to-air missile (and the ATS still works)
+        bool heli = tid <= -1000 && ground_[-1000 - tid].airborne();
+        bool ag = tid <= -1000 && !(heli && !j.weaponAG);
         double cone = ag ? (j.isPlayer ? kAgLockCone : kLockCone * 0.8) : kLockCone;
         double range = ag && j.isPlayer ? kAgLockRange : kLockRange;
         if (j.isPlayer && ag != j.weaponAG) return false;  // lock follows the selected missile type
@@ -609,6 +643,11 @@ void Battle::updateLock(Jet& j, double dt, bool cycle) {
                 double a, d;
                 if (valid(t->id, a, d)) cands.push_back({a + d / 20000.0, t->id});
             }
+            if (j.isPlayer)
+                for (int gi = 0; gi < static_cast<int>(ground_.size()); ++gi) {
+                    double a, d;
+                    if (ground_[gi].airborne() && valid(-1000 - gi, a, d)) cands.push_back({a + d / 20000.0, -1000 - gi});
+                }
         }
         if (j.isPlayer && j.weaponAG) {
             for (int gi = 0; gi < static_cast<int>(ground_.size()); ++gi) {
@@ -1135,8 +1174,31 @@ void Battle::updateFlares(double dt) {
 void Battle::updateGround(double dt) {
     for (int gi = 0; gi < static_cast<int>(ground_.size()); ++gi) {
         GroundTarget& g = ground_[gi];
+        if (g.kind == GroundKind::Helicopter && g.flyAgl > 0 && !g.alive) {
+            // the wreck falls (and keeps drifting) until it hits the ground
+            double gy = terrain_->surfaceHeight(g.pos.x, g.pos.z);
+            if (g.pos.y > gy + 0.5) {
+                g.fallV -= kG * dt;
+                g.pos.y = std::max(gy, g.pos.y + g.fallV * dt);
+                g.pos.x += -std::sin(g.pathAngle) * g.flySpeed * 0.5 * dt;
+                g.pos.z += std::cos(g.pathAngle) * g.flySpeed * 0.5 * dt;
+                g.heading += 2.2 * dt;   // spinning down
+                if (g.pos.y <= gy + 0.5) events_.push_back({EventType::Explosion, g.pos, 1.6, -1, -1, ""});
+            }
+            continue;
+        }
         if (!g.alive) continue;
-        if (g.railS >= 0 && g.railSpeed != 0 && layout_ && !layout_->railway.pts.empty()) {
+        if (g.kind == GroundKind::Helicopter && g.flyAgl > 0) {
+            if (g.pathRadius > 0) g.pathAngle += g.flySpeed / g.pathRadius * dt;
+            Vec3 c = g.pathRadius > 0 ? Vec3{g.pathCenter.x + std::cos(g.pathAngle) * g.pathRadius, 0, g.pathCenter.z + std::sin(g.pathAngle) * g.pathRadius} : g.pos;
+            // look ahead for rising ground so the helicopter climbs before a ridge, not into it
+            Vec3 ahead = c + Vec3{-std::sin(g.pathAngle), 0, std::cos(g.pathAngle)} * (g.flySpeed * 4.0);
+            double want = std::max(terrain_->surfaceHeight(c.x, c.z), terrain_->surfaceHeight(ahead.x, ahead.z)) + g.flyAgl
+                          + 6.0 * std::sin(time_ * 0.7 + gi);
+            double y = g.pos.y + clampd(want - g.pos.y, -8.0 * dt, 14.0 * dt);
+            g.pos = {c.x, y, c.z};
+            g.heading = g.pathAngle + kPi / 2;
+        } else if (g.railS >= 0 && g.railSpeed != 0 && layout_ && !layout_->railway.pts.empty()) {
             g.railS = clampd(g.railS + g.railSpeed * dt, 0.0, layout_->railway.length());   // trains stop at the terminus
             Vec3 tan;
             g.pos = layout_->railway.at(g.railS, &tan);
@@ -1163,7 +1225,9 @@ void Battle::updateGround(double dt) {
             if (d < bd) { bd = d; best = jp.get(); }
         }
         if (!best) { g.fireCooldown = 1.0; continue; }
-        if ((g.kind == GroundKind::AAA || g.kind == GroundKind::Gun || g.kind == GroundKind::Ship) && bd < 2600.0) {
+        if (g.kind == GroundKind::Helicopter && (!g.attack || !g.airborne())) { g.fireCooldown = 1.0; continue; }
+        if ((g.kind == GroundKind::AAA || g.kind == GroundKind::Gun || g.kind == GroundKind::Ship ||
+             (g.kind == GroundKind::Helicopter && bd < 1500.0)) && bd < 2600.0) {
             // short tracer burst with lead and dispersion
             const FlightState& ts = best->fm->state();
             double tof = bd / 900.0;
