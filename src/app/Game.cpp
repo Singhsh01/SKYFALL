@@ -1512,7 +1512,8 @@ FrameParams Game::makeFrameParams() {
         f.rush = static_cast<float>(rush_ * comfort);
         if (camMode_ == CameraMode::External || screen_ != Screen::Playing || replayActive_) f.speedFx = f.rush = 0.0f;
     }
-    f.showRunwayLights = true;
+    // edge lights on at night, in the evening and in poor visibility (rain, storm)
+    f.showRunwayLights = lighting_.night > 0.05f || rain_ || tod_ == TimeOfDay::Storm || tod_ == TimeOfDay::Dusk || tod_ == TimeOfDay::GoldenHour;
     f.bloom = settings_.bloom;
     f.quality = settings_.quality;
     f.shadowFocus = toRl(battle_.player().fm->state().pos);
@@ -2339,18 +2340,29 @@ int Game::runCapture() {
     }
     if (set == "skins") {
         hideHud_ = true;
-        for (int ac : {0, 4}) {
+        // SKYFALL_JETS=0,4 picks the aircraft, SKYFALL_SKIN_FROM=n starts at skin n,
+        // SKYFALL_SKIN_TOP=1 adds a high view of the upper surfaces (wing markings)
+        std::vector<int> acs = {0, 4};
+        if (const char* only = std::getenv("SKYFALL_JETS")) {
+            acs.clear();
+            for (const char* q = only; *q;) { acs.push_back(std::atoi(q)); while (*q && *q != ',') ++q; if (*q) ++q; }
+        }
+        int from = std::getenv("SKYFALL_SKIN_FROM") ? std::atoi(std::getenv("SKYFALL_SKIN_FROM")) : 0;
+        bool top = std::getenv("SKYFALL_SKIN_TOP") != nullptr;
+        for (int ac : acs) {
             hangarSel_ = ac;
-            for (int k = 0; k < kSkinCount; ++k) {
+            for (int k = from; k < kSkinCount; ++k) {
                 settings_.setSkin(ac, k);
-                startHangar();
-                screen_ = Screen::Playing;
-                orbitYaw_ = 2.5; orbitPitch_ = 0.35; zoom_ = 0.85;
-                scriptedStep(0.1, [&](double) {});
-                char nm[64];
-                std::snprintf(nm, sizeof nm, "skin_%d_%s", ac, skin(k).name);
-                for (char* q = nm; *q; ++q) if (*q == ' ') *q = '_';
-                snap(nm, 2);
+                for (int v = 0; v < (top ? 2 : 1); ++v) {
+                    startHangar();
+                    screen_ = Screen::Playing;
+                    orbitYaw_ = v ? 1.9 : 2.5; orbitPitch_ = v ? 1.05 : 0.35; zoom_ = 0.85;
+                    scriptedStep(0.1, [&](double) {});
+                    char nm[80];
+                    std::snprintf(nm, sizeof nm, "skin_%d_%s%s", ac, skin(k).name, v ? "_top" : "");
+                    for (char* q = nm; *q; ++q) if (*q == ' ') *q = '_';
+                    snap(nm, 2);
+                }
             }
             settings_.setSkin(ac, 0);
         }
@@ -2594,6 +2606,43 @@ int Game::runCapture() {
         startTitle();
         std::printf("flow: %d failures\n", fails);
         return fails == 0 ? 0 : 1;
+    }
+    if (set == "airbase") {
+        // the living airbase: the apron with the C-17 being unloaded, the taxiing and departing
+        // jets, the helicopter circuit; a town with its hospital and signals
+        const char* locEnv = std::getenv("SKYFALL_LOC");
+        std::string loc = locEnv ? locEnv : "desert";
+        loadLocation(loc, false);
+        freeFlight_ = true;
+        startArena(false);
+        battle_.clearCombatants();
+        hideHud_ = true;
+        const RunwayInfo& rw = terrain_.runway();
+        auto view = [&](Vec3 pos, double hdg, double pitch, double t, const char* name) {
+            time_ = t;
+            battle_.player().fm->resetAirborne(pos, hdg, 120.0, 0.5);
+            battle_.player().fm->mutableState().q = Quat::fromEuler(hdg, pitch, 0);
+            camMode_ = CameraMode::Cockpit;
+            snap(name, 2);
+        };
+        double cx = rw.center.x, cz = rw.center.z, y = rw.center.y;
+        view({cx - 175, y + 22, cz + 430}, -kPi / 2 + 0.3, -0.25, 12.0, "airbase_01_c17_unloading");
+        view({cx + 600, y + 120, cz + 700}, -kPi / 2 - 0.6, -0.18, 100.0, "airbase_02_apron");
+        view({cx - rw.length * 0.5 + 900, y + 25, cz + 140}, -0.9, -0.05, 133.0 + 16.0, "airbase_03_departure");
+        view({cx - 500, y + 120, cz - 700}, kPi / 2 - 0.3, -0.2, 30.0, "airbase_04_compound");
+        // a town: the hospital, signals, warehouses
+        for (const SceneProp& p : layout_.props)
+            if (p.kind == PropKind::Hospital) {
+                view({p.pos.x - 220, p.pos.y + 110, p.pos.z - 160}, std::atan2(160.0, 220.0), -0.35, 50.0, "airbase_05_hospital");
+                break;
+            }
+        for (const SceneProp& p : layout_.props)
+            if (p.kind == PropKind::Bush) {
+                view({p.pos.x - 120, p.pos.y + 40, p.pos.z - 60}, std::atan2(60.0, 120.0), -0.25, 50.0, "airbase_06_roadside");
+                break;
+            }
+        startTitle();
+        return 0;
     }
     if (set == "ops") {
         // Academy operations: the menu, the C-17 escort (join, attack, landing roll and unloading),

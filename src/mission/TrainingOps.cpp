@@ -220,10 +220,16 @@ void TrainingSession::spawnAsset(int i, Battle& battle, double startS) {
                 g.kind = a.unitKinds.empty() ? GroundKind::Tank : static_cast<GroundKind>(a.unitKinds[static_cast<size_t>(k) % a.unitKinds.size()]);
                 g.team = Team::Blue;
                 g.armed = false;
-                g.pos = placeUnit(t, a.area, a.radius, k, a.count, naval, taken);
+                if (k < static_cast<int>(a.unitPos.size())) {
+                    g.pos = {a.unitPos[static_cast<size_t>(k)].x, 0, a.unitPos[static_cast<size_t>(k)].z};
+                    g.heading = a.unitPos[static_cast<size_t>(k)].y;
+                    if (k < static_cast<int>(a.unitAircraft.size())) g.aircraft = a.unitAircraft[static_cast<size_t>(k)];
+                } else {
+                    g.pos = placeUnit(t, a.area, a.radius, k, a.count, naval, taken);
+                    g.heading = std::atan2(a.area.z - g.pos.z, a.area.x - g.pos.x) + kPi / 2;
+                }
                 taken.push_back(g.pos);
-                g.heading = std::atan2(a.area.z - g.pos.z, a.area.x - g.pos.x) + kPi / 2;
-                if (g.kind == GroundKind::ParkedJet) {
+                if (g.kind == GroundKind::ParkedJet && g.aircraft < 0) {
                     static const int parked[] = {static_cast<int>(AircraftId::F16), static_cast<int>(AircraftId::F22), static_cast<int>(AircraftId::FA18),
                                                  static_cast<int>(AircraftId::Typhoon)};
                     g.aircraft = parked[k % 4];

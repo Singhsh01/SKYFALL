@@ -41,7 +41,12 @@ enum class PropKind : unsigned char {
     Helicopter, AttackHelicopter, Tank, Apc, Truck, FuelTruck, Jeep,
     Barracks, Tent, Helipad, RadarMast, FloodMast, Checkpoint, Watchtower, Revetment, Hesco,
     FuelBladder, Container, Crane, WaterTower, CommandPost, Fence,
-    Streetlamp, Billboard, GasStation, ParkedCar, Antenna
+    Streetlamp, Billboard, GasStation, ParkedCar, Antenna,
+    // airbase life and ground equipment
+    Tug, Forklift, FireTruck, RadarTruck, AmmoBunker, HeliShelter, CargoStack, FireStation,
+    ParkedTransport,          // a C-17 on the apron (drawn with the aircraft model, ramp down)
+    // towns and roads
+    TrafficSignal, RoadSign, Hospital, Warehouse, Bush
 };
 struct SceneProp {
     Vec3 pos;                 // ground position (y = ground height)

@@ -1723,36 +1723,41 @@ struct Builder {
         p.y = surf(p.x, p.z);
         return p;
     }
-    /// Apron beside the runway (parked aircraft, hangars, fuel): the flatter side, 330 m out.
+    /// The working side of the airfield (apron, hangars, fuel farm): south of the runway.
     Vec3 apron() const {
         const RunwayInfo& rw = t.runway();
-        Vec3 side{-std::sin(rw.heading), 0, std::cos(rw.heading)};
-        Vec3 best = rw.center + side * 330.0;
-        double bs = 1e18;
-        for (double sg : {1.0, -1.0}) {
-            Vec3 p = rw.center + side * (330.0 * sg);
-            double rough = 0;
-            for (int k = -3; k <= 3; ++k) {
-                Vec3 q = p + Vec3{std::cos(rw.heading), 0, std::sin(rw.heading)} * (k * 150.0);
-                rough += std::fabs(surf(q.x, q.z) - rw.center.y) + (t.isWater(q.x, q.z) ? 500.0 : 0.0);
-            }
-            if (rough < bs) { bs = rough; best = p; }
-        }
-        best.y = surf(best.x, best.z);
-        return best;
+        Vec3 p{rw.center.x, 0, rw.center.z + 430.0};
+        p.y = surf(p.x, p.z);
+        return p;
     }
     int baseAsset(int lossLimit) {
+        // the installations of the working side of the airfield (south of the runway), in slots
+        // clear of the hangars, the tower and the C-17 being unloaded on the apron
         using G = GroundKind;
+        const RunwayInfo& rw = t.runway();
+        const double cx = rw.center.x, cz = rw.center.z;
         Asset a;
         a.kind = AssetKind::Base;
         a.name = "BASE";
-        a.area = apron();
+        a.area = {cx, rw.center.y, cz + 430};
         a.radius = 520;
-        a.unitKinds = {static_cast<int>(G::Hangar), static_cast<int>(G::ParkedJet), static_cast<int>(G::FuelTank), static_cast<int>(G::ParkedJet),
-                       static_cast<int>(G::Hangar), static_cast<int>(G::Radar), static_cast<int>(G::ParkedJet), static_cast<int>(G::FuelTank),
-                       static_cast<int>(G::Command), static_cast<int>(G::ParkedJet)};
+        struct Slot { G kind; double x, z, hdg; int ac; };
+        const Slot slots[] = {
+            {G::ParkedJet, -380, 430, kPi / 2, static_cast<int>(AircraftId::F16)}, {G::ParkedJet, -290, 430, kPi / 2, static_cast<int>(AircraftId::F22)},
+            {G::ParkedJet, 290, 430, kPi / 2, static_cast<int>(AircraftId::FA18)}, {G::ParkedJet, 380, 430, kPi / 2, static_cast<int>(AircraftId::Typhoon)},
+            {G::Hangar, -600, 520, 0, -1}, {G::Hangar, 560, 520, 0, -1},
+            {G::FuelTank, 700, 630, 0, -1}, {G::FuelTank, 770, 630, 0, -1},
+            {G::Radar, 900, 430, 0, -1}, {G::Command, 620, 670, 0, -1},
+        };
+        for (const Slot& sl : slots) {
+            double x = cx + sl.x, z = cz + sl.z;
+            if (t.height(x, z) < Terrain::kSeaLevel + 1.0) continue;   // a coastal airfield: no slot in the sea
+            a.unitKinds.push_back(static_cast<int>(sl.kind));
+            a.unitPos.push_back({x, sl.hdg, z});
+            a.unitAircraft.push_back(sl.ac);
+        }
         a.count = static_cast<int>(a.unitKinds.size());
-        a.lossLimit = lossLimit;
+        a.lossLimit = std::min(lossLimit, std::max(1, a.count / 2));
         return addAsset(a);
     }
     int fleetAsset(const DeckInfo& deck, int lossLimit) {

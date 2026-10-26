@@ -469,6 +469,107 @@ void traffic(Placer& P, unsigned seed) {
     }
 }
 
+/// The working side of the airfield (south of the runway: apron, hangars, tower): a C-17 being
+/// unloaded with its cargo, tugs by the parked jets, a fire station, ammunition bunkers; and in
+/// the compound helicopter shelters and mobile radars. Placed last, so nothing else moves.
+void airbaseLife(Placer& P, unsigned seed) {
+    const RunwayInfo& rw = P.rw;
+    const double cx = rw.center.x, cz = rw.center.z;
+    auto put = [&](PropKind k, double x, double z, double yaw, double r, unsigned char v = 0) {
+        return P.place(k, x, z, yaw, r, v, 0, 0.25, true, false, true);
+    };
+    // the C-17 on the west apron, nose to the runway, ramp down towards the hangars (the apron
+    // centre stays clear: the hangar showcase and the ground starts park a jet there)
+    const double tx = cx - 150;
+    SceneProp c17;
+    c17.pos = {tx, P.t.height(tx, cz + 300), cz + 300};
+    c17.yaw = -kPi / 2;
+    c17.kind = PropKind::ParkedTransport;
+    if (P.t.height(tx, cz + 300) > Terrain::kSeaLevel + 1.0) {
+        P.L.props.push_back(c17);
+        P.used.add({tx, 30.0, cz + 300});
+        // its cargo: pallets stacked behind the ramp, a forklift and a truck waiting
+        for (int i = 0; i < 6; ++i) put(PropKind::CargoStack, tx - 22 + (i % 3) * 22.0, cz + 372 + (i / 3) * 10.0, 0, 4, static_cast<unsigned char>(i));
+        put(PropKind::Truck, tx + 46, cz + 380, kPi / 2, 5);
+    }
+    // tugs by the parked jets, a fuel truck on the apron
+    for (double x : {-380.0, -200.0, 200.0, 290.0}) put(PropKind::Tug, cx + x + 14, cz + 388, 0, 3);
+    put(PropKind::FuelTruck, cx - 290, cz + 395, 0, 5);
+    // fire station with two crash tenders by the tower
+    put(PropKind::FireStation, cx + 440, cz + 470, 0, 14);
+    put(PropKind::FireTruck, cx + 428, cz + 445, 0, 5);
+    put(PropKind::FireTruck, cx + 452, cz + 445, 0, 5);
+    // ammunition bunkers behind the hardened shelters
+    for (int i = 0; i < 4; ++i) put(PropKind::AmmoBunker, cx - 1130 + i * 70, cz + 560, -kPi / 2, 14);
+    // helicopter shelters and mobile radars in the compound (north side)
+    put(PropKind::HeliShelter, cx - 640, cz - 345, kPi, 16);
+    put(PropKind::HeliShelter, cx - 690, cz - 345, kPi, 16);
+    put(PropKind::RadarTruck, cx + 300, cz - 425, 0.4, 5);
+    put(PropKind::RadarTruck, cx + 330, cz - 445, -0.3, 5);
+    put(PropKind::Tug, cx - 470, cz - 360, 0, 3);
+    (void)seed;
+}
+
+/// Towns: traffic signals at the busy junctions, a hospital, warehouses on the edge; road signs
+/// between the towns; roadside bushes where the climate grows them (not in deserts or high
+/// mountains).
+void townLife(Placer& P, unsigned seed) {
+    unsigned s = seed ^ 0x70A1u;
+    for (size_t ti = 0; ti < P.L.towns.size(); ++ti) {
+        const Town& tw = P.L.towns[ti];
+        if (tw.kind == TownKind::Industrial) {
+            for (int k = 0; k < 4; ++k) {
+                double a = rnd(s) * 2 * kPi, r = tw.radius * (0.4 + 0.5 * rnd(s));
+                P.place(PropKind::Warehouse, tw.center.x + std::cos(a) * r, tw.center.z + std::sin(a) * r, rnd(s) * kPi, 26, static_cast<unsigned char>(k), 0, 0.08);
+            }
+            continue;
+        }
+        if (tw.kind == TownKind::City || tw.kind == TownKind::Town) {
+            for (int tries = 0; tries < 30; ++tries) {
+                double a = rnd(s) * 2 * kPi, r = tw.radius * (0.25 + 0.5 * rnd(s));
+                if (P.place(PropKind::Hospital, tw.center.x + std::cos(a) * r, tw.center.z + std::sin(a) * r, rnd(s) * kPi, 30, static_cast<unsigned char>(ti), 0, 0.08)) break;
+            }
+            for (int k = 0; k < (tw.kind == TownKind::City ? 4 : 2); ++k) {
+                double a = rnd(s) * 2 * kPi, r = tw.radius * (0.85 + 0.3 * rnd(s));
+                P.place(PropKind::Warehouse, tw.center.x + std::cos(a) * r, tw.center.z + std::sin(a) * r, a, 26, static_cast<unsigned char>(k), 0, 0.08);
+            }
+        }
+    }
+    const Biome biome = P.t.info().biome;
+    const bool green = biome == Biome::Temperate || biome == Biome::Tropical;
+    for (size_t ri = 0; ri < P.L.roads.size(); ++ri) {
+        const Polyline& r = P.L.roads[ri];
+        double len = r.length();
+        double lastSign = -1e9, lastSignal = -1e9;
+        for (double sd = 30; sd < len - 30; sd += 15) {
+            Vec3 tan;
+            Vec3 p = r.at(sd, &tan);
+            if (p.y - P.t.height(p.x, p.z) > 3.0) continue;   // bridges
+            Vec3 n{-tan.z, 0, tan.x};
+            const Town* tw = nullptr;
+            bool town = inTown(P.L, p.x, p.z, 80, &tw);
+            double yaw = std::atan2(tan.z, tan.x);
+            if (town && tw && tw->kind != TownKind::Village && sd - lastSignal > 220.0) {
+                // a signal where another road passes close (a junction)
+                bool junction = false;
+                for (size_t rj = 0; rj < P.L.roads.size() && !junction; ++rj) {
+                    if (rj == ri) continue;
+                    for (const Vec3& q : P.L.roads[rj].pts) if (std::hypot(q.x - p.x, q.z - p.z) < 25.0) { junction = true; break; }
+                }
+                if (junction && P.place(PropKind::TrafficSignal, p.x + n.x * 8.0, p.z + n.z * 8.0, yaw + kPi / 2, 1.5, 0, 0, 0.3, true)) lastSignal = sd;
+            }
+            if (!town && sd - lastSign > 1600.0) {
+                if (P.place(PropKind::RoadSign, p.x - n.x * 9.0, p.z - n.z * 9.0, yaw, 2.5, static_cast<unsigned char>(ri), 0, 0.3, true)) lastSign = sd;
+            }
+            if (green && !town && rnd(s) < 0.22) {
+                double side = rnd(s) < 0.5 ? -1.0 : 1.0;
+                double off = 12.0 + rnd(s) * 14.0;
+                P.place(PropKind::Bush, p.x + n.x * off * side, p.z + n.z * off * side, rnd(s) * kPi, 2.0, static_cast<unsigned char>(rnd(s) * 8), 0, 0.5, true);
+            }
+        }
+    }
+}
+
 }  // namespace
 
 Vec3 WorldLayout::carAt(const Car& c, double time, Vec3* forward) const {
@@ -531,6 +632,8 @@ void populateWorldDetail(const Terrain& t, WorldLayout& L) {
     gridTown(P);
     industry(P, seed);
     traffic(P, seed);
+    airbaseLife(P, seed);
+    townLife(P, seed);
 }
 
 }  // namespace sky

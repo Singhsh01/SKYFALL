@@ -159,6 +159,52 @@ void buildCarBox(MeshBuilder& m, Matrix xf, Color body, int kind) {
 
 Color sceneCarColor(int v) { return carColor(v); }
 
+namespace {
+// airbase ground equipment (local +X forward, ground at y = 0)
+void tug(MeshBuilder& m, Matrix xf, Color body) {
+    m.box({0, 0.75f, 0}, {4.2f, 0.9f, 2.2f}, body, xf);
+    m.box({-1.1f, 1.55f, 0}, {1.3f, 0.8f, 1.9f}, kGlass, xf);
+    m.box({2.0f, 0.6f, 0}, {0.4f, 0.3f, 1.2f}, kSteel, xf);   // tow bar
+    for (float x : {1.3f, -1.3f})
+        for (float z : {-1.1f, 1.1f}) m.box({x, 0.4f, z}, {0.8f, 0.8f, 0.35f}, kTyre, xf);
+}
+void forklift(MeshBuilder& m, Matrix xf, Color body) {
+    m.box({-0.3f, 0.75f, 0}, {2.4f, 1.0f, 1.3f}, body, xf);
+    m.box({-0.5f, 1.6f, 0}, {1.1f, 0.06f, 1.2f}, kSteel, xf);             // roof guard
+    for (float z : {-0.55f, 0.55f}) m.box({-0.5f, 1.25f, z}, {0.06f, 0.9f, 0.06f}, kSteel, xf);
+    for (float z : {-0.35f, 0.35f}) m.box({1.0f, 1.3f, z}, {0.12f, 2.4f, 0.1f}, kSteel, xf);   // mast
+    for (float z : {-0.35f, 0.35f}) m.box({1.6f, 0.25f, z}, {1.2f, 0.06f, 0.12f}, kSteel, xf);  // forks
+    for (float x : {0.6f, -1.1f})
+        for (float z : {-0.6f, 0.6f}) m.box({x, 0.3f, z}, {0.55f, 0.6f, 0.25f}, kTyre, xf);
+}
+void fireTruck(MeshBuilder& m, Matrix xf) {
+    Color red = {190, 32, 28, 255};
+    m.box({0, 1.6f, 0}, {9.5f, 2.4f, 2.6f}, red, xf);
+    m.box({3.6f, 2.0f, 0}, {0.1f, 1.0f, 2.3f}, kGlass, xf);
+    m.box({0.5f, 3.0f, 0}, {4.0f, 0.4f, 2.0f}, kWhite, xf);
+    m.box({3.2f, 2.95f, 0}, {0.5f, 0.25f, 1.4f}, Color{60, 120, 255, 253}, xf);   // light bar
+    rod(m, {-1.0f, 3.3f, 0}, 3.0f, 0.12f, kSteel, xf);                           // monitor
+    for (float x : {3.0f, -1.5f, -3.0f})
+        for (float z : {-1.2f, 1.2f}) m.box({x, 0.55f, z}, {1.1f, 1.1f, 0.4f}, kTyre, xf);
+}
+void radarTruck(MeshBuilder& m, Matrix xf, Color body) {
+    truck(m, xf, body, shade(body, 0.92f), false);
+    m.box({-1.0f, 3.5f, 0}, {0.3f, 0.6f, 0.3f}, kSteel, xf);
+    m.box({-1.0f, 4.3f, 0}, {0.2f, 1.4f, 4.2f}, Color{200, 202, 196, 255}, MatrixMultiply(MatrixRotateZ(0.35f), xf));   // array
+}
+}  // namespace
+
+void buildGroundVehicle(MeshBuilder& m, Matrix xf, PropKind k, Color body) {
+    switch (k) {
+        case PropKind::Tug: tug(m, xf, Color{214, 170, 40, 255}); break;
+        case PropKind::Forklift: forklift(m, xf, Color{220, 180, 30, 255}); break;
+        case PropKind::FireTruck: fireTruck(m, xf); break;
+        case PropKind::RadarTruck: radarTruck(m, xf, body); break;
+        case PropKind::FuelTruck: truck(m, xf, body, shade(body, 0.9f), true); break;
+        default: truck(m, xf, body, shade(body, 1.1f), false); break;
+    }
+}
+
 void buildSceneProps(const Terrain& t, const WorldLayout& L, bool desertArmy, std::vector<Dressing::Piece>& out, std::vector<Vector3>& beacons) {
     const Color army = desertArmy ? Color{178, 158, 118, 255} : Color{94, 100, 72, 255};
     const Color canvas = desertArmy ? Color{196, 180, 140, 255} : Color{110, 112, 84, 255};
@@ -218,7 +264,7 @@ void buildSceneProps(const Terrain& t, const WorldLayout& L, bool desertArmy, st
             case PropKind::RadarMast: {
                 m.box({0, 1.4f, 0}, {5.0f, 2.8f, 4.0f}, Color{180, 178, 170, 255}, xf);
                 m.cylinder({0, 2.8f, 0}, 0.9f, 19.0f, 6, Color{200, 200, 196, 255}, xf, 0.45f);
-                m.box({0, 22.4f, 0}, {1.2f, 1.6f, 7.5f}, kWhite, MatrixMultiply(MatrixRotateY(static_cast<float>(p.pos.x) * 0.01f), xf));
+                m.box({0, 21.9f, 0}, {1.0f, 0.4f, 1.0f}, kSteel, xf);   // turntable (the antenna rotates: Renderer::drawAirbaseLife)
                 beacons.push_back(Vector3Transform({0, 24.5f, 0}, xf));
                 top = 26;
                 break;
@@ -339,6 +385,106 @@ void buildSceneProps(const Terrain& t, const WorldLayout& L, bool desertArmy, st
                 break;
             }
             case PropKind::ParkedCar: car(m, xf, carColor(p.variant)); reach = 3; top = 2; break;
+            case PropKind::Tug: tug(m, xf, Color{214, 170, 40, 255}); reach = 3; top = 2; break;
+            case PropKind::Forklift: forklift(m, xf, Color{220, 180, 30, 255}); reach = 2; top = 3; break;
+            case PropKind::FireTruck: fireTruck(m, xf); reach = 5; top = 4; break;
+            case PropKind::RadarTruck: radarTruck(m, xf, army); reach = 5; top = 6; break;
+            case PropKind::AmmoBunker: {
+                // earth-covered igloo with a concrete headwall and steel doors
+                Color earth = desertArmy ? Color{170, 150, 112, 255} : Color{96, 104, 72, 255};
+                int seg = 8;
+                for (int k = 0; k < seg; ++k) {
+                    float a0 = PI * k / seg, a1 = PI * (k + 1) / seg;
+                    Vector3 p0 = Vector3Transform({-12, sinf(a0) * 6.0f, -cosf(a0) * 8.0f}, xf), p1 = Vector3Transform({-12, sinf(a1) * 6.0f, -cosf(a1) * 8.0f}, xf);
+                    Vector3 p2 = Vector3Transform({12, sinf(a1) * 6.0f, -cosf(a1) * 8.0f}, xf), p3 = Vector3Transform({12, sinf(a0) * 6.0f, -cosf(a0) * 8.0f}, xf);
+                    m.tri2(p0, p1, p2, earth); m.tri2(p0, p2, p3, earth);
+                }
+                m.box({12.3f, 3.2f, 0}, {0.6f, 6.4f, 17.0f}, kConcrete, xf);
+                m.box({12.7f, 2.0f, 0}, {0.2f, 4.0f, 5.0f}, Color{80, 84, 78, 255}, xf);
+                reach = 14; top = 7;
+                break;
+            }
+            case PropKind::HeliShelter: {
+                // open-front steel shelter with a curved roof
+                Color shell = {150, 156, 150, 255};
+                int seg = 7;
+                for (int k = 0; k < seg; ++k) {
+                    float a0 = PI * k / seg, a1 = PI * (k + 1) / seg;
+                    Vector3 p0 = Vector3Transform({-cosf(a0) * 14.0f, sinf(a0) * 9.0f, -12}, xf), p1 = Vector3Transform({-cosf(a1) * 14.0f, sinf(a1) * 9.0f, -12}, xf);
+                    Vector3 p2 = Vector3Transform({-cosf(a1) * 14.0f, sinf(a1) * 9.0f, 12}, xf), p3 = Vector3Transform({-cosf(a0) * 14.0f, sinf(a0) * 9.0f, 12}, xf);
+                    m.tri2(p0, p1, p2, shell); m.tri2(p0, p2, p3, shell);
+                }
+                m.box({0, 4.5f, -12}, {28, 9, 0.4f}, shade(shell, 0.8f), xf);
+                reach = 16; top = 10;
+                break;
+            }
+            case PropKind::CargoStack: {
+                // pallets of crates under nets, two high
+                for (int k = 0; k < 4; ++k) {
+                    float x = (k % 2) * 2.9f - 1.45f, z = (k / 2) * 2.4f - 1.2f;
+                    m.box({x, 0.12f, z}, {2.7f, 0.24f, 2.2f}, Color{110, 96, 70, 255}, xf);
+                    m.box({x, 1.0f, z}, {2.4f, 1.5f, 2.0f}, (k & 1) ? sand : canvas, xf);
+                    if (k < 2) m.box({x, 2.4f, z}, {2.2f, 1.2f, 1.9f}, shade(canvas, 0.9f), xf);
+                }
+                reach = 4; top = 3.2f;
+                break;
+            }
+            case PropKind::FireStation: {
+                m.box({0, 4.0f, 0}, {24, 8, 14}, Color{196, 190, 178, 255}, xf);
+                for (int k = 0; k < 3; ++k) m.box({-8.0f + k * 8.0f, 2.8f, 7.05f}, {6.0f, 5.4f, 0.1f}, Color{170, 40, 34, 255}, xf);
+                m.box({0, 8.3f, 0}, {24.4f, 0.6f, 14.4f}, kWhite, xf);
+                reach = 14; top = 9;
+                break;
+            }
+            case PropKind::ParkedTransport: break;   // drawn with the aircraft model
+            case PropKind::TrafficSignal: {
+                m.cylinder({0, 0, 0}, 0.12f, 5.6f, 5, Color{70, 72, 74, 255}, xf);
+                m.box({1.6f, 5.5f, 0}, {3.2f, 0.12f, 0.12f}, Color{70, 72, 74, 255}, xf);
+                m.box({3.0f, 4.9f, 0}, {0.35f, 1.1f, 0.35f}, Color{24, 24, 24, 255}, xf);
+                m.box({3.0f, 5.25f, 0.19f}, {0.2f, 0.2f, 0.04f}, Color{220, 40, 30, 253}, xf);
+                m.box({3.0f, 4.55f, 0.19f}, {0.2f, 0.2f, 0.04f}, Color{40, 210, 90, 253}, xf);
+                reach = 4; top = 6;
+                break;
+            }
+            case PropKind::RoadSign: {
+                for (float z : {-1.3f, 1.3f}) m.box({0, 1.4f, z}, {0.12f, 2.8f, 0.12f}, kSteel, xf);
+                m.box({0, 3.3f, 0}, {0.1f, 1.4f, 3.2f}, p.variant & 1 ? Color{30, 110, 60, 255} : Color{30, 70, 150, 255}, xf);
+                m.box({0.06f, 3.3f, 0}, {0.02f, 0.25f, 2.6f}, kWhite, xf);
+                reach = 2; top = 4;
+                break;
+            }
+            case PropKind::Hospital: {
+                // ward blocks with lit windows, a red cross and a rooftop helipad
+                Color wall = {222, 222, 214, 255};
+                m.box({0, 9.0f, 0}, {46, 18, 22}, wall, xf);
+                m.box({0, 5.0f, 20}, {30, 10, 18}, shade(wall, 0.95f), xf);
+                for (int f2 = 0; f2 < 4; ++f2)
+                    for (float sd : {-11.05f, 11.05f})
+                        m.box({0, 2.6f + f2 * 4.2f, sd}, {42, 1.5f, 0.08f}, Color{250, 236, 196, (f2 + p.variant) % 3 ? 253 : 251}, xf);
+                m.box({0, 18.2f, 0}, {14, 0.3f, 14}, Color{60, 60, 60, 255}, xf);
+                m.box({0, 18.4f, 0}, {9, 0.06f, 1.6f}, kWhite, xf);
+                m.box({0, 18.4f, 0}, {1.6f, 0.06f, 9}, kWhite, xf);
+                m.box({23.1f, 12.0f, 0}, {0.1f, 4.0f, 1.2f}, kRed, xf);
+                m.box({23.1f, 12.0f, 0}, {0.1f, 1.2f, 4.0f}, kRed, xf);
+                reach = 28; top = 19;
+                break;
+            }
+            case PropKind::Warehouse: {
+                Color wall = p.variant & 1 ? Color{170, 172, 168, 255} : Color{188, 176, 150, 255};
+                m.box({0, 5.0f, 0}, {48, 10, 26}, wall, xf);
+                gable(m, 48, 26, 10, 2.5f, Color{110, 116, 118, 255}, wall, xf);
+                for (int k = 0; k < 4; ++k) m.box({-18.0f + k * 12.0f, 2.5f, 13.05f}, {6.0f, 5.0f, 0.1f}, Color{120, 124, 126, 255}, xf);
+                reach = 26; top = 13;
+                break;
+            }
+            case PropKind::Bush: {
+                Color leaf = p.variant & 1 ? Color{58, 82, 40, 255} : Color{74, 92, 46, 255};
+                float r = 1.2f + 0.3f * (p.variant & 3);
+                m.sphere({0, r * 0.7f, 0}, r, 6, 5, leaf, xf);
+                m.sphere({r * 0.8f, r * 0.5f, r * 0.3f}, r * 0.7f, 5, 4, shade(leaf, 0.9f), xf);
+                reach = 3; top = 2.5f;
+                break;
+            }
         }
         Vector3 c = {static_cast<float>(p.pos.x), gy, static_cast<float>(p.pos.z)};
         B.lo = Vector3Min(B.lo, Vector3Subtract(c, {reach, 1, reach}));

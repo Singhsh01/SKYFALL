@@ -959,6 +959,28 @@ JetModel buildJetModel(AirframeStyle style) {
         default: break;
     }
     jm.length = g.fus.front().x - g.fus.back().x;
+    {   // marking anchors: roundel at 62 % of the exposed span, fin flash at mid-height of the fin
+        const Planform& w = g.wing;
+        const float f = 0.62f;
+        float le = w.rootLE + (w.tipLE - w.rootLE) * f, te = w.rootTE + (w.tipTE - w.rootTE) * f;
+        float span = w.tipZ - w.rootZ;
+        jm.wingMark = {(le + te) * 0.5f, w.y + w.tipDy * f + g.yOff, w.rootZ + span * f,
+                       std::min((le - te) * 0.36f, span * 0.2f)};
+        const float u = 0.5f;
+        float fle = t.rootLE + (t.tipLE - t.rootLE) * u, fte = t.rootTE + (t.tipTE - t.rootTE) * u;
+        jm.finMark = {(fle + fte) * 0.5f, t.y + tc * t.height * u + g.yOff, fabsf(t.z) + ts * t.height * u,
+                      std::min((fle - fte) * 0.36f, t.height * 0.22f)};
+        jm.finTan = ts / std::max(tc, 0.2f);
+        float front = std::max(g.canX0, g.canX1);
+        float nx = front + (g.transportGear ? 2.5f : 1.3f);
+        float hw = 0.5f, hy = 0.0f;
+        for (size_t i = 0; i + 1 < g.fus.size(); ++i)   // fuselage sections run nose -> tail
+            if (g.fus[i].x >= nx && g.fus[i + 1].x <= nx) { hw = g.fus[i].w; hy = g.fus[i].chine; break; }
+        float dh = g.transportGear ? 1.1f : 0.42f;
+        jm.noseMark = {nx, hy + g.yOff, dh, hw};
+        float wroot = w.rootZ + 0.12f;
+        jm.walk = {wroot, w.rootLE - (w.rootLE - w.rootTE) * 0.3f, w.rootTE + (w.rootLE - w.rootTE) * 0.18f, wroot + span * 0.22f};
+    }
     jm.loaded = true;
     return jm;
 }

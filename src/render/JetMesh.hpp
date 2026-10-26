@@ -52,6 +52,12 @@ struct JetModel {
     float plumeScale = 1.0f; // afterburner plume length / diamond character per engine family
     float plumeHue = 0.0f;   // -1 bluer .. +1 more orange
     bool hasRamp = false;    // cargo ramp (transport)
+    // marking anchors (model space) for the shader-drawn insignia and stencils
+    Vector4 wingMark{};      // x, y, |z|, radius of the wing roundel
+    Vector4 finMark{};       // x, y, |z|, radius of the fin flash
+    float finTan = 0.0f;     // outward cant of the fin (|z| change per metre of height)
+    Vector4 noseMark{};      // x, y, digit height, half-width of the fuselage there
+    Vector4 walk{};          // wing root: |z|, leading-edge x, trailing-edge x, outboard |z| of the walkway
     bool loaded = false;
     int triangles(int l) const;
 };

@@ -197,6 +197,10 @@ private:
     void drawTanker(const FrameParams& f);
     void drawDressing(const FrameParams& f);
     void drawTraffic(const FrameParams& f);
+    /// The living airbase: taxiing and departing jets, a helicopter circuit, the C-17 being
+    /// unloaded, a fuel truck on its rounds, rotating radars (all functions of time, no simulation).
+    void drawAirbaseLife(const FrameParams& f);
+    Mesh forkliftMesh_{}, tugMesh_{}, fuelTruckMesh_{}, radarHeadMesh_{};
     void pushSceneLights(const FrameParams& f);
     Mesh traffic_{};
     int trafficCap_ = 0;

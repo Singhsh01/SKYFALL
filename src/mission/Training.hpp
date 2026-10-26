@@ -73,6 +73,8 @@ struct Asset {
     double holdSeconds = 0;                // rescue: time on the pick-up
     int beginSection = 0;                  // spawned when this section begins
     std::vector<int> unitKinds;            // GroundKind per unit (convoy / base / fleet / troops)
+    std::vector<Vec3> unitPos;             // base: designated slots (x, z; heading in y), empty = placed around `area`
+    std::vector<int> unitAircraft;         // base: AircraftId of each parked aircraft (-1 = other units)
 };
 
 /// Weapons the player may use in an engagement.

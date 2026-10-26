@@ -63,11 +63,14 @@ struct Settings {
     int skinFor(int aircraftId) const {
         if (aircraftId < 0 || aircraftId >= static_cast<int>(skins.size())) return 0;
         char c = skins[aircraftId];
-        return c >= '0' && c <= '9' ? c - '0' : (c >= 'a' && c <= 'z' ? 10 + (c - 'a') : 0);
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'z') return 10 + (c - 'a');
+        if (c >= 'A' && c <= 'Z') return 36 + (c - 'A');
+        return 0;
     }
     void setSkin(int aircraftId, int skin) {
-        if (aircraftId >= 0 && aircraftId < static_cast<int>(skins.size()) && skin >= 0 && skin < 36)
-            skins[aircraftId] = static_cast<char>(skin < 10 ? '0' + skin : 'a' + (skin - 10));
+        if (aircraftId >= 0 && aircraftId < static_cast<int>(skins.size()) && skin >= 0 && skin < 62)
+            skins[aircraftId] = static_cast<char>(skin < 10 ? '0' + skin : skin < 36 ? 'a' + (skin - 10) : 'A' + (skin - 36));
     }
     // Audio (0..1)
     double master = 0.8, music = 0.5, engine = 0.85, radio = 0.65, effects = 0.9;

@@ -16,5 +16,7 @@ void buildHelicopter(MeshBuilder& m, Matrix xf, Color body, bool attack, bool bl
 /// A road vehicle (Car::kind) in local space (+X forward).
 void buildCarBox(MeshBuilder& m, Matrix xf, Color body, int kind);
 Color sceneCarColor(int v);
+/// An airbase vehicle (tug, forklift, fire truck, radar truck, fuel truck) for the animated airbase.
+void buildGroundVehicle(MeshBuilder& m, Matrix xf, PropKind k, Color body);
 
 }  // namespace sky

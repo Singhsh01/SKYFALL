@@ -734,6 +734,21 @@ TEST(settings_round_trip_preserves_unknown_keys) {
     std::filesystem::remove(path);
 }
 
+TEST(skin_choices_survive_a_settings_round_trip) {
+    // skins are stored one character per aircraft: 0-9, a-z, A-Z (62 schemes)
+    std::string path = (std::filesystem::temp_directory_path() / "skyfall_test_skins.ini").string();
+    Settings s;
+    const int picks[] = {0, 9, 10, 35, 36, 39, 61};
+    for (int i = 0; i < kAircraftCount; ++i) s.setSkin(i, picks[i % 7]);
+    CHECK(s.save(path));
+    Settings r;
+    CHECK(r.load(path));
+    for (int i = 0; i < kAircraftCount; ++i) CHECK(r.skinFor(i) == picks[i % 7]);
+    s.setSkin(0, 62);                    // out of range: ignored
+    CHECK(s.skinFor(0) == 0);
+    std::filesystem::remove(path);
+}
+
 TEST(frame_stats_percentiles) {
     FrameStats fs(1000);
     for (int i = 1; i <= 100; ++i) fs.push(i);

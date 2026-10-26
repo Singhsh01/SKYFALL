@@ -71,6 +71,8 @@ Vector3 g_paintC{0, 0, 0};   // third camouflage colour for the jet drawn next
 float g_paintRough = 0.42f;
 float g_paintMetal = 0.12f;
 Vector3 g_paintGlow{0, 0, 0};
+float g_markIns = 0, g_markFin = 0, g_serial = 0;          // markings for the jet drawn next
+Vector3 g_mark0{0, 0, 0}, g_mark1{0, 0, 0}, g_mark2{0, 0, 0};
 long g_tris = 0;   // triangles submitted this frame (benchmark statistics)
 inline void drawMeshC(const Mesh& m, const Material& mat, const Matrix& t) {
     g_tris += m.triangleCount > 0 ? m.triangleCount : m.vertexCount / 3;
@@ -82,6 +84,7 @@ Vector3 paintFor(Team team, int skinIdx, const AircraftProfile& prof, Vector3& b
     g_paintRough = 0.42f;
     g_paintMetal = 0.12f;
     g_paintGlow = {0, 0, 0};
+    g_markIns = 0; g_markFin = 0;
     if (skinIdx > 0) {
         const Skin& k = skin(skinIdx);
         b = k.b;
@@ -90,6 +93,9 @@ Vector3 paintFor(Team team, int skinIdx, const AircraftProfile& prof, Vector3& b
         g_paintRough = k.roughness;
         g_paintMetal = k.metal;
         g_paintGlow = k.glow;
+        g_markIns = static_cast<float>(static_cast<int>(k.insignia));
+        g_markFin = static_cast<float>(static_cast<int>(k.fin));
+        g_mark0 = k.m0; g_mark1 = k.m1; g_mark2 = k.m2;
         return k.a;
     }
     AirframeStyle st = prof.style;
@@ -116,7 +122,11 @@ Vector3 paintFor(Team team, int skinIdx, const AircraftProfile& prof, Vector3& b
     return {0.36f, 0.30f, 0.21f};
 }
 
-Vector3 paintFor(const Jet& j, Vector3& b, float& camo) { return paintFor(j.team, j.skin, j.fm->profile(), b, camo); }
+Vector3 paintFor(const Jet& j, Vector3& b, float& camo) {
+    Vector3 a = paintFor(j.team, j.skin, j.fm->profile(), b, camo);
+    g_serial = static_cast<float>(101 + (j.id * 389 + 17) % 899);   // a stable three-digit airframe number
+    return a;
+}
 }  // namespace
 
 long Renderer::triangles() const { return g_tris; }
@@ -338,7 +348,7 @@ void Renderer::shutdown() {
     UnloadMesh(flame_); UnloadMesh(missile_);
     UnloadMesh(tank_); UnloadMesh(truck_); UnloadMesh(aaa_); UnloadMesh(sam_); UnloadMesh(bunker_); UnloadMesh(radar_);
     for (Mesh* m : {&gun_, &artillery_, &oilRig_, &fuelTank_, &hangar_, &command_, &ship_, &powerPlant_, &refinery_, &bridgeDeck_,
-                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_, &carrier_, &heli_, &heliAttack_, &heliRotor_, &cargo_, &chute_})
+                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_, &carrier_, &heli_, &heliAttack_, &heliRotor_, &cargo_, &chute_, &forkliftMesh_, &tugMesh_, &fuelTruckMesh_, &radarHeadMesh_})
         UnloadMesh(*m);
     if (obstacleMeshValid_) UnloadMesh(obstacleMesh_);
     if (ringMesh_.vertexCount) { UnloadMesh(ringMesh_); UnloadMesh(beaconMesh_); }
@@ -1341,6 +1351,7 @@ void Renderer::drawDressing(const FrameParams& f) {
     const WorldLayout* L = dressing_.layout;
     if (!L) return;
     drawTraffic(f);
+    if (!f.isPip) drawAirbaseLife(f);
     if (f.L.night > 0.05f && !f.isPip) pushSceneLights(f);
     const Battle* gb = f.groundFrom ? f.groundFrom : f.battle;
     // factory halls (a mission may own them as targets, then they are drawn as ground targets)
@@ -1492,6 +1503,196 @@ void Renderer::drawTraffic(const FrameParams& f) {
     ++drawCalls_;
 }
 
+void Renderer::drawAirbaseLife(const FrameParams& f) {
+    const WorldLayout* L = dressing_.layout;
+    if (!L || !terrain_) return;
+    if (forkliftMesh_.vertexCount == 0) {
+        MeshBuilder a, b, c, d;
+        buildGroundVehicle(a, MatrixIdentity(), PropKind::Forklift, WHITE);
+        buildGroundVehicle(b, MatrixIdentity(), PropKind::Tug, WHITE);
+        buildGroundVehicle(c, MatrixIdentity(), PropKind::FuelTruck, Color{94, 100, 72, 255});
+        d.box({0, 0.6f, 0}, {1.2f, 1.6f, 7.5f}, Color{226, 226, 220, 255});   // radar antenna (on its turntable)
+        d.box({-0.8f, 0.6f, 0}, {0.4f, 0.4f, 0.4f}, Color{78, 80, 82, 255});
+        forkliftMesh_ = a.build();
+        tugMesh_ = b.build();
+        fuelTruckMesh_ = c.build();
+        radarHeadMesh_ = d.build();
+    }
+    const RunwayInfo& rw = terrain_->runway();
+    const double cx = rw.center.x, cz = rw.center.z, ry = rw.center.y;
+    const float T = static_cast<float>(f.time);
+    const Vector3 cam = f.cam.position;
+    auto near = [&](double x, double y, double z, float d) { return Vector3Distance({static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)}, cam) < d; };
+    auto at = [&](const Mesh& m, double x, double z, double yaw, double lift = 0.0) {
+        double y = terrain_->surfaceHeight(x, z) + lift;
+        drawMeshC(m, litMat_, MatrixMultiply(MatrixRotateY(-static_cast<float>(yaw)), MatrixTranslate(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z))));
+        ++drawCalls_;
+    };
+    /// position along a there-and-back polyline at time t (speed v, a pause at each end)
+    auto shuttle = [](const std::vector<Vector2>& P, double t, double v, double pause, double& yaw) {
+        double len = 0;
+        for (size_t i = 1; i < P.size(); ++i) len += std::hypot(P[i].x - P[i - 1].x, P[i].y - P[i - 1].y);
+        // out (leg), pause at the far end, back (leg), pause at the start
+        double leg = len / v, cyc = 2.0 * (leg + pause);
+        double u = std::fmod(t, cyc);
+        bool back = u >= leg + pause;
+        double s;
+        if (u < leg) s = u * v;
+        else if (u < leg + pause) s = len;
+        else if (u < 2.0 * leg + pause) s = len - (u - leg - pause) * v;
+        else s = 0.0;
+        s = std::clamp(s, 0.0, len);
+        double rest = s;
+        for (size_t i = 1; i < P.size(); ++i) {
+            double l = std::hypot(P[i].x - P[i - 1].x, P[i].y - P[i - 1].y);
+            if (rest <= l || i + 1 == P.size()) {
+                double k = l > 1e-6 ? std::clamp(rest / l, 0.0, 1.0) : 1.0;
+                yaw = std::atan2(P[i].y - P[i - 1].y, P[i].x - P[i - 1].x) + (back ? kPi : 0.0);
+                return Vector2{P[i - 1].x + (P[i].x - P[i - 1].x) * static_cast<float>(k), P[i - 1].y + (P[i].y - P[i - 1].y) * static_cast<float>(k)};
+            }
+            rest -= l;
+        }
+        return P.back();
+    };
+    setAtmosphere(lit_, f);
+    lit_.setF("uEmissive", 0.0f);
+    lit_.setF("uSpecular", 0.25f);
+    // rotating radar antennas on the masts (one turn every 6 s)
+    for (const SceneProp& p : L->props) {
+        if (p.kind != PropKind::RadarMast || !near(p.pos.x, p.pos.y, p.pos.z, 6000.0f)) continue;
+        Matrix M = MatrixMultiply(MatrixRotateY(T * 1.05f + static_cast<float>(p.pos.x) * 0.01f),
+                                  MatrixTranslate(static_cast<float>(p.pos.x), static_cast<float>(p.pos.y) + 21.8f, static_cast<float>(p.pos.z)));
+        drawMeshC(radarHeadMesh_, litMat_, M);
+        ++drawCalls_;
+    }
+    // the parked C-17s: ramp down, a forklift shuttling pallets between the ramp and the stacks
+    for (const SceneProp& p : L->props) {
+        if (p.kind != PropKind::ParkedTransport || !near(p.pos.x, p.pos.y, p.pos.z, 9000.0f)) continue;
+        Vector3 pb;
+        float camo;
+        Vector3 pa = paintFor(Team::Blue, 0, profile(AircraftId::C17), pb, camo);
+        JetPose pose;
+        pose.gear = 1.0f;
+        pose.ramp = 1.0f;
+        pose.compress = 0.12f;
+        pose.lights = f.L.night > 0.2f;
+        pose.flaps = 0;
+        Matrix M = MatrixMultiply(MatrixRotateY(-static_cast<float>(p.yaw)),
+                                  MatrixTranslate(static_cast<float>(p.pos.x), static_cast<float>(p.pos.y + FlightModel::kGearHeight), static_cast<float>(p.pos.z)));
+        setAtmosphere(jet_, f);
+        drawJetModel(AirframeStyle::Transport, M, pa, pb, camo, pose, f);
+        setAtmosphere(lit_, f);
+        // the ramp is at the tail (-X in the aircraft frame): the forklift runs out to the stacks
+        Vec3 back{-std::cos(p.yaw), 0, -std::sin(p.yaw)};
+        Vec3 r0 = p.pos + back * 34.0, r1 = p.pos + back * 64.0;
+        double yaw = 0;
+        Vector2 q = shuttle({{static_cast<float>(r0.x), static_cast<float>(r0.z)}, {static_cast<float>(r1.x), static_cast<float>(r1.z)}}, f.time, 3.0, 6.0, yaw);
+        at(forkliftMesh_, q.x, q.y, yaw);
+        // a pallet on the forks on the way out
+        double u = std::fmod(f.time, 2.0 * (30.0 / 3.0 + 6.0));
+        if (u < 30.0 / 3.0 + 6.0) {
+            Vec3 fw{std::cos(yaw), 0, std::sin(yaw)};
+            drawMeshC(cargo_, litMat_, MatrixMultiply(MatrixMultiply(MatrixScale(0.8f, 0.8f, 0.8f), MatrixRotateY(-static_cast<float>(yaw))),
+                                                      MatrixTranslate(static_cast<float>(q.x + fw.x * 1.9), static_cast<float>(terrain_->surfaceHeight(q.x, q.y) + 0.35),
+                                                                      static_cast<float>(q.y + fw.z * 1.9))));
+            ++drawCalls_;
+        }
+    }
+    if (!near(cx, ry, cz, 14000.0f)) return;
+    // a tug and a fuel truck doing the rounds of the apron (the fuel farm -> the parked jets)
+    {
+        double yaw = 0;
+        Vector2 q = shuttle({{static_cast<float>(cx + 700), static_cast<float>(cz + 520)}, {static_cast<float>(cx + 620), static_cast<float>(cz + 470)},
+                             {static_cast<float>(cx + 300), static_cast<float>(cz + 470)}, {static_cast<float>(cx + 290), static_cast<float>(cz + 395)}},
+                            f.time + 40.0, 7.0, 25.0, yaw);
+        at(fuelTruckMesh_, q.x, q.y, yaw);
+        q = shuttle({{static_cast<float>(cx - 420), static_cast<float>(cz + 455)}, {static_cast<float>(cx + 160), static_cast<float>(cz + 455)}}, f.time, 5.0, 15.0, yaw);
+        at(tugMesh_, q.x, q.y, yaw);
+    }
+    // the player's own jet on the ground keeps the runway to itself
+    bool playerOnRunway = false;
+    if (f.battle && !f.battle->jets().empty()) {
+        const FlightState& ps = f.battle->player().fm->state();
+        playerOnRunway = ps.onGround || (ps.agl < 300.0 && std::fabs(ps.pos.z - cz) < 1500.0 && std::fabs(ps.pos.x - cx) < rw.length);
+    }
+    const float W = static_cast<float>(rw.width), Lr = static_cast<float>(rw.length);
+    // a fighter taxiing between the apron and the holding point at the east end
+    {
+        double yaw = 0;
+        std::vector<Vector2> taxi = {{static_cast<float>(cx + 120), static_cast<float>(cz + 300)}, {static_cast<float>(cx + 120), static_cast<float>(cz + 210)},
+                                     {static_cast<float>(cx + 350), static_cast<float>(cz + 190)}, {static_cast<float>(cx + Lr / 2 - 150), static_cast<float>(cz + 190)},
+                                     {static_cast<float>(cx + Lr / 2 - 150), static_cast<float>(cz + W / 2 + 40)}};
+        Vector2 q = shuttle(taxi, f.time, 9.0, 40.0, yaw);
+        Vector3 pb;
+        float camo;
+        Vector3 pa = paintFor(Team::Blue, 0, profile(AircraftId::F16), pb, camo);
+        JetPose pose;
+        pose.gear = 1.0f;
+        pose.throttle = 0.15f;
+        pose.lights = true;
+        pose.compress = 0.12f;
+        pose.wheelSpin = T * 20.0f;
+        double y = terrain_->surfaceHeight(q.x, q.y) + FlightModel::kGearHeight;
+        Matrix M = MatrixMultiply(MatrixRotateY(-static_cast<float>(yaw)), MatrixTranslate(q.x, static_cast<float>(y), q.y));
+        setAtmosphere(jet_, f);
+        drawJetModel(AirframeStyle::ViperSingle, M, pa, pb, camo, pose, f);
+    }
+    // a pair departing every 150 s when the runway is free: roll, rotate, climb out east
+    if (!playerOnRunway) {
+        const double cyc = 150.0;
+        for (int k = 0; k < 2; ++k) {
+            double t = std::fmod(f.time + 37.0 - k * 7.0, cyc);
+            if (t > 75.0) continue;
+            double accel = 3.4, vr = 76.0, tr = vr / accel;
+            double x0 = cx - Lr / 2 + 200.0;
+            double sx, h = 0, v;
+            if (t < tr) { sx = 0.5 * accel * t * t; v = accel * t; }
+            else {
+                double ta = t - tr;
+                v = vr + 6.0 * ta;
+                sx = 0.5 * accel * tr * tr + vr * ta + 3.0 * ta * ta;
+                h = std::max(0.0, 0.18 * (sx - 0.5 * accel * tr * tr) - 20.0);
+            }
+            double px = x0 + sx, pz = cz - (k ? 12.0 : -12.0);
+            if (!near(px, ry + h, pz, 12000.0f)) continue;
+            double climb = t < tr ? 0.0 : std::atan(0.18) * std::min(1.0, (t - tr) / 3.0);
+            Vector3 pb;
+            float camo;
+            AircraftId type = k ? AircraftId::FA18 : AircraftId::F22;
+            Vector3 pa = paintFor(Team::Blue, 0, profile(type), pb, camo);
+            JetPose pose;
+            pose.gear = h > 60.0 ? std::max(0.0f, 1.0f - static_cast<float>((h - 60.0) / 80.0)) : 1.0f;
+            pose.throttle = 1.0f;
+            pose.ab = 0.9f;
+            pose.lights = true;
+            pose.mach = static_cast<float>(v / 340.0);
+            pose.altitude = static_cast<float>(ry + h);
+            pose.wheelSpin = static_cast<float>(sx / 0.42);
+            Matrix M = MatrixMultiply(MatrixRotateZ(static_cast<float>(climb)),
+                                      MatrixTranslate(static_cast<float>(px), static_cast<float>(ry + FlightModel::kGearHeight + h), static_cast<float>(pz)));
+            setAtmosphere(jet_, f);
+            drawJetModel(profile(type).style, M, pa, pb, camo, pose, f);
+        }
+    }
+    setAtmosphere(lit_, f);
+    // a helicopter flying circuits round the airfield at 150 m
+    {
+        double a = f.time * (2.0 * kPi / 95.0);
+        double ex = 2200.0, ez = 1300.0;
+        double hx = cx + std::cos(a) * ex, hz = cz + std::sin(a) * ez;
+        double hy = terrain_->surfaceHeight(hx, hz) + 150.0;
+        if (near(hx, hy, hz, 8000.0f)) {
+            double yaw = std::atan2(std::cos(a) * ez, -std::sin(a) * ex);
+            Matrix body = MatrixMultiply(MatrixMultiply(MatrixRotateZ(-0.10f), MatrixRotateY(-static_cast<float>(yaw))),
+                                         MatrixTranslate(static_cast<float>(hx), static_cast<float>(hy), static_cast<float>(hz)));
+            drawMeshC(heli_, litMat_, body);
+            drawMeshC(heliRotor_, litMat_, MatrixMultiply(MatrixMultiply(MatrixRotateY(T * 21.0f), MatrixTranslate(-0.4f, 4.9f, 0)), body));
+            drawCalls_ += 2;
+            if (f.L.night > 0.2f && std::fmod(f.time, 1.2) < 0.15) lights_.push_back({{static_cast<float>(hx), static_cast<float>(hy + 1.0), static_cast<float>(hz)}, 1.2f, Color{255, 40, 30, 255}});
+        }
+    }
+}
+
 void Renderer::pushSceneLights(const FrameParams& f) {
     const WorldLayout* L = dressing_.layout;
     Vector3 cp = f.cam.position;
@@ -1607,6 +1808,19 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
     jet_.setF("uMetal", g_paintMetal);
     jet_.setV3("uGlowColor", g_paintGlow);
     jet_.setF("uGlowPulse", 0.35f + 0.45f * pose.throttle + 0.9f * pose.ab);   // accents brighten with the engine
+    jet_.setV4("uWingMark", jm.wingMark);
+    jet_.setV4("uFinMark", jm.finMark);
+    jet_.setF("uFinTan", jm.finTan);
+    jet_.setV4("uNoseMark", jm.noseMark);
+    jet_.setV4("uWalk", jm.walk);
+    jet_.setF("uInsignia", g_markIns);
+    jet_.setF("uFinFlash", g_markFin);
+    jet_.setF("uSerial", g_serial);
+    jet_.setV3("uMark0", g_mark0);
+    jet_.setV3("uMark1", g_mark1);
+    jet_.setV3("uMark2", g_mark2);
+    jet_.setF("uMarkOn", lod < 2 ? 1.0f : 0.0f);
+    g_markIns = 0; g_markFin = 0; g_serial = 0;
     g_paintC = {0, 0, 0};
     g_paintRough = 0.42f;
     g_paintMetal = 0.12f;
@@ -1617,6 +1831,7 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
     drawMeshC(L.body, jetMat_, M);
     if (canopy) drawMeshC(L.canopy, jetMat_, M);
     drawCalls_ += 2;
+    jet_.setF("uMarkOn", 0.0f);   // moving parts are modelled about their own pivots: no markings
     // moving parts (LOD 0): control surfaces follow the stick, nozzles vector, wheels roll
     const float D = DEG2RAD;
     Matrix gearM = MatrixMultiply(MatrixTranslate(0, (1.0f - pose.gear) * 1.6f + pose.compress, 0), M);

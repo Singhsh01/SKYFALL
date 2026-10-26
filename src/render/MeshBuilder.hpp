@@ -69,6 +69,20 @@ struct MeshBuilder {
         }
     }
 
+    /// Low-poly sphere (flat shaded): `slices` around, `rings` from pole to pole.
+    void sphere(Vector3 center, float r, int slices, int rings, Color c, Matrix xf = MatrixIdentity()) {
+        auto P = [&](int i, int j) {
+            float th = PI * j / rings, ph = 2 * PI * i / slices;
+            return Vector3Transform({center.x + r * sinf(th) * cosf(ph), center.y + r * cosf(th), center.z + r * sinf(th) * sinf(ph)}, xf);
+        };
+        for (int j = 0; j < rings; ++j)
+            for (int i = 0; i < slices; ++i) {
+                Vector3 a = P(i, j), b = P(i + 1, j), d = P(i, j + 1), e = P(i + 1, j + 1);
+                if (j > 0) tri(a, b, e, c);
+                if (j + 1 < rings) tri(a, e, d, c);
+            }
+    }
+
     Mesh build(bool keepIndices = false) const {
         Mesh m = {0};
         m.vertexCount = static_cast<int>(vertexCount());
