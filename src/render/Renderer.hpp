@@ -79,6 +79,9 @@ struct FrameParams {
     float blackout = 0, redout = 0, damage = 0, speedFx = 0, rush = 0;
     bool showRunwayLights = true;
     bool bloom = true;
+    int detailDrop = 0;           // adaptive rendering: 0 full detail .. 3 (see FrameGovernor)
+    float autoExposure = 0.6f;    // 0 = fixed exposure; 0..1 strength of the eye adaptation
+    float adaptKey = -1.2f;       // log2 exposed luminance the adaptation steers to (per time of day)
     GraphicsQuality quality = GraphicsQuality::High;
     float exposureBoost = 1.0f;
     bool shadows = true;
@@ -143,7 +146,7 @@ public:
     int drawCalls() const { return drawCalls_; }
     long triangles() const;
     // GPU pass profiler (serialises the pipeline; for --bench / F3 diagnostics only)
-    void setProfiling(bool on) { profiling_ = on; prof_.clear(); profFrames_ = 0; }
+    void setProfiling(bool on) { profiling_ = on; prof_.clear(); profCalls_.clear(); profFrames_ = 0; }
     bool profiling() const { return profiling_; }
     void profMark(const char* pass);
     std::string profReport() const;
@@ -153,6 +156,8 @@ private:
     bool profiling_ = false;
     std::vector<std::pair<std::string, double>> prof_;
     int profFrames_ = 0;
+    std::vector<long> profCalls_;   // mesh draws per pass (summed over frames)
+    long profDraws_ = 0;
     std::chrono::steady_clock::time_point profLast_;
     void buildGroundModels();
     void renderShadows(const FrameParams& f);
@@ -210,6 +215,12 @@ private:
     std::vector<CloudPuff> puffs_;
 
     Prog sky_, terrain_p_, water_, lit_, jet_, flameP_, cloud_, runway_, particle_, bright_, blur_, composite_;
+    Prog lumDown_, lumAvg_, adaptP_;
+    RenderTexture2D lumA_{}, lumB_{}, adapt_[2]{};   // eye adaptation chain (64x36, 1x1, 1x1 ping-pong)
+    int adaptIdx_ = 0;
+    double adaptT_ = -1.0;          // time of the last adaptation step (-1: jump to the scene)
+    float adaptedLog2_ = 0.0f;      // last value read back (debug / tests only)
+    void updateAdaptation(const FrameParams& f);
     Material terrainMat_{}, waterMat_{}, litMat_{}, jetMat_{}, flameMat_{}, cloudMat_{}, runwayMat_{};
 
     RenderTexture2D scene_{}, bloomA_{}, bloomB_{}, bloomC_{}, bloomD_{};

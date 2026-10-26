@@ -54,6 +54,20 @@ QualityProfile qualityProfile(GraphicsQuality q) {
     return p;
 }
 
+QualityProfile qualityProfile(GraphicsQuality q, int detailDrop) {
+    QualityProfile p = qualityProfile(q);
+    static const float kDist[] = {1.0f, 0.8f, 0.65f, 0.5f};
+    int d = detailDrop < 0 ? 0 : (detailDrop > 3 ? 3 : detailDrop);
+    if (d == 0) return p;
+    p.treeDist *= kDist[d];
+    p.sceneryDist *= kDist[d];
+    p.terrainHiDist *= kDist[d];
+    p.terrainL0Dist *= kDist[d];
+    p.rainDrops = static_cast<int>(p.rainDrops * kDist[d]);
+    if (d >= 2) p.shadows = false;
+    return p;
+}
+
 const char* qualityName(GraphicsQuality q) {
     static const char* n[kQualityCount] = {"LOW", "MEDIUM", "HIGH", "ULTRA HD", "CINEMATIC 4K", "PERFORMANCE 120"};
     int i = static_cast<int>(q);
@@ -91,6 +105,7 @@ bool Settings::load(const std::string& path) {
             else if (k == "vsync") vsync = toBool(v);
             else if (k == "fov") fovDeg = std::clamp(std::stod(v), 50.0, 100.0);
             else if (k == "bloom") bloom = toBool(v);
+            else if (k == "auto_exposure") autoExposure = toBool(v);
             else if (k == "camera_shake") cameraShake = std::clamp(std::stod(v), 0.0, 1.0);
             else if (k == "g_effects") gEffects = toBool(v);
             else if (k == "ui_scale") uiScale = std::clamp(std::stod(v), 0.75, 1.5);
@@ -135,7 +150,7 @@ bool Settings::save(const std::string& path) const {
     if (!f) return false;
     f << "# SKYFALL settings - safe to edit by hand\n[graphics]\n"
       << "quality=" << static_cast<int>(quality) << "\nfps_cap=" << fpsCap << "\nwidth=" << width << "\nheight=" << height
-      << "\nfullscreen=" << fullscreen << "\nvsync=" << vsync << "\nfov=" << fovDeg << "\nbloom=" << bloom
+      << "\nfullscreen=" << fullscreen << "\nvsync=" << vsync << "\nfov=" << fovDeg << "\nbloom=" << bloom << "\nauto_exposure=" << autoExposure
       << "\ncamera_shake=" << cameraShake << "\ng_effects=" << gEffects << "\nui_scale=" << uiScale
       << "\nshow_fps=" << showFps << "\nhud_panel_scale=" << hudPanelScale << "\nhigh_contrast_hud=" << highContrastHud << "\nhud_style=" << hudStyle << "\nmissile_cam=" << missileCam << "\ncrash_replay=" << crashReplay << "\nkill_replay=" << killReplay << "\ndynamic_resolution=" << dynamicResolution << "\nsmooth_motion=" << smoothMotion << "\nsettings_version=" << settingsVersion << "\n[input]\n"
       << "invert_pitch=" << invertPitch << "\nsensitivity=" << sensitivity << "\ndeadzone=" << deadzone

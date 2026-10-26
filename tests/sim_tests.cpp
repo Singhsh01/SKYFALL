@@ -2,6 +2,7 @@
 #include "aircraft/AircraftProfile.hpp"
 #include "app/CameraMode.hpp"
 #include "app/Settings.hpp"
+#include "app/FrameGovernor.hpp"
 #include "combat/Combat.hpp"
 #include "mission/Campaign.hpp"
 #include "mission/Mission.hpp"
@@ -747,6 +748,58 @@ TEST(skin_choices_survive_a_settings_round_trip) {
     s.setSkin(0, 62);                    // out of range: ignored
     CHECK(s.skinFor(0) == 0);
     std::filesystem::remove(path);
+}
+
+TEST(frame_governor_lowers_resolution_then_detail_and_restores_in_reverse) {
+    FrameGovernor g;
+    const double budget = 8.33;   // Performance 120
+    double t = 0;
+    // a heavy scene at 14 ms: resolution steps down to the floor first, detail stays full
+    for (int i = 0; i < 5; ++i) g.step(t += 1, 14.0, budget);
+    CHECK_NEAR(g.scale(), 0.5, 1e-9);
+    CHECK(g.detailDrop() == 0);
+    // still too slow at 50 %: detail is shed, at most one level every 3 s, never below level 3
+    for (int i = 0; i < 30; ++i) g.step(t += 1, 14.0, budget);
+    CHECK(g.detailDrop() == FrameGovernor::kMaxDetailDrop);
+    CHECK_NEAR(g.scale(), 0.5, 1e-9);
+    // slight headroom (7.5 ms) is not enough to bring detail back (it costs more than a step)
+    for (int i = 0; i < 30; ++i) g.step(t += 1, 7.5, budget);
+    CHECK(g.detailDrop() == FrameGovernor::kMaxDetailDrop);
+    // clear headroom: detail first, then resolution
+    int lastDetail = g.detailDrop();
+    bool scaleRoseBeforeDetailFull = false;
+    for (int i = 0; i < 120; ++i) {
+        g.step(t += 1, 5.0, budget);
+        if (g.detailDrop() > 0 && g.scale() > 0.5 + 1e-9) scaleRoseBeforeDetailFull = true;
+        CHECK(g.detailDrop() <= lastDetail);
+        lastDetail = g.detailDrop();
+    }
+    CHECK(!scaleRoseBeforeDetailFull);
+    CHECK(g.detailDrop() == 0);
+    CHECK_NEAR(g.scale(), 1.0, 1e-9);
+    // a scene inside the budget never changes anything
+    FrameGovernor h;
+    for (int i = 0; i < 60; ++i) h.step(i, 6.0, budget);
+    CHECK(h.detailDrop() == 0 && h.scale() == 1.0);
+    // no budget (uncapped, no preset budget): untouched
+    h.step(100, 50.0, 0.0);
+    CHECK(h.scale() == 1.0);
+}
+
+TEST(detail_drop_shortens_view_distances_and_drops_shadows) {
+    for (int q = 0; q < kQualityCount; ++q) {
+        QualityProfile base = qualityProfile(static_cast<GraphicsQuality>(q));
+        QualityProfile same = qualityProfile(static_cast<GraphicsQuality>(q), 0);
+        CHECK(same.treeDist == base.treeDist && same.shadows == base.shadows);
+        float prev = base.sceneryDist;
+        for (int d = 1; d <= 3; ++d) {
+            QualityProfile p = qualityProfile(static_cast<GraphicsQuality>(q), d);
+            CHECK(p.sceneryDist < prev && p.treeDist < base.treeDist && p.terrainHiDist < base.terrainHiDist);
+            CHECK(p.sceneScale == base.sceneScale && p.maxWidth == base.maxWidth);   // resolution is the governor's other lever
+            if (d >= 2) CHECK(!p.shadows);
+            prev = p.sceneryDist;
+        }
+    }
 }
 
 TEST(frame_stats_percentiles) {

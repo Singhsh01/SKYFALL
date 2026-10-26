@@ -18,7 +18,12 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 | Bot flies every operation / fighter / mode | ✅ | 578 / 600 (17 lost fights, 5 other) |
 | 120 fps on the MacBook Air | 🟡 | not measured for v1.0; see BENCHMARKS.md |
 | Human play-testing of operation length and difficulty | ⬜ | bot-tested only |
-| Graphics brief (PBR, HDR, instancing / LOD, effects, adaptive rendering) | ⬜ | next |
+| Graphics: fewer draw calls (merged terrain / tree blocks) | ✅ | -13 to -35 % draw calls, identical image |
+| Graphics: HDR eye adaptation | ✅ | GPU-only, per-time-of-day key |
+| Graphics: PBR for buildings, vehicles, props | ✅ | GGX metal / roughness |
+| Graphics: adaptive detail after dynamic resolution | ✅ | FrameGovernor, tested |
+| GPU instancing | 🟡 | not needed yet: repeated dynamic meshes are few (traffic is one buffer, airbase life 14 draws) |
+| Frame rates of v1.x on the MacBook Air | ⬜ | to be measured with scripts/benchmark.sh |
 
 ## v0.9
 

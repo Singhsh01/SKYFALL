@@ -1,6 +1,8 @@
 // Application: screens, game modes, fixed-step simulation loop, cameras, audio/HUD glue,
 // screenshot capture and benchmark modes.
 #pragma once
+
+#include "FrameGovernor.hpp"
 #include <chrono>
 #include <deque>
 
@@ -199,11 +201,10 @@ private:
     bool corridorOn() const;
     CampaignDirector director_;
     // dynamic resolution: 3D scene scale chosen from measured frame times
-    double dynScale_ = 1.0;
+    double dynScale_ = 1.0;          // = governor_.scale()
+    FrameGovernor governor_;         // adaptive rendering: resolution, then scene detail
     double dynTimer_ = 0, dynAccum_ = 0;
     int dynFrames_ = 0;
-    double dynUpBlockedUntil_ = 0;
-    double dynLastUp_ = -100;
     // CPU cost of the last frame's simulation and HUD (ms), for F3 and the benchmark
     double simMs_ = 0, hudMs_ = 0;
     double chimneyTimer_ = 0;

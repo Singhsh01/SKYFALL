@@ -452,11 +452,27 @@ in vec3 vNormal;
 in vec4 vColor;
 uniform vec4 colDiffuse;
 uniform float uEmissive;
-uniform float uSpecular;
+uniform float uSpecular;    // glossiness of the surface: 0 matte (foliage, concrete) .. 0.6 polished
+uniform float uMetal;       // metalness (0 painted / mineral surfaces, never set = 0)
 uniform float uFogOn;
 uniform vec3 uFlashPos;
 uniform vec3 uFlashColor;
 out vec4 finalColor;
+
+// metal / roughness shading (GGX, Smith, Schlick) for buildings, vehicles, ships and props
+float litD(float NoH, float a) { float a2 = a * a; float d = NoH * NoH * (a2 - 1.0) + 1.0; return a2 / (3.14159 * d * d); }
+float litV(float NoV, float NoL, float a) {
+    float a2 = a * a;
+    return 0.5 / max(NoL * sqrt(NoV * NoV * (1.0 - a2) + a2) + NoV * sqrt(NoL * NoL * (1.0 - a2) + a2), 1e-4);
+}
+vec3 litEnv(vec3 r, float rough) {
+    vec3 sky = skyColor(normalize(vec3(r.x, max(r.y, 0.02), r.z)), 0.0);
+    vec3 ground = uGroundHaze * 0.4;
+    vec3 env = mix(ground, sky, smoothstep(-0.08, 0.06, r.y));
+    float l = dot(env, vec3(0.3, 0.5, 0.2));
+    return mix(env, vec3(l) * 0.9, rough * 0.6);
+}
+
 void main() {
     vec3 n = normalize(vNormal);
     if (!gl_FrontFacing) n = -n;
@@ -465,11 +481,22 @@ void main() {
     float win = (wa > 250.5 && wa < 254.5) ? 1.0 : 0.0;
     vec3 albedo = mix(vColor.rgb * colDiffuse.rgb, vec3(0.07, 0.085, 0.11), win);
     vec3 v = normalize(uCamPos - vPos);
-    float ndl = max(dot(n, uSunDir), 0.0);
+    float NoL = max(dot(n, uSunDir), 0.0);
+    float NoV = max(dot(n, v), 1e-3);
     vec3 h = normalize(uSunDir + v);
-    float spec = pow(max(dot(n, h), 0.0), win > 0.5 ? 120.0 : 40.0) * max(uSpecular, win * 1.4);
-    float shd = shadowAt(vPos, ndl);
-    vec3 col = albedo * (uSunColor * ndl * shd + ambientLight(n)) + uSunColor * spec * shd;
+    float NoH = max(dot(n, h), 0.0), VoH = max(dot(v, h), 0.0);
+    float rough = win > 0.5 ? 0.08 : mix(0.95, 0.3, sqrt(clamp(uSpecular / 0.6, 0.0, 1.0)));
+    float metal = win > 0.5 ? 0.0 : clamp(uMetal, 0.0, 1.0);
+    float a = max(rough * rough, 0.02);
+    vec3 F0 = mix(vec3(0.04), albedo, metal);
+    vec3 F = F0 + (1.0 - F0) * pow(1.0 - VoH, 5.0);
+    vec3 spec = litD(NoH, a) * litV(NoV, NoL, a) * F;
+    float shd = shadowAt(vPos, NoL);
+    vec3 diffuse = albedo * (1.0 - metal);
+    vec3 col = (diffuse + spec) * uSunColor * NoL * shd + diffuse * ambientLight(n);
+    // image-based reflection of the sky (Fresnel-weighted, faded on rough surfaces)
+    vec3 Fe = F0 + (max(vec3(1.0 - rough), F0) - F0) * pow(1.0 - NoV, 5.0);
+    col += litEnv(reflect(-v, n), rough) * Fe * (1.0 - rough * 0.85) * (win > 0.5 ? 0.0 : 0.6);
     // sky reflected in the glass by day
     col += win * skyColor(reflect(-v, n), 0.0) * 0.18 * (1.0 - uNight);
     col += win * step(252.0, wa) * vColor.rgb * uNight * 2.4;
@@ -1082,6 +1109,62 @@ void main() {
 }
 )GLSL";
 
+
+// ---------------------------------------------------------------------------------------------
+// Eye adaptation (auto exposure): scene -> 64x36 log-luminance -> 1x1 geometric mean -> adapted
+// ---------------------------------------------------------------------------------------------
+inline const char* kLumDownFS = R"GLSL(#version 330
+in vec2 fragTexCoord;
+uniform sampler2D texture0;   // HDR scene
+uniform vec2 uOut;            // size of this target
+out vec4 finalColor;
+void main() {
+    // 4 x 4 samples spread over this texel's footprint in the scene
+    vec2 cell = 1.0 / uOut;
+    vec2 base = fragTexCoord - cell * 0.5;
+    float acc = 0.0;
+    for (int j = 0; j < 4; ++j)
+        for (int i = 0; i < 4; ++i) {
+            vec3 c = texture(texture0, base + cell * (vec2(i, j) + 0.5) / 4.0).rgb;
+            acc += log2(dot(c, vec3(0.2126, 0.7152, 0.0722)) + 1e-4);
+        }
+    finalColor = vec4(acc / 16.0, 0.0, 0.0, 1.0);
+}
+)GLSL";
+
+inline const char* kLumAvgFS = R"GLSL(#version 330
+in vec2 fragTexCoord;
+uniform sampler2D texture0;   // 64 x 36 log2 luminance
+out vec4 finalColor;
+void main() {
+    ivec2 n = textureSize(texture0, 0);
+    float acc = 0.0, wsum = 0.0;
+    for (int y = 0; y < n.y; ++y)
+        for (int x = 0; x < n.x; ++x) {
+            vec2 uv = (vec2(x, y) + 0.5) / vec2(n);
+            // centre-weighted metering: what the pilot looks at counts more than the edges
+            float w = 1.0 + 2.0 * (1.0 - smoothstep(0.0, 0.6, length((uv - 0.5) * vec2(1.6, 1.0))));
+            acc += texelFetch(texture0, ivec2(x, y), 0).r * w;
+            wsum += w;
+        }
+    finalColor = vec4(acc / wsum, 0.0, 0.0, 1.0);   // log2 of the geometric mean luminance
+}
+)GLSL";
+
+inline const char* kAdaptFS = R"GLSL(#version 330
+in vec2 fragTexCoord;
+uniform sampler2D texture0;   // this frame's log2 mean luminance (1x1)
+uniform sampler2D uPrev;      // last frame's adapted value (1x1)
+uniform float uRateUp, uRateDown;   // 0..1 per frame (1 = jump)
+out vec4 finalColor;
+void main() {
+    float cur = texture(texture0, vec2(0.5)).r;
+    float prev = texture(uPrev, vec2(0.5)).r;
+    float r = cur > prev ? uRateUp : uRateDown;
+    finalColor = vec4(mix(prev, cur, r), 0.0, 0.0, 1.0);
+}
+)GLSL";
+
 inline const char* kCompositeFS = R"GLSL(#version 330
 in vec2 fragTexCoord;
 uniform sampler2D texture0;     // HDR scene
@@ -1102,7 +1185,11 @@ uniform float uGrade;     // 1 = filmic pipeline with sRGB output
 uniform float uGradeK;
 uniform vec4 uHaze[4];    // heat haze behind engines: screen uv, radius (uv), strength
 uniform float uHazeCount;
+uniform sampler2D uAdapt; // eye adaptation: log2 of the adapted scene luminance (1x1)
+uniform float uAutoExp;   // 0 = fixed exposure, 0..1 = how strongly exposure follows the scene
+uniform float uAdaptKey;  // log2 of the exposed luminance the adaptation steers towards
 out vec4 finalColor;
+float gExp;               // exposure used for this pixel (uExposure x adaptation)
 
 vec3 aces(vec3 x) {
     const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
@@ -1121,14 +1208,21 @@ vec3 acesHill(vec3 c) {
 }
 vec3 toSrgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 vec3 toneMap(vec3 hdr) {
-    if (uGrade > 0.5) return toSrgb(acesHill(hdr * uExposure * uGradeK));
-    return aces(hdr * uExposure);
+    if (uGrade > 0.5) return toSrgb(acesHill(hdr * gExp * uGradeK));
+    return aces(hdr * gExp);
 }
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 // cheap perceptual luma straight from the HDR value (edge detection only)
-float lumaH(vec3 hdr) { float y = luma(hdr) * uExposure * 0.6; return y / (1.0 + y); }
+float lumaH(vec3 hdr) { float y = luma(hdr) * gExp * 0.6; return y / (1.0 + y); }
 
 void main() {
+    gExp = uExposure;
+    if (uAutoExp > 0.0) {
+        // partial eye adaptation around the time-of-day exposure: darker scenes (a canyon in
+        // shadow, the cockpit at dusk) open up, glare (sunlit cloud tops, sand) closes down
+        float le = texture(uAdapt, vec2(0.5)).r + log2(uExposure);
+        gExp = uExposure * exp2(clamp((uAdaptKey - le) * uAutoExp, -0.55, 0.6));
+    }
     vec2 uv = fragTexCoord;
     // entering high speed: a brief compression of the image towards the centre
     uv = 0.5 + (uv - 0.5) * (1.0 - 0.018 * uRush);
@@ -1199,7 +1293,7 @@ void main() {
         col = clamp(col, 0.0, 1.0);
     } else {
         col = toneMap(h);
-        col += aces(bloom * uBloomStrength * uExposure) * 0.9;
+        col += aces(bloom * uBloomStrength * gExp) * 0.9;
         col = clamp(col, 0.0, 1.0);
         // gentle filmic grade: lift shadows to teal, warm highlights
         l = luma(col);

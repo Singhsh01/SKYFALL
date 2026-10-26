@@ -170,22 +170,15 @@ void Game::updateDynamicResolution(double dt) {
     // Down quickly when frames are slow; up only after sustained headroom, and not again soon
     // after an up-step that had to be undone (prevents oscillation and its stutter).
     // screenshots and --native benchmarks render at full resolution; a normal --bench plays like the game
-    if (!settings_.dynamicResolution || (capturing_ && opt_.benchSeconds <= 0) || opt_.native) { dynScale_ = 1.0; return; }
+    if (!settings_.dynamicResolution || (capturing_ && opt_.benchSeconds <= 0) || opt_.native) { governor_.resetLevels(); dynScale_ = 1.0; return; }
     if (screen_ != Screen::Playing || replayActive_) { dynTimer_ = dynAccum_ = 0; dynFrames_ = 0; return; }
     dynAccum_ += dt; ++dynFrames_; dynTimer_ += dt;
     if (dynTimer_ < 1.0) return;
     double meanMs = dynAccum_ / std::max(1, dynFrames_) * 1000.0;
     dynTimer_ = dynAccum_ = 0; dynFrames_ = 0;
     // budget: the preset's (Performance 120: 8.3 ms), else the frame-rate cap, else the display
-    double budget = displayFrameBudgetMs();
-    if (meanMs > budget * 1.12 && dynScale_ > 0.55) {
-        dynScale_ = std::max(0.5, dynScale_ - 0.1);
-        dynUpBlockedUntil_ = time_ + ((time_ - dynLastUp_) < 6.0 ? 60.0 : 8.0);
-    } else if (meanMs < budget * 1.02 && dynScale_ < 1.0 && time_ > dynUpBlockedUntil_) {
-        dynScale_ = std::min(1.0, dynScale_ + 0.1);
-        dynLastUp_ = time_;
-        dynUpBlockedUntil_ = time_ + 4.0;
-    }
+    governor_.step(time_, meanMs, displayFrameBudgetMs());
+    dynScale_ = governor_.scale();
 }
 
 void Game::beginBriefing(int missionNo) {
@@ -1523,6 +1516,19 @@ FrameParams Game::makeFrameParams() {
     // edge lights on at night, in the evening and in poor visibility (rain, storm)
     f.showRunwayLights = lighting_.night > 0.05f || rain_ || tod_ == TimeOfDay::Storm || tod_ == TimeOfDay::Dusk || tod_ == TimeOfDay::GoldenHour;
     f.bloom = settings_.bloom;
+    static const bool fullDetail = std::getenv("SKYFALL_FULL_DETAIL") != nullptr;   // benchmarks: compare like with like
+    f.detailDrop = fullDetail ? 0 : governor_.detailDrop();
+    f.autoExposure = settings_.autoExposure && !(capturing_ && std::getenv("SKYFALL_FIXED_EXPOSURE")) ? 0.6f : 0.0f;
+    // the typical exposed scene luminance of each time of day (measured over the arena and an
+    // operation, docs/BENCHMARKS.md): the adaptation evens out views within a time of day
+    // (a sunlit sand plain, a canyon in shadow, the cockpit) without undoing the dusk or night mood
+    switch (tod_) {
+        case TimeOfDay::GoldenHour: f.adaptKey = -1.6f; break;
+        case TimeOfDay::Storm: f.adaptKey = -1.85f; break;
+        case TimeOfDay::Dusk: f.adaptKey = -2.35f; break;
+        case TimeOfDay::Night: f.adaptKey = -4.4f; break;
+        default: f.adaptKey = -1.2f; break;
+    }
     f.quality = settings_.quality;
     f.shadowFocus = toRl(battle_.player().fm->state().pos);
     if (mode_ == GameMode::Training && (screen_ == Screen::Playing || screen_ == Screen::Paused)) {
@@ -1693,7 +1699,9 @@ void Game::renderFrame() {
         if (settings_.showFps && !showDebug_) {
             Percentiles pc = stats_.compute();
             char b[64];
-            if (dynScale_ < 0.999)
+            if (governor_.detailDrop() > 0)
+                std::snprintf(b, sizeof b, "%.0f FPS  %.1f ms  RES %d%%  DETAIL -%d", pc.mean > 0 ? 1000.0 / pc.mean : 0.0, pc.mean, static_cast<int>(std::lround(dynScale_ * 100)), governor_.detailDrop());
+            else if (dynScale_ < 0.999)
                 std::snprintf(b, sizeof b, "%.0f FPS  %.1f ms  RES %d%%", pc.mean > 0 ? 1000.0 / pc.mean : 0.0, pc.mean, static_cast<int>(std::lround(dynScale_ * 100)));
             else
                 std::snprintf(b, sizeof b, "%.0f FPS  %.1f ms", pc.mean > 0 ? 1000.0 / pc.mean : 0.0, pc.mean);
@@ -2022,6 +2030,7 @@ void Game::drawSettings() {
         changed |= ui::toggle(nav_, 24, {x1, y + 22 * s + 3 * (rh + g), cw, rh}, "Arcade boost (3-4 s to top speed)", settings_.arcadeBoost);
         changed |= ui::toggle(nav_, 25, {x1, y + 22 * s + 4 * (rh + g), cw, rh}, "Smooth motion (frame interpolation)", settings_.smoothMotion);
         changed |= ui::toggle(nav_, 26, {x1, y + 22 * s + 5 * (rh + g), cw, rh}, "Kill replay window (enemy's view)", settings_.killReplay);
+        changed |= ui::toggle(nav_, 27, {x1, y + 22 * s + 6 * (rh + g), cw, rh}, "Auto exposure (eye adaptation)", settings_.autoExposure);
         if (ui::cycle(nav_, 22, {x1, y + 22 * s + 2 * (rh + g), cw, rh}, "Frame rate limit", fi, cn)) {
             settings_.fpsCap = caps[fi];
             applyFramePacing();
@@ -3384,6 +3393,10 @@ int Game::runBench() {
         std::printf("unknown --mode %s\n", opt_.startMode.c_str());
         return 1;
     }
+    if (const char* tod = std::getenv("SKYFALL_TOD")) {   // benchmark a scene at another time of day
+        tod_ = static_cast<TimeOfDay>(std::atoi(tod));
+        lighting_ = Lighting::preset(tod_);
+    }
     benchSim_.clear(); benchHud_.clear();
     camMode_ = CameraMode::Chase;
     renderer_.setProfiling(std::getenv("SKYFALL_PROFILE") != nullptr);
@@ -3415,7 +3428,7 @@ int Game::runBench() {
     meanMax(benchHud_, hm, hx);
     std::printf("cpu: simulation mean %.3f ms max %.3f ms | hud mean %.3f ms max %.3f ms\n", sm, sx, hm, hx);
     if (renderer_.profiling()) std::printf("gpu passes (per frame, serialised):\n%s", renderer_.profReport().c_str());
-    std::printf("display %dx%d, resolution scale %d%%\n", GetRenderWidth(), GetRenderHeight(), static_cast<int>(std::lround(dynScale_ * 100)));
+    std::printf("display %dx%d, resolution scale %d%%, detail drop %d\n", GetRenderWidth(), GetRenderHeight(), static_cast<int>(std::lround(dynScale_ * 100)), governor_.detailDrop());
     std::printf("scene %dx%d, quality %s, draw calls %.0f, triangles %.0fk (per-frame means)\n", renderer_.width(), renderer_.height(), qualityName(settings_.quality),
                 sumCalls / std::max(1L, counted), sumTris / std::max(1L, counted) / 1000.0);
     std::fflush(stdout);

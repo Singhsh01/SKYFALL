@@ -1,5 +1,56 @@
 # Benchmarks
 
+## v1.1 rendering work (draw-call merging, eye adaptation, PBR props, adaptive detail)
+
+All figures from the cloud container (Mesa software rasteriser, `--bench 12 --size 640x360
+--quality 2`, High, `SKYFALL_FULL_DETAIL=1` so the adaptive detail drop does not flatter the
+"after" column). Draw calls are now counted exactly: every mesh draw passes one counter, the
+shadow pass included (the v1.0 table below used hand-maintained counts, which missed the jets'
+moving parts). Software frame times say nothing about a GPU; the draw-call column is what carries
+over, because on macOS each OpenGL draw call costs CPU time in the driver.
+
+| Scene | Draw calls v1.0 | Draw calls now | Change |
+|---|---|---|---|
+| Dogfight Arena | 238 | 206 | -13 % |
+| Mission 52 (carrier, rain) | 195 | 160 | -18 % |
+| Mission 14 | 262 | 207 | -21 % |
+| Operation 7 (C-17 escort) | 249 | 185 | -26 % |
+| Operation 3 (airbase defence, on the airfield) | 332 | 215 | -35 % |
+
+Where the draws went (`SKYFALL_PROFILE=1` prints draws per pass): far terrain is now drawn as
+4 x 4-chunk blocks (one draw instead of up to 16) whenever every chunk of the block would use its
+125 m mesh anyway, so the image is unchanged (a pixel comparison of the same view before and after
+differs by 0); trees are drawn 2 x 2 chunks per draw. In operation 3 the terrain pass went from
+174 to 84 draws. Triangles rise slightly (725k vs 708k in the arena) because a merged block is
+culled as a whole.
+
+**Eye adaptation (new, on by default, Settings → Auto exposure).** Each frame the HDR scene is
+reduced on the GPU to a 64 x 36 log-luminance image and then to one centre-weighted geometric
+mean; a 1 x 1 ping-pong target adapts towards it (faster for glare than for darkness). The
+exposure follows it partially (60 %, limited to -0.55 / +0.6 stops) around a per-time-of-day key
+measured in this container: exposed log2 luminance -1.0 to -1.35 in daylight, -1.2 to -2.0 at
+golden hour, -1.8 to -2.0 in the storm, -1.8 to -2.9 at dusk, -4.1 to -4.7 at night
+(`SKYFALL_EXPOSURE_LOG=1`, `SKYFALL_TOD=n`). So dusk stays dusk; what changes is the spread within
+a time of day (a sunlit plain, a canyon in shadow, the cockpit). Cost: three tiny passes and no
+CPU read-back; in the software rasteriser the post pass grew from 12.7 to 14.5 ms (mission 52),
+which is not a GPU figure.
+
+**PBR for the world.** Buildings, vehicles, ships, props and missiles now use the same GGX /
+Smith / Schlick metal-roughness model as the aircraft (with a Fresnel sky reflection), in place
+of Blinn-Phong; the glossiness each object already had maps to roughness, so the look is close
+to before (compare `docs/screenshots`).
+
+**Adaptive detail (FrameGovernor).** When the 3D resolution has already dropped to 50 % and the
+frame is still over budget, the governor sheds scene detail in up to three steps (view distances
+of trees, buildings and fine terrain to 80 / 65 / 50 %, fewer rain drops, no shadow map from step
+2), at most one step every 3 s, and restores detail before resolution once there is clear
+headroom. The FPS overlay (`F3`) shows `DETAIL -n`. In the software rasteriser it reached step 3 in
+operation 3: 158 draw calls, 722k triangles, mean 156 ms vs 175 ms at full detail. Unit-tested
+(`frame_governor_lowers_resolution_then_detail_and_restores_in_reverse`).
+
+**Not measured: any of this on the MacBook Air.** Run `./scripts/benchmark.sh` or
+`./build/skyfall --bench 30 --mode op03` (add `SKYFALL_PROFILE=1` for the per-pass breakdown).
+
 ## v1.0 (combat operations, new aircraft, living airbases, 40 paint schemes)
 
 Measured in the cloud container with Mesa's **software** rasteriser (`--bench 20 --size 640x360

@@ -323,6 +323,25 @@ Mesh buildGridMesh(const Terrain& t, double x0, double z0, double size, int n, d
     return mb.build(true);
 }
 
+/// Concatenates meshes (all indexed or all non-indexed) into one uploaded mesh.
+Mesh mergeMeshes(const std::vector<const Mesh*>& ms) {
+    MeshBuilder mb;
+    bool indexed = !ms.empty() && ms.front()->indices != nullptr;
+    for (const Mesh* m : ms) {
+        size_t base = mb.vertexCount();
+        for (int v = 0; v < m->vertexCount; ++v) {
+            mb.pos.insert(mb.pos.end(), m->vertices + v * 3, m->vertices + v * 3 + 3);
+            mb.nrm.insert(mb.nrm.end(), m->normals + v * 3, m->normals + v * 3 + 3);
+            mb.col.insert(mb.col.end(), m->colors + v * 4, m->colors + v * 4 + 4);
+            if (m->texcoords) mb.uv.insert(mb.uv.end(), m->texcoords + v * 2, m->texcoords + v * 2 + 2);
+            else { mb.uv.push_back(0); mb.uv.push_back(0); }
+        }
+        if (indexed)
+            for (int k = 0; k < m->triangleCount * 3; ++k) mb.idx.push_back(static_cast<unsigned short>(base + m->indices[k]));
+    }
+    return mb.build(indexed);
+}
+
 void addTree(MeshBuilder& mb, Vector3 p, float height, float radius, Color c, int kind) {
     const int sides = kind == 0 ? 5 : 6;
     if (kind == 2) {  // palm: slim trunk + drooping fronds
@@ -469,6 +488,39 @@ void WorldMeshes::build(const Terrain& t) {
                 }
             if (tb.vertexCount() > 0) { c.trees = tb.build(); c.hasTrees = true; }
         }
+
+    // ---- merged groups: far terrain in 4 x 4 chunks, trees in 2 x 2 chunks (fewer draw calls) ----
+    auto makeGroups = [&](int g, bool trees) {
+        std::vector<ChunkGroup> out;
+        for (int gz = 0; gz < kChunks; gz += g)
+            for (int gx = 0; gx < kChunks; gx += g) {
+                ChunkGroup grp;
+                grp.x0 = -Terrain::kHalfSize + gx * kChunkSize;
+                grp.z0 = -Terrain::kHalfSize + gz * kChunkSize;
+                grp.size = g * kChunkSize;
+                std::vector<const Mesh*> parts;
+                float maxH = -1e9f;
+                for (int dz = 0; dz < g; ++dz)
+                    for (int dx = 0; dx < g; ++dx) {
+                        int ci = (gz + dz) * kChunks + gx + dx;
+                        grp.chunks.push_back(ci);
+                        const TerrainChunk& c = chunks[ci];
+                        maxH = std::max(maxH, c.maxH);
+                        if (trees) { if (c.hasTrees) parts.push_back(&c.trees); }
+                        else if (c.maxH >= -1.5f) parts.push_back(&c.lo);   // chunks under the sea are never drawn
+                    }
+                double cy = t.height(grp.x0 + grp.size / 2, grp.z0 + grp.size / 2);
+                grp.center = V3(grp.x0 + grp.size / 2, std::max(cy, 0.0), grp.z0 + grp.size / 2);
+                grp.radius = static_cast<float>(grp.size * 0.71 + 600.0 + std::max(0.0, static_cast<double>(maxH) - cy));
+                if (!parts.empty()) { grp.mesh = mergeMeshes(parts); grp.has = true; }
+                out.push_back(std::move(grp));
+            }
+        return out;
+    };
+    loGroups = makeGroups(kLoGroup, false);
+    treeGroups = makeGroups(kTreeGroup, true);
+    for (TerrainChunk& c : chunks)   // the merged groups replace the per-chunk tree meshes
+        if (c.hasTrees) { UnloadMesh(c.trees); c.trees = Mesh{}; c.hasTrees = false; }
 
     // ---- terrain data texture: per-pixel normal + ambient occlusion (+ sun shadow, baked later) ----
     {
@@ -839,6 +891,10 @@ void WorldMeshes::unload() {
         UnloadMesh(c.hi);
         UnloadMesh(c.lo);
         if (c.hasTrees) UnloadMesh(c.trees);
+    }
+    for (auto* gs : {&loGroups, &treeGroups}) {
+        for (ChunkGroup& g : *gs) if (g.has) UnloadMesh(g.mesh);
+        gs->clear();
     }
     chunks.clear();
     UnloadMesh(farRing); UnloadMesh(water); UnloadMesh(cloudPlane);

@@ -74,8 +74,11 @@ Vector3 g_paintGlow{0, 0, 0};
 float g_markIns = 0, g_markFin = 0, g_serial = 0;          // markings for the jet drawn next
 Vector3 g_mark0{0, 0, 0}, g_mark1{0, 0, 0}, g_mark2{0, 0, 0};
 long g_tris = 0;   // triangles submitted this frame (benchmark statistics)
+long g_draws = 0;
+  // mesh draw calls submitted this frame (exact: every mesh goes through drawMeshC)
 inline void drawMeshC(const Mesh& m, const Material& mat, const Matrix& t) {
     g_tris += m.triangleCount > 0 ? m.triangleCount : m.vertexCount / 3;
+    ++g_draws;
     DrawMesh(m, mat, t);
 }
 
@@ -120,6 +123,14 @@ Vector3 paintFor(Team team, int skinIdx, const AircraftProfile& prof, Vector3& b
     b = {0.16f, 0.12f, 0.08f};
     g_paintC = {0.36f, 0.30f, 0.21f};
     return {0.36f, 0.30f, 0.21f};
+}
+
+/// Horizontal distance from the camera to the nearest point of a chunk group's ground rectangle
+/// (a lower bound of the 3D distance to any of its chunks).
+float nearestToRect(Vector3 cp, const ChunkGroup& g) {
+    double dx = std::max({g.x0 - cp.x, 0.0, cp.x - (g.x0 + g.size)});
+    double dz = std::max({g.z0 - cp.z, 0.0, cp.z - (g.z0 + g.size)});
+    return static_cast<float>(std::sqrt(dx * dx + dz * dz));
 }
 
 Vector3 paintFor(const Jet& j, Vector3& b, float& camo) {
@@ -205,6 +216,9 @@ bool Renderer::init(const Terrain& t, const WorldLayout& layout, int width, int 
     bright_.sh = loadShaderGlsl(kPostVS, kBrightFS);
     blur_.sh = loadShaderGlsl(kPostVS, kBlurFS);
     composite_.sh = loadShaderGlsl(kPostVS, kCompositeFS);
+    lumDown_.sh = loadShaderGlsl(kPostVS, kLumDownFS);
+    lumAvg_.sh = loadShaderGlsl(kPostVS, kLumAvgFS);
+    adaptP_.sh = loadShaderGlsl(kPostVS, kAdaptFS);
 
     auto mat = [&](Prog& p, bool noise, bool depthMap) {
         Material m = LoadMaterialDefault();
@@ -338,6 +352,14 @@ void Renderer::resize(int width, int height) {
     bloomB_ = makeTarget(w_ / d, h_ / d, hdr_, false);
     bloomC_ = makeTarget(w_ / (d * 2), h_ / (d * 2), hdr_, false);
     bloomD_ = makeTarget(w_ / (d * 2), h_ / (d * 2), hdr_, false);
+    if (!lumA_.id && hdr_) {   // eye adaptation: fixed tiny targets, independent of the screen size
+        lumA_ = makeTarget(64, 36, true, false);
+        lumB_ = makeTarget(1, 1, true, false);
+        adapt_[0] = makeTarget(1, 1, true, false);
+        adapt_[1] = makeTarget(1, 1, true, false);
+        for (RenderTexture2D* t : {&lumA_, &lumB_, &adapt_[0], &adapt_[1]}) SetTextureFilter(t->texture, TEXTURE_FILTER_POINT);
+        adaptT_ = -1.0;
+    }
 }
 
 void Renderer::shutdown() {
@@ -352,8 +374,9 @@ void Renderer::shutdown() {
         UnloadMesh(*m);
     if (obstacleMeshValid_) UnloadMesh(obstacleMesh_);
     if (ringMesh_.vertexCount) { UnloadMesh(ringMesh_); UnloadMesh(beaconMesh_); }
-    for (Prog* p : {&sky_, &terrain_p_, &water_, &lit_, &jet_, &flameP_, &cloud_, &runway_, &particle_, &bright_, &blur_, &composite_})
+    for (Prog* p : {&sky_, &terrain_p_, &water_, &lit_, &jet_, &flameP_, &cloud_, &runway_, &particle_, &bright_, &blur_, &composite_, &lumDown_, &lumAvg_, &adaptP_})
         UnloadShader(p->sh);
+    freeTarget(lumA_); freeTarget(lumB_); freeTarget(adapt_[0]); freeTarget(adapt_[1]);
     freeTarget(scene_); freeTarget(bloomA_); freeTarget(bloomB_); freeTarget(bloomC_); freeTarget(bloomD_);
     for (int k = 0; k < 2; ++k) {
         freeTarget(pipScene_[k]);
@@ -1030,7 +1053,7 @@ void Renderer::drawGates(const FrameParams& f) {
 void Renderer::drawRain(const FrameParams& f) {
     if (f.rain <= 0.0f) return;
     // streaks in a box that follows the camera; they fall at 9 m/s and smear with the relative wind
-    const int n = qualityProfile(f.quality).rainDrops;
+    const int n = qualityProfile(f.quality, f.detailDrop).rainDrops;
     const float box = 70.0f;
     Vector3 fall = {f.rainWind.x, -9.0f + f.rainWind.y, f.rainWind.z};
     float speed = Vector3Length(fall);
@@ -1148,21 +1171,35 @@ void Renderer::drawTerrain(const FrameParams& f) {
     Vector3 cp = f.cam.position;
     Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
     rlDisableBackfaceCulling();
-    const QualityProfile qp = qualityProfile(f.quality);
+    const QualityProfile qp = qualityProfile(f.quality, f.detailDrop);
     float hiDist = qp.terrainHiDist;
     float l0Dist = qp.terrainL0Dist;
     int buildBudget = f.isPip ? 0 : 2;   // at most two new 15.6 m chunks per frame (no hitches)
-    for (auto& c : world_.chunks) {
+    auto drawChunk = [&](TerrainChunk& c) {
         Vector3 d = Vector3Subtract(c.center, cp);
         float dist = Vector3Length(d);
-        if (dist > c.radius && Vector3DotProduct(d, fwd) < -c.radius) continue;
-        if (c.maxH < -1.5f) continue;   // entirely under the sea
-        if (!sphereVisible(f, c.center, c.radius)) continue;
+        if (dist > c.radius && Vector3DotProduct(d, fwd) < -c.radius) return;
+        if (c.maxH < -1.5f) return;   // entirely under the sea
+        if (!sphereVisible(f, c.center, c.radius)) return;
         float edge = dist - c.radius;
         const Mesh* m = edge < hiDist ? &c.hi : &c.lo;
         if (edge < l0Dist && world_.ensureL0(c, f.time, buildBudget)) m = &c.l0;
         drawMeshC(*m, terrainMat_, MatrixIdentity());
-        ++drawCalls_;
+    };
+    // far terrain: a 4 x 4 block of chunks whose nearest point is beyond the 31 m LOD range is one
+    // merged draw; nearer blocks are drawn chunk by chunk with their own LOD
+    const float groupLoDist = hiDist + 2100.0f;   // every chunk in the block would pick its 125 m mesh anyway
+    for (ChunkGroup& g : world_.loGroups) {
+        float near = nearestToRect(cp, g);
+        if (near >= groupLoDist) {
+            if (!g.has) continue;
+            Vector3 d = Vector3Subtract(g.center, cp);
+            if (Vector3Length(d) > g.radius && Vector3DotProduct(d, fwd) < -g.radius) continue;
+            if (!sphereVisible(f, g.center, g.radius)) continue;
+            drawMeshC(g.mesh, terrainMat_, MatrixIdentity());
+            continue;
+        }
+        for (int ci : g.chunks) drawChunk(world_.chunks[ci]);
     }
     if (!f.isPip) world_.evictL0(cp, f.time);
     drawMeshC(world_.farRing, terrainMat_, MatrixIdentity());
@@ -1203,22 +1240,19 @@ void Renderer::drawStatics(const FrameParams& f) {
     drawDressing(f);
     lit_.setF("uSpecular", 0.0f);
     Vector3 cp = f.cam.position;
-    float treeDist = qualityProfile(f.quality).treeDist;
-    for (auto& c : world_.chunks) {
-        if (!c.hasTrees) continue;
-        Vector3 d = Vector3Subtract(c.center, cp);
-        float dist = Vector3Length(d);
-        if (dist - c.radius > treeDist) continue;
-        if (!sphereVisible(f, c.center, c.radius)) continue;
-        drawMeshC(c.trees, litMat_, MatrixIdentity());
-        ++drawCalls_;
+    float treeDist = qualityProfile(f.quality, f.detailDrop).treeDist;
+    for (const ChunkGroup& g : world_.treeGroups) {   // trees merged 2 x 2 chunks per draw
+        if (!g.has || nearestToRect(cp, g) > treeDist) continue;
+        if (!sphereVisible(f, g.center, g.radius)) continue;
+        drawMeshC(g.mesh, litMat_, MatrixIdentity());
     }
     rlEnableBackfaceCulling();
     drawCalls_ += 2;
+    if (!f.isPip) profMark("scenery");
     // parked aircraft on the apron
     for (const Vector3& p : world_.parkedJets) {
         Vector3 pp = {p.x, static_cast<float>(rw.center.y + 2.35), p.z};
-        if (Vector3Distance(pp, cp) > qualityProfile(f.quality).sceneryDist * 0.5f || !sphereVisible(f, pp, 15.0f)) continue;
+        if (Vector3Distance(pp, cp) > qualityProfile(f.quality, f.detailDrop).sceneryDist * 0.5f || !sphereVisible(f, pp, 15.0f)) continue;
         Matrix M = MatrixMultiply(QuaternionToMatrix(toRlQ(Quat::fromEuler(p.y, 0, 0))),
                                   MatrixTranslate(p.x, static_cast<float>(rw.center.y + 2.35), p.z));
         drawJetModel(AirframeStyle::StealthTwinTail, M, {0.158f, 0.168f, 0.180f}, {0.112f, 0.122f, 0.134f}, 0, 1, 0, 0, 0, 0, 0, f);
@@ -1338,7 +1372,7 @@ void Renderer::drawGroundTargets(const FrameParams& f) {
 void Renderer::drawDressing(const FrameParams& f) {
     Vector3 cp = f.cam.position;
     Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
-    float maxDist = qualityProfile(f.quality).sceneryDist;
+    float maxDist = qualityProfile(f.quality, f.detailDrop).sceneryDist;
     for (const Dressing::Piece& p : dressing_.statics) {
         Vector3 d = Vector3Subtract(p.center, cp);
         float dist = Vector3Length(d);
@@ -1350,8 +1384,11 @@ void Renderer::drawDressing(const FrameParams& f) {
     }
     const WorldLayout* L = dressing_.layout;
     if (!L) return;
+    if (!f.isPip) profMark("scenery");
     drawTraffic(f);
+    if (!f.isPip) profMark("traffic");
     if (!f.isPip) drawAirbaseLife(f);
+    if (!f.isPip) profMark("airbase life");
     if (f.L.night > 0.05f && !f.isPip) pushSceneLights(f);
     const Battle* gb = f.groundFrom ? f.groundFrom : f.battle;
     // factory halls (a mission may own them as targets, then they are drawn as ground targets)
@@ -1419,7 +1456,7 @@ void Renderer::drawTraffic(const FrameParams& f) {
         trafficCap_ = kTrafficVerts;
     }
     Vector3 cp = f.cam.position;
-    const float maxDist = std::min(6500.0f, qualityProfile(f.quality).sceneryDist * 0.5f);
+    const float maxDist = std::min(6500.0f, qualityProfile(f.quality, f.detailDrop).sceneryDist * 0.5f);
     // the vertex buffer is rebuilt once per frame (the PiP reuses it)
     int n = 0;
     {
@@ -2154,7 +2191,7 @@ void Renderer::drawCloudPuffs(const FrameParams& f) {
 void Renderer::renderShadows(const FrameParams& f) {
     if (f.isPip) return;   // the secondary view reuses this frame's shadow map
     shadowsActive_ = false;
-    if (!shadowRT_.id || !f.battle || !f.shadows || !qualityProfile(f.quality).shadows) return;
+    if (!shadowRT_.id || !f.battle || !f.shadows || !qualityProfile(f.quality, f.detailDrop).shadows) return;
     Vector3 focus = f.shadowFocus;
     Vector3 sd = f.L.sunDir;
     if (sd.y < 0.03f) return;
@@ -2195,8 +2232,11 @@ void Renderer::profMark(const char* pass) {
     auto now = std::chrono::steady_clock::now();
     double ms = std::chrono::duration<double, std::milli>(now - profLast_).count();
     profLast_ = now;
-    for (auto& e : prof_) if (e.first == pass) { e.second += ms; return; }
+    long dc = g_draws - profDraws_;
+    profDraws_ = g_draws;
+    for (size_t i = 0; i < prof_.size(); ++i) if (prof_[i].first == pass) { prof_[i].second += ms; profCalls_[i] += dc; return; }
     prof_.push_back({pass, ms});
+    profCalls_.push_back(dc);
 }
 
 void Renderer::profBegin() {
@@ -2204,6 +2244,7 @@ void Renderer::profBegin() {
     rlDrawRenderBatchActive();
     glFinish();
     profLast_ = std::chrono::steady_clock::now();
+    profDraws_ = 0;
     ++profFrames_;
 }
 
@@ -2211,9 +2252,11 @@ std::string Renderer::profReport() const {
     std::string r;
     double total = 0;
     for (auto& e : prof_) total += e.second;
-    char b[96];
-    for (auto& e : prof_) {
-        std::snprintf(b, sizeof b, "  %-14s %6.2f ms  %4.0f%%\n", e.first.c_str(), e.second / std::max(1, profFrames_), 100.0 * e.second / std::max(1e-9, total));
+    char b[128];
+    for (size_t i = 0; i < prof_.size(); ++i) {
+        const auto& e = prof_[i];
+        std::snprintf(b, sizeof b, "  %-14s %6.2f ms  %4.0f%%  %5.1f draws\n", e.first.c_str(), e.second / std::max(1, profFrames_),
+                      100.0 * e.second / std::max(1e-9, total), static_cast<double>(profCalls_[i]) / std::max(1, profFrames_));
         r += b;
     }
     return r;
@@ -2224,6 +2267,7 @@ void Renderer::renderWorld(const FrameParams& f) {
     if (!f.isPip) profBegin();
     drawCalls_ = 0;
     g_tris = 0;
+    g_draws = 0;
     if (Vector3DotProduct(world_.bakedSun, f.L.sunDir) < 0.99999f) {
         auto tb = std::chrono::steady_clock::now();
         world_.bakeSunShadows(f.L.sunDir);
@@ -2242,7 +2286,7 @@ void Renderer::renderWorld(const FrameParams& f) {
     drawTerrain(f);
     if (pm) profMark("terrain+sea");
     drawStatics(f);
-    if (pm) profMark("scenery");
+    if (pm) profMark("parked jets");
     drawCarrier(f);
     drawObstacles(f);
     drawGroundTargets(f);
@@ -2267,6 +2311,7 @@ void Renderer::renderWorld(const FrameParams& f) {
         setAtmosphere(lit_, f);
         lit_.setF("uEmissive", 0.0f);
         lit_.setF("uSpecular", 0.6f);
+        lit_.setF("uMetal", 0.5f);   // bare-metal missile bodies
         lit_.setF("uFogOn", 1.0f);
         for (const Missile& m : f.battle->missiles()) {
             Vec3 d = normalize(m.vel);
@@ -2281,6 +2326,7 @@ void Renderer::renderWorld(const FrameParams& f) {
                 drawMeshC(missile_, litMat_, bodyMatrix(m.pos, q));
             }
     }
+    lit_.setF("uMetal", 0.0f);
     if (pm) profMark("aircraft");
     drawShadows(f);
     if (pm) profMark("blob shadows");
@@ -2304,6 +2350,7 @@ void Renderer::renderWorld(const FrameParams& f) {
     EndMode3D();
     EndTextureMode();
     if (pm) profMark("rain");
+    drawCalls_ = static_cast<int>(g_draws);   // exact count of mesh draws (shadow pass included)
     worldMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
@@ -2323,6 +2370,48 @@ void Renderer::clearDepth() {
 void Renderer::endOverlay3D() {
     EndMode3D();
     EndTextureMode();
+}
+
+void Renderer::updateAdaptation(const FrameParams& f) {
+    if (!lumA_.id || !lumB_.id || !adapt_[0].id || !adapt_[1].id) return;
+    auto pass = [&](Prog& p, const Texture2D& src, RenderTexture2D& dst) {
+        BeginTextureMode(dst);
+        BeginShaderMode(p.sh);
+        DrawTexturePro(src, {0, 0, static_cast<float>(src.width), static_cast<float>(-src.height)},
+                       {0, 0, static_cast<float>(dst.texture.width), static_cast<float>(dst.texture.height)}, {0, 0}, 0, WHITE);
+        EndShaderMode();
+        EndTextureMode();
+    };
+    lumDown_.setV2("uOut", {64.0f, 36.0f});
+    pass(lumDown_, scene_.texture, lumA_);
+    pass(lumAvg_, lumA_.texture, lumB_);
+    // adaptation speed: opening up into darkness is slower than closing down for glare
+    double dt = adaptT_ < 0 || f.time < adaptT_ ? 1e9 : f.time - adaptT_;
+    adaptT_ = f.time;
+    float up = static_cast<float>(1.0 - std::exp(-dt * 1.8)), down = static_cast<float>(1.0 - std::exp(-dt * 0.9));
+    int next = 1 - adaptIdx_;
+    adaptP_.setF("uRateUp", up);
+    adaptP_.setF("uRateDown", down);
+    int lp = adaptP_.loc("uPrev");
+    BeginTextureMode(adapt_[next]);
+    BeginShaderMode(adaptP_.sh);
+    if (lp >= 0) SetShaderValueTexture(adaptP_.sh, lp, adapt_[adaptIdx_].texture);
+    DrawTexturePro(lumB_.texture, {0, 0, 1, -1}, {0, 0, 1, 1}, {0, 0}, 0, WHITE);
+    EndShaderMode();
+    EndTextureMode();
+    adaptIdx_ = next;
+    if (std::getenv("SKYFALL_EXPOSURE_LOG")) {   // debug: read the adapted value back (stalls the GPU)
+        Image im = LoadImageFromTexture(adapt_[adaptIdx_].texture);
+        if (im.data && im.format == PIXELFORMAT_UNCOMPRESSED_R16G16B16A16) {
+            unsigned short hbits = static_cast<unsigned short*>(im.data)[0];
+            int e = (hbits >> 10) & 31, m = hbits & 1023;
+            float v = e == 0 ? std::ldexp(static_cast<float>(m), -24) : std::ldexp(static_cast<float>(m + 1024), e - 25);
+            adaptedLog2_ = (hbits & 0x8000) ? -v : v;
+            static int n = 0;
+            if (++n % 30 == 0) std::printf("exposure: adapted log2 %.2f, exposed %.2f\n", adaptedLog2_, adaptedLog2_ + std::log2(f.L.exposure * f.exposureBoost));
+        }
+        UnloadImage(im);
+    }
 }
 
 void Renderer::composite(const FrameParams& f) {
@@ -2391,8 +2480,13 @@ void Renderer::composite(const FrameParams& f) {
         if (loc >= 0) SetShaderValueV(composite_.sh, loc, hz, SHADER_UNIFORM_VEC4, 4);
         composite_.setF("uHazeCount", static_cast<float>(nh));
     }
+    const bool autoExp = f.autoExposure > 0.0f && hdr_ && lumA_.id;
+    if (autoExp) updateAdaptation(f);
     BeginShaderMode(composite_.sh);
     composite_.setF("uExposure", f.L.exposure * f.exposureBoost);
+    composite_.setF("uAutoExp", autoExp ? f.autoExposure : 0.0f);
+    composite_.setF("uAdaptKey", f.adaptKey);
+    if (autoExp) { int la = composite_.loc("uAdapt"); if (la >= 0) SetShaderValueTexture(composite_.sh, la, adapt_[adaptIdx_].texture); }
     composite_.setF("uBloomStrength", f.bloom ? 0.16f : 0.0f);
     composite_.setF("uVignette", 0.35f);
     composite_.setF("uBlackout", f.blackout);
@@ -2460,6 +2554,7 @@ void Renderer::renderPip(const FrameParams& f, int w, int h, int slot) {
     composite_.setF("uSharpen", 0.0f);
     composite_.setF("uSpeedFx", 0.0f);
     composite_.setF("uRush", 0.0f);
+    composite_.setF("uAutoExp", 0.0f);   // the small replay windows keep the fixed exposure
     int l1 = composite_.loc("uBloom1"), l2 = composite_.loc("uBloom2");
     if (l1 >= 0) SetShaderValueTexture(composite_.sh, l1, bloomA_.texture);
     if (l2 >= 0) SetShaderValueTexture(composite_.sh, l2, bloomC_.texture);

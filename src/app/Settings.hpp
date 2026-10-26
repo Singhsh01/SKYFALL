@@ -26,6 +26,10 @@ struct QualityProfile {
     double frameBudgetMs = 0;     // > 0: the dynamic resolution aims at this frame time
 };
 QualityProfile qualityProfile(GraphicsQuality q);
+/// The preset's profile with the adaptive renderer's detail reduction applied (0 = unchanged):
+/// shorter view distances for trees, buildings and fine terrain, fewer rain drops, and no
+/// shadow map from level 2.
+QualityProfile qualityProfile(GraphicsQuality q, int detailDrop);
 const char* qualityName(GraphicsQuality q);
 
 struct Settings {
@@ -37,6 +41,7 @@ struct Settings {
     bool vsync = true;         // frames in step with the display (no tearing, even motion)
     double fovDeg = 70.0;
     bool bloom = true;
+    bool autoExposure = true;   // eye adaptation around the time-of-day exposure
     double cameraShake = 0.6;   // 0..1 motion comfort
     bool gEffects = true;       // blackout / redout vignette
     double uiScale = 1.0;

@@ -22,11 +22,25 @@ struct TerrainChunk {
     float maxH = 1e9f;    // highest ground height in the chunk (m)
 };
 
+/// Several chunks merged into one draw call: far terrain (all chunks at the 125 m LOD) and trees.
+struct ChunkGroup {
+    Mesh mesh{};
+    bool has = false;
+    double x0 = 0, z0 = 0, size = 0;   // ground rectangle
+    Vector3 center{};
+    float radius = 0;
+    std::vector<int> chunks;           // chunk indices covered
+};
+
 struct WorldMeshes {
     static constexpr int kChunks = 16;            // 16 x 16 chunks
     static constexpr double kChunkSize = 2000.0;  // metres
 
     std::vector<TerrainChunk> chunks;
+    static constexpr int kLoGroup = 4;     // 4 x 4 chunks of far terrain per draw
+    static constexpr int kTreeGroup = 2;   // 2 x 2 chunks of trees per draw
+    std::vector<ChunkGroup> loGroups;      // merged 125 m terrain (drawn when the whole group is far)
+    std::vector<ChunkGroup> treeGroups;    // merged trees (replace the per-chunk tree meshes)
     Mesh farRing{};
     Mesh water{};
     Mesh cloudPlane{};
