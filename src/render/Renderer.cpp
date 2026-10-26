@@ -71,8 +71,8 @@ Vector3 g_paintC{0, 0, 0};   // third camouflage colour for the jet drawn next
 float g_paintRough = 0.42f;
 float g_paintMetal = 0.12f;
 Vector3 g_paintGlow{0, 0, 0};
-float g_markIns = 0, g_markFin = 0, g_serial = 0;          // markings for the jet drawn next
-Vector3 g_mark0{0, 0, 0}, g_mark1{0, 0, 0}, g_mark2{0, 0, 0};
+float g_noseNumbers = 0, g_serial = 0;   // markings for the jet drawn next
+Vector3 g_mark0{0, 0, 0};
 long g_tris = 0;   // triangles submitted this frame (benchmark statistics)
 long g_draws = 0;
   // mesh draw calls submitted this frame (exact: every mesh goes through drawMeshC)
@@ -87,7 +87,7 @@ Vector3 paintFor(Team team, int skinIdx, const AircraftProfile& prof, Vector3& b
     g_paintRough = 0.42f;
     g_paintMetal = 0.12f;
     g_paintGlow = {0, 0, 0};
-    g_markIns = 0; g_markFin = 0;
+    g_noseNumbers = 0; g_mark0 = {0, 0, 0};
     if (skinIdx > 0) {
         const Skin& k = skin(skinIdx);
         b = k.b;
@@ -96,9 +96,8 @@ Vector3 paintFor(Team team, int skinIdx, const AircraftProfile& prof, Vector3& b
         g_paintRough = k.roughness;
         g_paintMetal = k.metal;
         g_paintGlow = k.glow;
-        g_markIns = static_cast<float>(static_cast<int>(k.insignia));
-        g_markFin = static_cast<float>(static_cast<int>(k.fin));
-        g_mark0 = k.m0; g_mark1 = k.m1; g_mark2 = k.m2;
+        g_noseNumbers = k.noseNumbers ? 1.0f : 0.0f;
+        g_mark0 = k.stencil;
         return k.a;
     }
     AirframeStyle st = prof.style;
@@ -1850,14 +1849,11 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
     jet_.setF("uFinTan", jm.finTan);
     jet_.setV4("uNoseMark", jm.noseMark);
     jet_.setV4("uWalk", jm.walk);
-    jet_.setF("uInsignia", g_markIns);
-    jet_.setF("uFinFlash", g_markFin);
+    jet_.setF("uNoseNumbers", g_noseNumbers);
     jet_.setF("uSerial", g_serial);
     jet_.setV3("uMark0", g_mark0);
-    jet_.setV3("uMark1", g_mark1);
-    jet_.setV3("uMark2", g_mark2);
     jet_.setF("uMarkOn", lod < 2 ? 1.0f : 0.0f);
-    g_markIns = 0; g_markFin = 0; g_serial = 0;
+    g_noseNumbers = 0; g_serial = 0; g_mark0 = {0, 0, 0};
     g_paintC = {0, 0, 0};
     g_paintRough = 0.42f;
     g_paintMetal = 0.12f;

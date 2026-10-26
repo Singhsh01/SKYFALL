@@ -547,12 +547,9 @@ uniform vec4 uFinMark;      // x, y, |z|, radius
 uniform float uFinTan;
 uniform vec4 uNoseMark;     // x, y, digit height, fuselage half-width
 uniform vec4 uWalk;         // root |z|, front x, rear x, outboard |z|
-uniform float uInsignia;    // 0 none, 1 roundel, 2 roundel + star, 3 star-and-bar, 4 cross
-uniform float uFinFlash;    // 0 none, 1 vertical (inner colour leads), 2 horizontal, 3 roundel, 4 code only, 5 vertical (outer leads)
+uniform float uNoseNumbers; // 1: service schemes also carry a two-digit nose number
 uniform float uSerial;      // airframe number (0 = none)
-uniform vec3 uMark0;
-uniform vec3 uMark1;
-uniform vec3 uMark2;
+uniform vec3 uMark0;        // stencil colour (0 = automatic: dark on light paint, light on dark)
 uniform vec3 uPaintB;
 uniform vec3 uPaintC;
 uniform float uCamo;        // pattern: 0 two-tone, 1 splinter, 2 woodland, 3 digital, 4 stripes,
@@ -589,48 +586,6 @@ vec3 envLight(vec3 r, float rough) {
 
 
 // ---- markings -------------------------------------------------------------------------------
-float sdStar5(vec2 p, float r, float rf) {
-    const vec2 k1 = vec2(0.809016994375, -0.587785252292);
-    const vec2 k2 = vec2(-k1.x, k1.y);
-    p.x = abs(p.x);
-    p -= 2.0 * max(dot(k1, p), 0.0) * k1;
-    p -= 2.0 * max(dot(k2, p), 0.0) * k2;
-    p.x = abs(p.x);
-    p.y -= r;
-    vec2 ba = rf * vec2(-k1.y, k1.x) - vec2(0.0, 1.0);
-    float h = clamp(dot(p, ba) / dot(ba, ba), 0.0, r);
-    return length(p - ba * h) * sign(p.y * ba.x - p.x * ba.y);
-}
-// insignia colour at q (units of the marking radius, y = forward); a = coverage
-vec4 insignia(vec2 q, float type) {
-    float d = length(q);
-    if (type > 3.5) {   // cross: dark arms with light edges
-        vec2 a = abs(q);
-        float arm = min(max(a.x - 0.95, a.y - 0.24), max(a.y - 0.95, a.x - 0.24));
-        float edge = min(max(a.x - 1.0, a.y - 0.36), max(a.y - 1.0, a.x - 0.36));
-        if (arm < 0.0) return vec4(uMark0, 1.0);
-        if (edge < 0.0) return vec4(uMark1, 1.0);
-        return vec4(0.0);
-    }
-    if (type > 2.5) {   // star in a disc, flanked by bars with a centre stripe
-        vec2 qq = q * 1.55;
-        float dd = length(qq);
-        if (dd < 1.0) return vec4(sdStar5(qq, 0.95, 0.38) < 0.0 ? uMark1 : uMark0, 1.0);
-        vec2 a = vec2(abs(qq.x), qq.y);
-        if (a.x < 2.05 && abs(a.y) < 0.5) {
-            if (a.x > 1.95 || abs(a.y) > 0.4) return vec4(uMark0, 1.0);
-            return vec4(abs(a.y) < 0.14 ? uMark2 : uMark1, 1.0);
-        }
-        return vec4(0.0);
-    }
-    if (d > 1.0) return vec4(0.0);
-    if (type > 1.5) {   // roundel with a star in the centre
-        if (d > 0.72) return vec4(uMark0, 1.0);
-        if (d > 0.5) return vec4(uMark1, 1.0);
-        return vec4(sdStar5(q, 0.42, 0.4) < 0.0 ? vec3(0.8) : uMark2, 1.0);
-    }
-    return vec4(d > 0.66 ? uMark0 : (d > 0.33 ? uMark1 : uMark2), 1.0);
-}
 // seven-segment digit in a 0.6 x 1 cell
 float segDigit(vec2 p, int n) {
     if (p.x < 0.0 || p.x > 0.6 || p.y < 0.0 || p.y > 1.0) return 0.0;
@@ -784,41 +739,18 @@ void main() {
                 float e = min(min(az - uWalk.x, uWalk.w - az), min(uWalk.y - vObj.x, vObj.x - uWalk.z));
                 paint = mix(paint, stencil, (1.0 - smoothstep(0.025, 0.045, e)) * 0.8);
             }
-            // wing insignia: upper and lower surfaces (star-and-bar: upper left, lower right)
-            if (uInsignia > 0.5 && abs(on.y) > 0.45 && abs(vObj.y - uWingMark.y) < 0.9) {
-                bool show = uInsignia < 2.5 || (on.y > 0.0) == (vObj.z < 0.0);
-                if (show) {
-                    vec4 ins = insignia(vec2(az - uWingMark.z, vObj.x - uWingMark.x) / uWingMark.w, uInsignia);
-                    paint = mix(paint, ins.rgb, ins.a);
-                }
-            }
-            // fin: flash or small roundel, airframe number below it
+            if (dot(uMark0, uMark0) > 0.0) stencil = uMark0;
+            // fin: the airframe number at mid height
             float finH = vObj.y - uFinMark.y;
             float finZ = uFinMark.z + uFinTan * finH;
-            if (abs(on.z) > 0.5 && abs(az - finZ) < 0.35 && vObj.x < uWingMark.x) {
-                vec2 fq = vec2(vObj.x - uFinMark.x, finH) / uFinMark.w;
+            if (uSerial > 0.5 && abs(on.z) > 0.5 && abs(az - finZ) < 0.35 && vObj.x < uWingMark.x) {
                 float side = sign(on.z);
-                int ff = int(uFinFlash + 0.5);
-                if (ff == 3) {
-                    vec4 ins = insignia(fq.yx * 1.25, 1.0);
-                    paint = mix(paint, ins.rgb, ins.a);
-                } else if ((ff == 1 || ff == 2 || ff == 5) && abs(fq.x) < 1.05 && abs(fq.y) < 0.62) {
-                    if (ff == 1) paint = fq.x > 0.35 ? uMark2 : (fq.x > -0.35 ? uMark1 : uMark0);        // inner colour leads
-                    else if (ff == 5) paint = fq.x > 0.35 ? uMark0 : (fq.x > -0.35 ? uMark1 : uMark2);   // outer colour leads
-                    else if (dot(uMark2, uMark2) > 0.0) paint = fq.y > 0.2 ? uMark0 : (fq.y > -0.2 ? uMark1 : uMark2);
-                    else paint = fq.y > 0.2 ? uMark0 : (fq.y > -0.2 ? vec3(0.45, 0.02, 0.02) : vec3(0.75, 0.55, 0.03));
-                }
-                if (uSerial > 0.5) {
-                    float hgt = uFinMark.w * 0.5;
-                    vec2 np = vec2(side * (vObj.x - uFinMark.x) + 1.2 * hgt, finH + uFinMark.w * 1.25) / hgt;
-                    if (ff == 4) np.y -= 1.6;   // code-only fins: number at mid fin
-                    float mk = number(np, uSerial, 3);
-                    vec3 nc = ff == 4 && dot(uMark0, uMark0) > 0.0 ? uMark0 : stencil;
-                    paint = mix(paint, nc, mk);
-                }
+                float hgt = uFinMark.w * 0.5;
+                vec2 np = vec2(side * (vObj.x - uFinMark.x) + 1.2 * hgt, finH + uFinMark.w * 1.25) / hgt - vec2(0.0, 1.6);
+                paint = mix(paint, stencil, number(np, uSerial, 3));
             }
             // nose number (service schemes): two digits on the forward fuselage sides
-            if (uInsignia > 0.5 && uSerial > 0.5 && abs(on.z) > 0.55 && abs(vObj.x - uNoseMark.x) < uNoseMark.z * 1.2) {
+            if (uNoseNumbers > 0.5 && uSerial > 0.5 && abs(on.z) > 0.55 && abs(vObj.x - uNoseMark.x) < uNoseMark.z * 1.2) {
                 float side = sign(on.z);
                 vec2 np = vec2(side * (vObj.x - uNoseMark.x) + uNoseMark.z * 0.7, vObj.y - uNoseMark.y + uNoseMark.z * 0.5) / uNoseMark.z;
                 paint = mix(paint, stencil, number(np, mod(uSerial, 100.0), 2));

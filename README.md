@@ -87,13 +87,13 @@ scripts (`build_mac.sh`, `run.sh`, `build_web.sh`) work as before.
   station, ammunition bunkers and helicopter shelters; towns get a hospital, warehouses, traffic
   signals, road signs and roadside bushes.
 * **40 paint schemes** — 16 new: service schemes *inspired by* US Air Force, US Navy, Royal Air
-  Force, Luftwaffe, French, Indian and Brazilian air arms (generic insignia, fin flashes, fin and
-  nose numbers, walkway stencils, all drawn in the shader; not copies of official artwork),
+  Force, Luftwaffe, French, Indian and Brazilian air arms (colours and patterns only, with fin and
+  nose numbers and walkway stencils drawn in the shader; no national insignia or flags),
   digital desert, arctic digital, forest splinter, night stealth, tiger meet, ocean splinter and
   two original demonstration schemes.
 * Free Flight, the 61-mission campaign and the Dogfight Arena are unchanged.
 
-![Air-force-inspired service schemes with generic markings](docs/screenshots/skins_service.jpg)
+![Air-force-inspired service schemes with stencils, no national markings](docs/screenshots/skins_service.jpg)
 
 ## New in v0.9
 
@@ -414,9 +414,9 @@ is a roadmap item. The Computer
 Vision Laboratory is planned, not implemented yet. Academy and campaign-location limits (Everest,
 sea for the carrier operations 5, 13 and 20, the combinations the test bots do not complete) are
 listed in [docs/TRAINING.md](docs/TRAINING.md#known-limits). The operations' 15-20 minute lengths
-are design estimates checked by a test bot, not by timed human play; v1.0 frame rates on the
-MacBook Air have not been measured yet. Paint markings are generic designs inspired by real air
-arms, not their official insignia.
+are design estimates checked by a test bot, not by timed human play; first MacBook Air
+measurements are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Paint schemes carry stencils only:
+no national insignia or flags.
 
 ## License
 

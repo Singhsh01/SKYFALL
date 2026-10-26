@@ -10,11 +10,8 @@ enum class CamoPattern { TwoTone = 0, Splinter = 1, Woodland = 2, Digital = 3, S
                          CounterShade = 5, Shard = 6, Demo = 7, Metal = 8, Carbon = 9,
                          Armor = 10, Circuit = 11, HexVector = 12 };
 
-// Markings are generic, air-force-INSPIRED designs drawn procedurally in the jet shader. They are
-// not reproductions of any service's official artwork.
-enum class Insignia { None = 0, Roundel = 1, StarRoundel = 2, StarBar = 3, Cross = 4 };
-enum class FinFlash { None = 0, Vertical = 1, Horizontal = 2, Roundel = 3, Code = 4, VerticalOuter = 5 };
-
+// Markings are stencils only (fin and nose numbers, wing walkways), drawn in the jet shader: no
+// national insignia, roundels or flags.
 struct Skin {
     const char* name;
     Vector3 a, b, c;      // base, second and third colour
@@ -22,9 +19,8 @@ struct Skin {
     float roughness;
     float metal = 0.12f;            // metalness of the paint
     Vector3 glow{0, 0, 0};          // emissive accent colour (linear, HDR) for circuit / seam patterns
-    Insignia insignia = Insignia::None;  // national-style marking on the wings
-    FinFlash fin = FinFlash::None;       // fin marking
-    Vector3 m0{0, 0, 0}, m1{0, 0, 0}, m2{0, 0, 0};   // marking colours (outer, middle, inner / front, mid, rear)
+    bool noseNumbers = false;       // service schemes: a two-digit number on the nose as well
+    Vector3 stencil{0, 0, 0};       // stencil colour (0 = automatic contrast)
 };
 
 constexpr int kSkinCount = 40;
@@ -59,40 +55,24 @@ inline const Skin& skin(int i) {
         {"GOLD TITAN", {0.70f, 0.47f, 0.13f}, {0.10f, 0.10f, 0.11f}, {0.03f, 0.03f, 0.03f}, CamoPattern::Armor, 0.22f, 0.8f, {1.2f, 1.0f, 0.6f}},
         {"CARBON VOLT", {0.018f, 0.019f, 0.021f}, {0.05f, 0.052f, 0.056f}, {0.1f, 0.6f, 1.0f}, CamoPattern::Carbon, 0.26f, 0.12f, {0.3f, 1.4f, 3.2f}},
         // air-force-inspired service schemes with markings and stencils (generic designs)
-        {"USAF AIR DOMINANCE", {0.30f, 0.315f, 0.33f}, {0.17f, 0.18f, 0.19f}, {0.13f, 0.14f, 0.15f}, CamoPattern::CounterShade, 0.4f, 0.12f, {0, 0, 0},
-         Insignia::StarBar, FinFlash::Code, {0.10f, 0.105f, 0.11f}, {0.36f, 0.37f, 0.38f}, {0.10f, 0.105f, 0.11f}},
-        {"USN TACTICAL GREY", {0.26f, 0.27f, 0.285f}, {0.16f, 0.17f, 0.18f}, {0.0f, 0.0f, 0.0f}, CamoPattern::TwoTone, 0.42f, 0.12f, {0, 0, 0},
-         Insignia::StarBar, FinFlash::Code, {0.09f, 0.095f, 0.10f}, {0.40f, 0.41f, 0.42f}, {0.09f, 0.095f, 0.10f}},
-        {"USN HERITAGE", {0.50f, 0.51f, 0.52f}, {0.34f, 0.35f, 0.36f}, {0.0f, 0.0f, 0.0f}, CamoPattern::CounterShade, 0.3f, 0.12f, {0, 0, 0},
-         Insignia::StarBar, FinFlash::Code, {0.02f, 0.04f, 0.16f}, {0.80f, 0.80f, 0.80f}, {0.55f, 0.03f, 0.03f}},
-        {"RAF AIR DEFENCE", {0.24f, 0.25f, 0.265f}, {0.31f, 0.32f, 0.33f}, {0.0f, 0.0f, 0.0f}, CamoPattern::TwoTone, 0.42f, 0.12f, {0, 0, 0},
-         Insignia::Roundel, FinFlash::Vertical, {0.10f, 0.14f, 0.30f}, {0.45f, 0.45f, 0.46f}, {0.38f, 0.07f, 0.07f}},
-        {"LUFTWAFFE GREY", {0.21f, 0.22f, 0.235f}, {0.12f, 0.13f, 0.14f}, {0.30f, 0.31f, 0.32f}, CamoPattern::Splinter, 0.45f, 0.12f, {0, 0, 0},
-         Insignia::Cross, FinFlash::Horizontal, {0.015f, 0.015f, 0.015f}, {0.70f, 0.70f, 0.70f}, {0.0f, 0.0f, 0.0f}},
-        {"FRENCH AIR BLUE", {0.17f, 0.20f, 0.25f}, {0.10f, 0.12f, 0.16f}, {0.27f, 0.30f, 0.34f}, CamoPattern::CounterShade, 0.38f, 0.12f, {0, 0, 0},
-         Insignia::Roundel, FinFlash::Vertical, {0.55f, 0.03f, 0.04f}, {0.78f, 0.78f, 0.78f}, {0.02f, 0.06f, 0.30f}},
-        {"INDIAN AIR SPLINTER", {0.26f, 0.29f, 0.33f}, {0.13f, 0.15f, 0.19f}, {0.38f, 0.40f, 0.43f}, CamoPattern::Splinter, 0.45f, 0.12f, {0, 0, 0},
-         Insignia::Roundel, FinFlash::VerticalOuter, {0.85f, 0.32f, 0.03f}, {0.78f, 0.78f, 0.78f}, {0.03f, 0.25f, 0.05f}},
-        {"BRAZILIAN JUNGLE", {0.10f, 0.13f, 0.07f}, {0.27f, 0.21f, 0.12f}, {0.05f, 0.06f, 0.04f}, CamoPattern::Woodland, 0.55f, 0.12f, {0, 0, 0},
-         Insignia::StarRoundel, FinFlash::Horizontal, {0.02f, 0.30f, 0.06f}, {0.80f, 0.62f, 0.02f}, {0.02f, 0.06f, 0.30f}},
+        {"USAF AIR DOMINANCE", {0.30f, 0.315f, 0.33f}, {0.17f, 0.18f, 0.19f}, {0.13f, 0.14f, 0.15f}, CamoPattern::CounterShade, 0.4f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
+        {"USN TACTICAL GREY", {0.26f, 0.27f, 0.285f}, {0.16f, 0.17f, 0.18f}, {0.0f, 0.0f, 0.0f}, CamoPattern::TwoTone, 0.42f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
+        {"USN HERITAGE", {0.50f, 0.51f, 0.52f}, {0.34f, 0.35f, 0.36f}, {0.0f, 0.0f, 0.0f}, CamoPattern::CounterShade, 0.3f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
+        {"RAF AIR DEFENCE", {0.24f, 0.25f, 0.265f}, {0.31f, 0.32f, 0.33f}, {0.0f, 0.0f, 0.0f}, CamoPattern::TwoTone, 0.42f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
+        {"LUFTWAFFE GREY", {0.21f, 0.22f, 0.235f}, {0.12f, 0.13f, 0.14f}, {0.30f, 0.31f, 0.32f}, CamoPattern::Splinter, 0.45f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
+        {"FRENCH AIR BLUE", {0.17f, 0.20f, 0.25f}, {0.10f, 0.12f, 0.16f}, {0.27f, 0.30f, 0.34f}, CamoPattern::CounterShade, 0.38f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
+        {"INDIAN AIR SPLINTER", {0.26f, 0.29f, 0.33f}, {0.13f, 0.15f, 0.19f}, {0.38f, 0.40f, 0.43f}, CamoPattern::Splinter, 0.45f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
+        {"BRAZILIAN JUNGLE", {0.10f, 0.13f, 0.07f}, {0.27f, 0.21f, 0.12f}, {0.05f, 0.06f, 0.04f}, CamoPattern::Woodland, 0.55f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
         // environment schemes
-        {"DIGITAL DESERT", {0.42f, 0.34f, 0.22f}, {0.27f, 0.20f, 0.12f}, {0.55f, 0.47f, 0.34f}, CamoPattern::Digital, 0.55f, 0.12f, {0, 0, 0},
-         Insignia::None, FinFlash::Code, {0.08f, 0.07f, 0.05f}, {0, 0, 0}, {0, 0, 0}},
-        {"ARCTIC DIGITAL", {0.70f, 0.72f, 0.74f}, {0.38f, 0.40f, 0.43f}, {0.18f, 0.19f, 0.21f}, CamoPattern::Digital, 0.5f, 0.12f, {0, 0, 0},
-         Insignia::None, FinFlash::Code, {0.08f, 0.08f, 0.09f}, {0, 0, 0}, {0, 0, 0}},
-        {"FOREST SPLINTER", {0.12f, 0.15f, 0.08f}, {0.05f, 0.07f, 0.04f}, {0.22f, 0.20f, 0.12f}, CamoPattern::Splinter, 0.6f, 0.12f, {0, 0, 0},
-         Insignia::None, FinFlash::Code, {0.02f, 0.02f, 0.02f}, {0, 0, 0}, {0, 0, 0}},
-        {"NIGHT STEALTH", {0.03f, 0.032f, 0.038f}, {0.012f, 0.013f, 0.016f}, {0.055f, 0.06f, 0.07f}, CamoPattern::Shard, 0.3f, 0.2f, {0, 0, 0},
-         Insignia::StarBar, FinFlash::Code, {0.05f, 0.05f, 0.055f}, {0.10f, 0.10f, 0.11f}, {0.05f, 0.05f, 0.055f}},
-        {"TIGER MEET", {0.62f, 0.36f, 0.05f}, {0.02f, 0.02f, 0.02f}, {0.80f, 0.78f, 0.70f}, CamoPattern::Stripes, 0.32f, 0.12f, {0, 0, 0},
-         Insignia::None, FinFlash::Code, {0.02f, 0.02f, 0.02f}, {0, 0, 0}, {0, 0, 0}},
-        {"OCEAN SPLINTER", {0.10f, 0.15f, 0.22f}, {0.05f, 0.08f, 0.12f}, {0.20f, 0.26f, 0.32f}, CamoPattern::Splinter, 0.4f, 0.12f, {0, 0, 0},
-         Insignia::None, FinFlash::Code, {0.70f, 0.70f, 0.72f}, {0, 0, 0}, {0, 0, 0}},
+        {"DIGITAL DESERT", {0.42f, 0.34f, 0.22f}, {0.27f, 0.20f, 0.12f}, {0.55f, 0.47f, 0.34f}, CamoPattern::Digital, 0.55f, 0.12f, {0, 0, 0}, false, {0.08f, 0.07f, 0.05f}},
+        {"ARCTIC DIGITAL", {0.70f, 0.72f, 0.74f}, {0.38f, 0.40f, 0.43f}, {0.18f, 0.19f, 0.21f}, CamoPattern::Digital, 0.5f, 0.12f, {0, 0, 0}, false, {0.08f, 0.08f, 0.09f}},
+        {"FOREST SPLINTER", {0.12f, 0.15f, 0.08f}, {0.05f, 0.07f, 0.04f}, {0.22f, 0.20f, 0.12f}, CamoPattern::Splinter, 0.6f, 0.12f, {0, 0, 0}, false, {0.02f, 0.02f, 0.02f}},
+        {"NIGHT STEALTH", {0.03f, 0.032f, 0.038f}, {0.012f, 0.013f, 0.016f}, {0.055f, 0.06f, 0.07f}, CamoPattern::Shard, 0.3f, 0.2f, {0, 0, 0}, true, {0, 0, 0}},
+        {"TIGER MEET", {0.62f, 0.36f, 0.05f}, {0.02f, 0.02f, 0.02f}, {0.80f, 0.78f, 0.70f}, CamoPattern::Stripes, 0.32f, 0.12f, {0, 0, 0}, false, {0.02f, 0.02f, 0.02f}},
+        {"OCEAN SPLINTER", {0.10f, 0.15f, 0.22f}, {0.05f, 0.08f, 0.12f}, {0.20f, 0.26f, 0.32f}, CamoPattern::Splinter, 0.4f, 0.12f, {0, 0, 0}, false, {0.70f, 0.70f, 0.72f}},
         // demonstration schemes (original designs)
-        {"DEMO BLUE GOLD", {0.02f, 0.05f, 0.22f}, {0.75f, 0.50f, 0.05f}, {0.80f, 0.80f, 0.82f}, CamoPattern::Demo, 0.22f, 0.15f, {0, 0, 0},
-         Insignia::None, FinFlash::Code, {0.80f, 0.80f, 0.82f}, {0, 0, 0}, {0, 0, 0}},
-        {"DEMO SUNBURST", {0.80f, 0.80f, 0.82f}, {0.85f, 0.22f, 0.02f}, {0.02f, 0.02f, 0.03f}, CamoPattern::Demo, 0.22f, 0.15f, {0, 0, 0},
-         Insignia::None, FinFlash::Code, {0.02f, 0.02f, 0.03f}, {0, 0, 0}, {0, 0, 0}},
+        {"DEMO BLUE GOLD", {0.02f, 0.05f, 0.22f}, {0.75f, 0.50f, 0.05f}, {0.80f, 0.80f, 0.82f}, CamoPattern::Demo, 0.22f, 0.15f, {0, 0, 0}, false, {0.80f, 0.80f, 0.82f}},
+        {"DEMO SUNBURST", {0.80f, 0.80f, 0.82f}, {0.85f, 0.22f, 0.02f}, {0.02f, 0.02f, 0.03f}, CamoPattern::Demo, 0.22f, 0.15f, {0, 0, 0}, false, {0.02f, 0.02f, 0.03f}},
     };
     return k[(i >= 0 && i < kSkinCount) ? i : 0];
 }
