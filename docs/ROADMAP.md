@@ -15,6 +15,7 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 | Air-force-inspired and environment / demo paint schemes, markings, stencils | ✅ | 16 new, 40 total |
 | Smarter AI (strike, hunting helicopters, break-off, squadron tactics) | ✅ | |
 | Existing modes kept (campaign, arena, free flight) | ✅ | tests unchanged and passing |
+| Bot flies every operation / fighter / mode | ✅ | 578 / 600 (17 lost fights, 5 other) |
 | 120 fps on the MacBook Air | 🟡 | not measured for v1.0; see BENCHMARKS.md |
 | Human play-testing of operation length and difficulty | ⬜ | bot-tested only |
 | Graphics brief (PBR, HDR, instancing / LOD, effects, adaptive rendering) | ⬜ | next |

@@ -188,23 +188,21 @@ maps are 32 x 32 km, so a mission keeps its layout and is fitted to the location
 
 ## Known limits
 
-* Last full run: the bot finishes 465 of the 480 level / aircraft / mode combinations on the
-  recommended locations. In 11 it loses the fight (shot down nine times in a row by the AI in
-  levels 12-17 and 20; the test reports these and fails if they exceed 5 %), and 4 are listed
-  bot limitations (its gate autopilot sinks a heavy jet into the terrain on the way home in
-  levels 9, 10 and 18, or it chases a bandit into the sea in level 17). These are limits of the
-  test bot's flying, not of the courses: the same course is finished by the other aircraft and
-  modes, and which fights it loses changes from run to run. On other locations the bot completes most but not all combinations (it is a bot, not a
-  proof that a human cannot). Sweep over the 13 Academy locations (129 courses each): F-16 arcade
-  127, F-16 assisted 125, F-16 simulation 122, Su-30 assisted 124, F-35 simulation 120; most
-  failures are on Everest-like high terrain (Everest itself is in the sweep but not the Academy).
+* Last full run (v1.0): the bot finishes **578 of the 600** operation / aircraft / mode
+  combinations on the recommended locations, mean score 84. In 17 it loses the fight (shot down
+  six times in a row in one wave: mostly the ace waves of operations 4 and 15, operation 3's last
+  strike and the anti-ship strikes of operations 5 and 13). In 3 the protected asset is lost
+  (operation 6's ground forces once, operation 14's convoy twice) and in 2 its autopilot flies
+  into the Matterhorn on the way home in operation 10. The test fails if lost fights exceed 5 %.
+  These are limits of the bot's flying; which fights it loses changes from run to run.
+* **Lengths are not measured with human players.** The menu shows the designed length (16-20
+  minutes). The bot, which flies fast and hunts efficiently, takes about 9-17 minutes per
+  operation; a human-paced flight with retries will normally be longer.
+* All 5048 radio calls heard in the bot's flights are in the voice pack.
 * Everest is not offered in the Academy (5-8 km terrain: the low-level obstacle work exceeds
   several jets' performance in that air). The campaign does fly there.
-* Levels 19 and 20 need open sea: only Skyfall Desert, Musandam and Rio de Janeiro.
-* The AI pilots are the campaign's: an ace is genuinely hard. A fast, clean bot flight finishes a
-  combat level in 10-15 minutes; the 15-20 minute estimates assume a human-paced fight.
-* The estimate is 15.5-20 min; a fast, clean flight (like the bot's, especially in arcade mode)
-  takes less, about 12-17 minutes.
+* Operations 5, 13 and 20 (carrier) need open sea: only Skyfall Desert, Musandam and Rio de Janeiro.
+* The AI pilots are the campaign's: an ace is genuinely hard.
 * Campaign over other locations: the combat bot (assisted, F-22, up to 3 attempts) wins 48 of
   missions 4-61 in the desert itself (it cannot fly mission 5's aerobatics, the low-level route of
   mission 6, and loses some of the big dogfights of missions 27-40). Over the 12 other real
