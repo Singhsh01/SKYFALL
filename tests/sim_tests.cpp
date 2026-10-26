@@ -143,7 +143,7 @@ ArcadeRun arcadeRun(AircraftId id, double alt, HandlingMode mode, double fuelFra
 }  // namespace
 
 TEST(arcade_profile_accelerates_in_3_to_4_s_and_brakes_in_4_to_5_s) {
-    for (int ac = 0; ac < static_cast<int>(AircraftId::Count); ++ac) {
+    for (int ac = 0; ac < kFighterCount; ++ac) {
         for (double alt : {1500.0, 9000.0}) {
             ArcadeRun r = arcadeRun(static_cast<AircraftId>(ac), alt, HandlingMode::Arcade);
             CHECK(r.t95 >= 2.9 && r.t95 <= 4.2);
@@ -341,6 +341,7 @@ TEST(arcade_pull_up_recovers_from_low_altitude_dive) {
 TEST(every_aircraft_is_flyable_in_arcade) {
     for (const auto& prof : allProfiles()) {
         CHECK(prof.playableNow);
+        const bool fighter = prof.role == AircraftRole::Fighter;
         FlightModel fm(prof, terrain());
         fm.setHandling(HandlingMode::Arcade);
         fm.resetAirborne({12000, 450, 0}, 0.0, 170.0, 1.0);
@@ -360,7 +361,8 @@ TEST(every_aircraft_is_flyable_in_arcade) {
         }
         CHECK(!fm.state().crashed);
         CHECK(fm.state().pos.y > 700.0);
-        CHECK(dh > 180 * kDeg);
+        CHECK(dh > (fighter ? 180 : 35) * kDeg);   // a transport turns, but gently
+        if (!fighter) CHECK(dh < 120 * kDeg);
         std::printf("    %-22s alt %.0f m, turned %.0f deg in 6 s, %.0f m/s\n", prof.name, fm.state().pos.y, dh / kDeg, fm.state().airspeed);
     }
 }
@@ -717,15 +719,76 @@ TEST(crash_analysis_explains_the_mistake) {
     CHECK_NEAR(pullOutAltitude(250, 10, 7), 0.0, 1e-12);
 }
 
-TEST(all_eight_aircraft_profiles_are_defined) {
-    int playable = 0;
+TEST(all_aircraft_profiles_are_defined) {
+    int playable = 0, fighters = 0;
     for (const auto& p : allProfiles()) {
         CHECK(p.name != nullptr && std::strlen(p.name) > 0);
-        CHECK(p.wingAreaM2 > 10 && p.thrustAbN > p.thrustMilN);
+        CHECK(p.wingAreaM2 > 10);
+        if (p.role == AircraftRole::Fighter) {
+            ++fighters;
+            CHECK(p.afterburner && p.thrustAbN > p.thrustMilN);
+            CHECK(p.missiles >= 4 && p.cannonRounds > 0);
+            CHECK(isFighter(p.id));
+        } else {
+            CHECK(!p.afterburner && p.missiles == 0 && p.gLimit <= 3.0);
+            CHECK(!isFighter(p.id));
+        }
         playable += p.playableNow;
     }
-    CHECK(allProfiles().size() == 8);
-    CHECK(playable == 8);
+    CHECK(allProfiles().size() == 11);
+    CHECK(fighters == kFighterCount && fighters == 10);
+    CHECK(playable == 11);
+    CHECK(profile(AircraftId::FA18).carrierCapable);
+    CHECK(combatAircraft(static_cast<int>(AircraftId::C17)) == 0);
+    CHECK(combatAircraft(static_cast<int>(AircraftId::Typhoon)) == static_cast<int>(AircraftId::Typhoon));
+}
+
+TEST(c17_flies_like_a_heavy_transport) {
+    // subsonic in every mode, no afterburner, takes off and climbs from a runway, and its
+    // stall speed sits below its approach speed (a flyable approach)
+    const AircraftProfile& p = profile(AircraftId::C17);
+    for (HandlingMode mode : {HandlingMode::Arcade, HandlingMode::Assisted, HandlingMode::Simulation}) {
+        FlightModel fm(p, terrain());
+        fm.setHandling(mode);
+        fm.resetAirborne({12000, 3000, 0}, 0.0, 180.0, 1.0);
+        double vmax = 0;
+        for (int i = 0; i < 120 * 40; ++i) {
+            ControlInputs in;
+            in.throttleRate = 1.0;
+            Euler e = toEuler(fm.state().q);
+            in.pitch = clampd((0.0 - e.pitch) * 2.0 - fm.state().vel.y * 0.02, -0.4, 0.4);
+            fm.step(in);
+            vmax = std::max(vmax, fm.state().airspeed);
+        }
+        CHECK(fm.state().abLevel == 0.0);
+        CHECK(fm.state().mach < 0.9);
+        CHECK(vmax > 180.0);
+        CHECK(!fm.state().crashed);
+        std::printf("    C-17 %s: top %.0f m/s, Mach %.2f\n", mode == HandlingMode::Arcade ? "arcade" : mode == HandlingMode::Assisted ? "assisted" : "simulation",
+                    vmax, fm.state().mach);
+    }
+    double W = (p.emptyMassKg + p.fuelMassKg) * kG;
+    double vs = std::sqrt(2.0 * W / (1.225 * p.wingAreaM2 * p.clMax));
+    CHECK(vs < p.approachSpeedMs * 0.9);
+    CHECK(vs < p.rotateSpeedMs);
+    // takeoff roll
+    FlightModel fm(p, terrain());
+    fm.setHandling(HandlingMode::Assisted);
+    fm.resetOnRunway(true);
+    fm.mutableState().parkingBrake = false;
+    double roll = 0;
+    Vec3 start = fm.state().pos;
+    for (int i = 0; i < 120 * 90 && fm.state().onGround; ++i) {
+        ControlInputs in;
+        in.throttleRate = 1.0;
+        if (fm.state().airspeed > p.rotateSpeedMs) in.pitch = 0.6;
+        fm.step(in);
+        roll = length(fm.state().pos - start);
+    }
+    CHECK(!fm.state().onGround);
+    CHECK(!fm.state().crashed);
+    CHECK(roll < 2400.0);
+    std::printf("    C-17 stall %.0f m/s, approach %.0f m/s, takeoff roll %.0f m\n", vs, p.approachSpeedMs, roll);
 }
 
 // ------------------------------------------------------------------------------------------

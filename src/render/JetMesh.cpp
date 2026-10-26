@@ -39,9 +39,25 @@ struct Geo {
     bool faceted = false;
     float pu = 2.4f, pl = 2.6f;   // superellipse exponents of the upper / lower fuselage section
     bool roundNozzle = true;
+    // transports: podded turbofans under the wing, a raised fuselage (high wing over a low belly),
+    // a main gear in fuselage sponsons and a cargo ramp under the upswept tail
+    struct Pod { float span, fwd, len, r; };
+    std::vector<Pod> pods;
+    float yOff = 0.0f;          // the whole airframe is raised by this much (gear stays at the ground)
+    bool transportGear = false;
+    bool ramp = false; float rampX0 = 0, rampX1 = 0, rampY0 = 0, rampY1 = 0, rampW = 0;
+    bool intakes = true;
 };
 
 Color paint(unsigned char shade = 255) { return {shade, shade, shade, kPaint}; }
+float g_yOff = 0.0f;   // vertical offset of the airframe being built (see Geo::yOff)
+/// Builds a mesh with the airframe offset applied.
+Mesh buildOff(const MeshBuilder& mb) {
+    if (g_yOff == 0.0f) return mb.build();
+    MeshBuilder c = mb;
+    for (size_t i = 1; i < c.pos.size(); i += 3) c.pos[i] += g_yOff;
+    return c.build();
+}
 Color metal(unsigned char r, unsigned char g, unsigned char b) { return {r, g, b, kMetal}; }
 
 /// Emit triangle oriented so that its normal points away from `inside`.
@@ -262,7 +278,8 @@ void bakeAmbientOcclusion(MeshBuilder& target, const std::vector<const MeshBuild
             lo = Vector3Min(lo, {m->pos[i], m->pos[i + 1], m->pos[i + 2]});
             hi = Vector3Max(hi, {m->pos[i], m->pos[i + 1], m->pos[i + 2]});
         }
-    const float vs = 0.12f;   // voxel size (m)
+    // voxel size (m): 12 cm on a fighter, coarser on a 50 m transport (bounded memory and time)
+    const float vs = std::max(0.12f, std::max({hi.x - lo.x, hi.y - lo.y, hi.z - lo.z}) / 170.0f);
     lo = Vector3Subtract(lo, {0.5f, 0.5f, 0.5f});
     int nx = static_cast<int>((hi.x - lo.x) / vs) + 2, ny = static_cast<int>((hi.y - lo.y) / vs) + 2, nz = static_cast<int>((hi.z - lo.z) / vs) + 2;
     std::vector<unsigned char> vox(static_cast<size_t>(nx) * ny * nz, 0);
@@ -301,8 +318,9 @@ void bakeAmbientOcclusion(MeshBuilder& target, const std::vector<const MeshBuild
             float cosT = Vector3DotProduct(d, n);
             if (cosT <= 0.05f) continue;
             cnt += cosT;
-            for (float t = vs; t < 2.6f; t += vs * 0.9f) {
-                if (solid(Vector3Add(o, Vector3Scale(d, t)))) { occ += cosT * (1.0f - t / 3.2f); break; }
+            const float reach = std::max(2.6f, vs * 22.0f);
+            for (float t = vs; t < reach; t += vs * 0.9f) {
+                if (solid(Vector3Add(o, Vector3Scale(d, t)))) { occ += cosT * (1.0f - t / (reach * 1.23f)); break; }
             }
         }
         float ao = cnt > 0 ? 1.0f - 0.8f * occ / cnt : 1.0f;
@@ -464,6 +482,59 @@ Geo geoFor(AirframeStyle s) {
             g.noseGearX = 4.0f; g.mainGearX = -1.0f; g.mainGearZ = 1.15f;
             g.pylonMissiles = 2;
             break;
+        case AirframeStyle::Hornet:
+            // twin-engine naval fighter: big leading-edge root extensions, trapezoid wing, twin
+            // outward-canted fins set well forward, all-moving stabilisers, intakes under the LERX
+            g.fus = {{9.6f, 0.02f, 0.02f, 0.02f, 0.0f}, {8.6f, 0.38f, 0.34f, 0.32f, -0.05f}, {7.0f, 0.62f, 0.60f, 0.52f, -0.08f},
+                     {5.2f, 0.78f, 0.78f, 0.66f, -0.10f}, {3.2f, 1.05f, 0.78f, 0.72f, -0.12f}, {1.0f, 1.35f, 0.70f, 0.78f, -0.10f},
+                     {-2.0f, 1.40f, 0.62f, 0.70f, -0.05f}, {-5.0f, 1.28f, 0.55f, 0.60f, 0.0f}, {-7.6f, 1.08f, 0.45f, 0.48f, 0.0f},
+                     {-8.7f, 1.00f, 0.42f, 0.42f, 0.0f}};
+            g.canX0 = 6.4f; g.canX1 = 2.4f; g.canW = 0.52f; g.canH = 0.68f; g.canY = 0.64f;
+            g.wing = {0.6f, -3.7f, -2.7f, -4.5f, 1.3f, 6.8f, -0.05f, -0.05f, 0.30f};
+            g.lerx = true; g.lerxP = {6.9f, 0.4f, 0.9f, 0.1f, 0.8f, 1.95f, -0.04f, 0.0f, 0.10f};
+            g.stab = {-5.7f, -8.3f, -7.9f, -9.0f, 1.2f, 4.0f, -0.1f, 0.05f, 0.12f};
+            g.tails = {{-2.8f, -6.4f, -5.4f, -7.0f, 3.0f, 1.15f, 0.42f, 0.36f}};
+            g.engines = 2; g.engineZ = 0.55f; g.nozzleX = -8.7f; g.nozzleR = 0.52f; g.nozzleLen = 1.0f;
+            g.intakeX = 3.4f; g.intakeZ = 1.15f; g.intakeW = 0.62f; g.intakeH = 0.85f; g.intakeY = -0.62f;
+            g.noseGearX = 6.2f; g.mainGearX = -1.3f; g.mainGearZ = 1.6f;
+            g.pylonMissiles = 4;
+            break;
+        case AirframeStyle::Typhoon:
+            // canard-delta: canards under the cockpit sill, a 53 degree delta, one fin and a wide
+            // ventral "smile" intake
+            g.fus = {{8.2f, 0.02f, 0.02f, 0.02f, 0.0f}, {7.2f, 0.34f, 0.32f, 0.30f, 0.0f}, {5.6f, 0.58f, 0.62f, 0.50f, -0.04f},
+                     {3.8f, 0.78f, 0.80f, 0.66f, -0.06f}, {1.8f, 1.05f, 0.74f, 0.95f, -0.10f}, {-1.0f, 1.28f, 0.68f, 0.95f, -0.08f},
+                     {-4.2f, 1.20f, 0.62f, 0.78f, -0.04f}, {-6.6f, 1.04f, 0.52f, 0.56f, 0.0f}, {-7.8f, 0.98f, 0.48f, 0.46f, 0.0f}};
+            g.canX0 = 5.6f; g.canX1 = 1.9f; g.canW = 0.50f; g.canH = 0.64f; g.canY = 0.62f;
+            g.wing = {1.2f, -7.0f, -5.6f, -6.9f, 1.2f, 5.47f, -0.35f, -0.05f, 0.26f};
+            g.stabs = false;
+            g.canards = true; g.canard = {4.6f, 3.1f, 3.5f, 2.8f, 0.9f, 2.35f, 0.05f, 0.02f, 0.06f};
+            g.tails = {{-3.0f, -6.8f, -6.0f, -7.4f, 3.0f, 0.0f, 0.5f, 0.0f}};
+            g.engines = 2; g.engineZ = 0.50f; g.nozzleX = -7.8f; g.nozzleR = 0.45f;
+            g.ventral = true; g.intakeX = 2.7f; g.intakeZ = 0.0f; g.intakeW = 1.55f; g.intakeH = 0.72f; g.intakeY = -1.0f;
+            g.noseGearX = 4.6f; g.mainGearX = -1.6f; g.mainGearZ = 1.3f;
+            g.pylonMissiles = 4;
+            break;
+        case AirframeStyle::Transport:
+            // heavy military transport (C-17 class): round 6.8 m fuselage, high swept wing with
+            // anhedral, T-tail, four podded turbofans, gear sponsons and an aft cargo ramp
+            g.fus = {{26.5f, 0.05f, 0.05f, 0.05f, 0.0f}, {25.7f, 1.30f, 1.20f, 1.50f, 0.0f}, {24.2f, 2.40f, 2.20f, 2.70f, 0.0f},
+                     {21.6f, 3.10f, 3.00f, 3.25f, 0.0f}, {18.0f, 3.40f, 3.30f, 3.40f, 0.0f}, {-8.0f, 3.40f, 3.30f, 3.40f, 0.0f},
+                     {-13.5f, 3.30f, 3.25f, 2.70f, 0.0f}, {-18.5f, 2.70f, 3.05f, 1.30f, 0.0f}, {-22.8f, 1.70f, 2.75f, 0.10f, 0.0f},
+                     {-26.4f, 0.55f, 2.55f, -1.55f, 0.0f}};
+            g.pu = 2.15f; g.pl = 2.3f;
+            g.canX0 = 24.4f; g.canX1 = 21.4f; g.canW = 1.55f; g.canH = 0.55f; g.canY = 2.45f;
+            g.wing = {6.0f, -4.6f, -4.7f, -8.3f, 3.0f, 25.85f, 2.95f, -1.15f, 1.05f};
+            g.stab = {-21.2f, -25.9f, -24.6f, -27.3f, 0.6f, 9.9f, 10.65f, 0.25f, 0.32f};
+            g.tails = {{-15.5f, -25.5f, -21.6f, -26.3f, 8.05f, 0.0f, 2.6f, 0.0f}};
+            g.engines = 0; g.intakes = false;
+            g.pods = {{7.6f, 2.6f, 6.2f, 1.18f}, {14.0f, 2.4f, 6.0f, 1.15f}};
+            g.yOff = 2.25f;
+            g.transportGear = true;
+            g.noseGearX = 21.0f; g.mainGearX = -2.2f; g.mainGearZ = 2.7f;
+            g.ramp = true; g.rampX0 = -13.6f; g.rampX1 = -20.4f; g.rampY0 = -2.62f; g.rampY1 = -1.05f; g.rampW = 2.6f;
+            g.pylonMissiles = 0;
+            break;
     }
     return g;
 }
@@ -600,7 +671,7 @@ void buildLod(JetModel& jm, const Geo& g, AirframeStyle style, int lod) {
     if (g.nacelles)
         for (float sgn : {-1.0f, 1.0f}) tube(mb, g.nacX0, g.nacX1, g.nacR * 0.95f, g.nacR, g.nacY, sgn * g.nacZ, lod == 2 ? 8 : 12, paint(235));
     // intakes
-    {
+    if (g.intakes) {
         Color dark = metal(18, 18, 20);
         for (float sgn : {-1.0f, 1.0f}) {
             if (g.ventral && sgn > 0) continue;
@@ -625,9 +696,71 @@ void buildLod(JetModel& jm, const Geo& g, AirframeStyle style, int lod) {
             }
         }
     }
+    // podded turbofans (transport): nacelle with a dark fan face, a pylon up into the wing, and a
+    // grey core nozzle; the exits are the heat-haze / exhaust positions
+    if (!g.pods.empty()) {
+        int n = 0;
+        int sides = lod == 2 ? 10 : (lod == 1 ? 16 : 24);
+        for (const Geo::Pod& pd : g.pods)
+            for (float sgn : {-1.0f, 1.0f}) {
+                float le, te, wy;
+                planformAt(g.wing, pd.span, le, te, wy);
+                float y = wy - pd.r - 0.75f, z = sgn * pd.span;
+                float x0 = le + pd.fwd, x1 = x0 - pd.len;
+                tube(mb, x0, x1 + 0.6f, pd.r, pd.r * 0.82f, y, z, sides, paint(232));
+                tube(mb, x1 + 0.62f, x1, pd.r * 0.62f, pd.r * 0.42f, y, z, sides, metal(120, 116, 110));
+                // fan face (dark) with a spinner
+                for (int i = 0; i < sides; ++i) {
+                    float a0 = 2 * PI * i / sides, a1 = 2 * PI * (i + 1) / sides;
+                    Vector3 c = {x0 - 0.25f, y, z};
+                    triOut(mb, c, {c.x, y + sinf(a0) * pd.r * 0.92f, z + cosf(a0) * pd.r * 0.92f}, {c.x, y + sinf(a1) * pd.r * 0.92f, z + cosf(a1) * pd.r * 0.92f},
+                           {c.x - 1, y, z}, metal(26, 26, 30));
+                }
+                if (lod < 2) tube(mb, x0 - 0.1f, x0 - 0.75f, 0.06f, pd.r * 0.32f, y, z, 8, metal(170, 170, 172));
+                // lip ring
+                tube(mb, x0 + 0.02f, x0 - 0.35f, pd.r * 1.02f, pd.r * 1.0f, y, z, sides, metal(190, 190, 192));
+                // pylon: a thin swept plate from the nacelle top into the wing underside
+                plate(mb, {x0 - 0.8f, y + pd.r * 0.8f, z}, {x1 + 1.4f, y + pd.r * 0.8f, z}, {te + 1.0f, wy - 0.25f, z}, {le - 0.4f, wy - 0.25f, z}, {0, 0, 1}, 0.22f, paint(225));
+                if (n < 4) { jm.nozzles[n] = {x1 - 0.1f, y + g.yOff, z}; jm.nozzlePivot[n] = jm.nozzles[n]; }
+                ++n;
+            }
+        jm.nozzleCount = std::min(n, 4);
+        jm.nozzleRadius = g.pods.front().r * 0.45f;
+        jm.turbofan = true;
+    }
+    // gear sponsons (transport): long fairings on the lower fuselage sides
+    if (g.transportGear)
+        for (float sgn : {-1.0f, 1.0f}) {
+            float w = g.fus[5].w;
+            tube(mb, 4.5f, -7.5f, 0.9f, 0.9f, -2.1f, sgn * (w - 0.35f), lod == 2 ? 8 : 14, paint(228));
+        }
+    // cargo ramp: a part hinged at its forward edge on LOD 0 (opens on the ground), merged closed otherwise
+    if (g.ramp) {
+        MeshBuilder rb;
+        MeshBuilder& m = animated ? rb : mb;
+        Vector3 hinge = {g.rampX0, g.rampY0, 0};
+        float ox = animated ? hinge.x : 0.0f, oy = animated ? hinge.y : 0.0f;
+        Vector3 a = {g.rampX0 - ox, g.rampY0 - oy, -g.rampW}, b = {g.rampX0 - ox, g.rampY0 - oy, g.rampW};
+        Vector3 c = {g.rampX1 - ox, g.rampY1 - oy, g.rampW * 0.82f}, d = {g.rampX1 - ox, g.rampY1 - oy, -g.rampW * 0.82f};
+        plate(m, a, d, c, b, {0, -1, 0}, 0.12f, paint(214));
+        // ribbed inner face (visible when open) and side seams
+        for (int k = 1; k < 6; ++k) {
+            float t = k / 6.0f;
+            Vector3 p = Vector3Lerp(Vector3Lerp(a, b, 0.5f), Vector3Lerp(d, c, 0.5f), t);
+            m.box({p.x, p.y + 0.09f, 0}, {0.12f, 0.05f, g.rampW * (1.7f - 0.3f * t)}, metal(120, 122, 118));
+        }
+        if (animated) {
+            JetPart part;
+            part.mesh = rb.build();
+            part.pivot = hinge;
+            part.axis = {0, 0, 1};
+            part.kind = JetPartKind::Ramp;
+            L.parts.push_back(part);
+        }
+        jm.hasRamp = true;
+    }
     // nozzles: part meshes on LOD 0 (thrust vectoring / visible petals), merged otherwise
-    jm.nozzleCount = g.engines;
-    jm.nozzleRadius = g.nozzleR;
+    if (g.engines > 0) { jm.nozzleCount = g.engines; jm.nozzleRadius = g.nozzleR; }
     for (int e = 0; e < g.engines; ++e) {
         float z = g.engines == 1 ? 0.0f : (e == 0 ? -g.engineZ : g.engineZ);
         float y = g.nacelles ? g.nacY : -0.05f;
@@ -671,7 +804,7 @@ void buildLod(JetModel& jm, const Geo& g, AirframeStyle style, int lod) {
             missileShape(mb, c, 3.6f, 0.09f, metal(210, 210, 205));
             mb.box({c.x, wy - 0.22f, c.z}, {1.6f, 0.3f, 0.06f}, paint(200));
         }
-    if (lod == 0) {
+    if (lod == 0 && !g.transportGear) {
         float noseX = g.fus.front().x;
         mb.cylinder({0, 0, 0}, 0.025f, 1.1f, 6, metal(190, 190, 190), MatrixMultiply(MatrixRotateZ(-PI / 2), MatrixTranslate(noseX - 0.2f, 0.0f, 0.0f)), 0.012f);
         // blade antennas on the spine and belly
@@ -681,8 +814,8 @@ void buildLod(JetModel& jm, const Geo& g, AirframeStyle style, int lod) {
         for (float sd : {-1.0f, 1.0f}) mb.box({-1.5f, 0.15f, sd * (g.fus[g.fus.size() / 2].w + 0.01f)}, {1.2f, 0.06f, 0.01f}, metal(120, 255, 140));
     }
     if (lod < 2) bakeAmbientOcclusion(mb, {&mb});
-    L.body = mb.build();
-    L.canopy = cb.build();
+    L.body = buildOff(mb);
+    L.canopy = buildOff(cb);
 
     // horizontal stabilisers (animated parts on LOD 0, static otherwise)
     if (g.stabs) {
@@ -704,9 +837,11 @@ void buildLod(JetModel& jm, const Geo& g, AirframeStyle style, int lod) {
         }
         if (!animated) {
             UnloadMesh(L.body);
-            L.body = mb.build();   // rebuilt with the stabilisers merged in
+            L.body = buildOff(mb);   // rebuilt with the stabilisers merged in
         }
     }
+    // moving parts are built relative to their pivots: only the pivots move with the airframe
+    for (JetPart& part : L.parts) part.pivot.y += g_yOff;
     (void)style;
 }
 
@@ -715,9 +850,31 @@ void buildGear(JetModel& jm, const Geo& g) {
     Color strut = metal(170, 170, 168), tyre = metal(22, 22, 24), hub = metal(150, 150, 152), door = paint(210);
     const float ground = -2.35f;
     struct W { Vector3 c; float r, w; };
-    std::vector<W> wheels = {{{g.noseGearX, ground + 0.33f, 0}, 0.33f, 0.22f}};
-    for (float sgn : {-1.0f, 1.0f}) wheels.push_back({{g.mainGearX, ground + 0.45f, sgn * g.mainGearZ}, 0.45f, 0.3f});
+    std::vector<W> wheels;
+    if (g.transportGear) {
+        // twin nose wheels; three main wheels in tandem on each side, under the sponsons
+        for (float sgn : {-1.0f, 1.0f}) wheels.push_back({{g.noseGearX, ground + 0.55f, sgn * 0.42f}, 0.55f, 0.38f});
+        for (float sgn : {-1.0f, 1.0f})
+            for (int k = 0; k < 3; ++k) wheels.push_back({{g.mainGearX + 2.1f - k * 2.1f, ground + 0.66f, sgn * g.mainGearZ}, 0.66f, 0.55f});
+        for (MeshBuilder* m : {&gb, &lo}) {
+            m->cylinder({g.noseGearX, ground + 0.5f, 0}, 0.16f, 3.3f, 8, strut);
+            m->cylinder({g.noseGearX, ground + 0.5f, 0}, 0.11f, 1.2f, 8, metal(220, 220, 225));
+            m->box({g.noseGearX, ground + 0.55f, 0}, {0.3f, 0.2f, 1.0f}, strut);
+            for (float sgn : {-1.0f, 1.0f}) {
+                for (int k = 0; k < 3; ++k) {
+                    float x = g.mainGearX + 2.1f - k * 2.1f;
+                    m->cylinder({x, ground + 0.66f, sgn * g.mainGearZ}, 0.17f, 1.5f, 8, strut);
+                    m->box({x, ground + 0.66f, sgn * g.mainGearZ}, {0.35f, 0.25f, 0.7f}, strut);
+                }
+                m->box({g.mainGearX, ground + 2.1f, sgn * g.mainGearZ}, {6.6f, 0.3f, 0.5f}, strut);   // bogie beam in the sponson
+            }
+        }
+    } else {
+        wheels.push_back({{g.noseGearX, ground + 0.33f, 0}, 0.33f, 0.22f});
+        for (float sgn : {-1.0f, 1.0f}) wheels.push_back({{g.mainGearX, ground + 0.45f, sgn * g.mainGearZ}, 0.45f, 0.3f});
+    }
     for (MeshBuilder* m : {&gb, &lo}) {
+        if (g.transportGear) break;
         // struts with an oleo (shiny lower section), torque links and doors
         m->cylinder({g.noseGearX, ground + 0.35f, 0}, 0.07f, -ground - 0.6f, 6, strut);
         m->cylinder({g.noseGearX, ground + 0.35f, 0}, 0.05f, 0.5f, 6, metal(220, 220, 225));
@@ -774,21 +931,33 @@ JetModel buildJetModel(AirframeStyle style) {
     Geo g = geoFor(style);
     JetModel jm;
     const int ringR[3] = {40, 18, 9}, sub[3] = {6, 3, 1}, chordN[3] = {14, 9, 5}, spanN[3] = {6, 4, 2};
+    g_yOff = g.yOff;
     for (int l = 0; l < 3; ++l) {
         g_ringR = ringR[l]; g_sub = sub[l]; g_chordN = chordN[l]; g_spanN = spanN[l];
         buildLod(jm, g, style, l);
     }
     g_ringR = 40; g_sub = 6; g_chordN = 14; g_spanN = 6;
-    buildGear(jm, g);
-    jm.eye = {g.canX1 + (g.canX0 - g.canX1) * 0.40f, g.canY + g.canH * 0.62f, 0.0f};
+    g_yOff = 0.0f;
+    buildGear(jm, g);   // built at the ground line directly (not offset)
+    jm.eye = {g.canX1 + (g.canX0 - g.canX1) * 0.40f, g.canY + g.canH * 0.62f + g.yOff, 0.0f};
+    if (g.transportGear) jm.eye = {g.canX1 + 0.6f, g.canY + g.yOff - 0.35f, -0.6f};   // left seat behind the windscreen
     jm.vectoring = style == AirframeStyle::StealthTwinTail || style == AirframeStyle::FlankerFamily;
     jm.tailless = !g.stabs;
-    jm.wingtips[0] = {g.wing.tipTE + 0.4f, g.wing.y + g.wing.tipDy, -g.wing.tipZ};
-    jm.wingtips[1] = {g.wing.tipTE + 0.4f, g.wing.y + g.wing.tipDy, g.wing.tipZ};
+    jm.wingtips[0] = {g.wing.tipTE + 0.4f, g.wing.y + g.wing.tipDy + g.yOff, -g.wing.tipZ};
+    jm.wingtips[1] = {g.wing.tipTE + 0.4f, g.wing.y + g.wing.tipDy + g.yOff, g.wing.tipZ};
     const TailDef& t = g.tails.front();
     float tc = cosf(t.cant), ts = sinf(t.cant);
-    jm.tailLight = {t.tipTE, t.y + tc * t.height, (t.z == 0.0f ? 0.0f : t.z + ts * t.height)};
-    jm.strobe = {-1.8f, g.fus[g.fus.size() / 2].ht + 0.08f, 0};
+    jm.tailLight = {t.tipTE, t.y + tc * t.height + g.yOff, (t.z == 0.0f ? 0.0f : t.z + ts * t.height)};
+    jm.strobe = {-1.8f, g.fus[g.fus.size() / 2].ht + 0.08f + g.yOff, 0};
+    if (g.transportGear) jm.landingLight = {g.noseGearX + 0.6f, -0.6f, 0};
+    // engine character: the Typhoon's EJ200s run a short, bright, blue-white plume; the Super
+    // Hornet's F414s a longer orange one; the Flankers' AL-41s long with pronounced diamonds
+    switch (style) {
+        case AirframeStyle::Typhoon: jm.plumeScale = 0.9f; jm.plumeHue = -0.6f; break;
+        case AirframeStyle::Hornet: jm.plumeScale = 1.12f; jm.plumeHue = 0.55f; break;
+        case AirframeStyle::FlankerFamily: jm.plumeScale = 1.15f; jm.plumeHue = 0.2f; break;
+        default: break;
+    }
     jm.length = g.fus.front().x - g.fus.back().x;
     jm.loaded = true;
     return jm;

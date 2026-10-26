@@ -15,7 +15,7 @@
 
 namespace sky {
 
-enum class JetPartKind { Aileron = 0, Flap = 1, Rudder = 2, Canard = 3, Nozzle = 4, Wheel = 5, Stab = 6 };
+enum class JetPartKind { Aileron = 0, Flap = 1, Rudder = 2, Canard = 3, Nozzle = 4, Wheel = 5, Stab = 6, Ramp = 7 };
 
 /// A moving part: mesh vertices are relative to `pivot`; it rotates about `axis` (body frame).
 struct JetPart {
@@ -39,8 +39,8 @@ struct JetModel {
     Mesh gear{};      // struts and doors (extended position), wheels are parts of LOD 0
     Mesh gearLo{};    // struts + wheels in one mesh for LOD 1
     Vector3 eye{4.9f, 0.98f, 0.0f};  // pilot eye point
-    Vector3 nozzles[2]{};    // nozzle exit centres
-    Vector3 nozzlePivot[2]{};
+    Vector3 nozzles[4]{};    // nozzle exit centres
+    Vector3 nozzlePivot[4]{};
     int nozzleCount = 2;
     float nozzleRadius = 0.5f;
     bool vectoring = false;  // thrust-vectoring nozzles (pitch)
@@ -48,6 +48,10 @@ struct JetModel {
     Vector3 wingtips[2]{};   // for vapour trails / nav lights
     Vector3 tailLight{}, strobe{}, landingLight{};
     float length = 18.9f;
+    bool turbofan = false;   // high-bypass engines without afterburner: no flame plume, heat haze only
+    float plumeScale = 1.0f; // afterburner plume length / diamond character per engine family
+    float plumeHue = 0.0f;   // -1 bluer .. +1 more orange
+    bool hasRamp = false;    // cargo ramp (transport)
     bool loaded = false;
     int triangles(int l) const;
 };

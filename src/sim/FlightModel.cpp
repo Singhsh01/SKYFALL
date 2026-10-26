@@ -153,11 +153,13 @@ void FlightModel::updateEngine(const ControlInputs& in, double dt, double rho) {
             break;
         }
         case EngineState::Running: {
-            double target = kIdle + (1.0 - kIdle) * std::min(s_.throttle / kAbDetent, 1.0);
+            // turbofans without reheat use the whole lever travel for dry thrust
+            double lever = p.afterburner ? std::min(s_.throttle / kAbDetent, 1.0) : s_.throttle;
+            double target = kIdle + (1.0 - kIdle) * lever;
             // on the catapult the run-up is quicker (deck crews do not wait for a slow spool)
             double spool = (target > s_.rpm ? p.spoolTimeS : p.spoolTimeS * 0.6) * (s_.catArmed ? 0.35 : 1.0) * (boost ? 0.3 : 1.0);
             s_.rpm += (target - s_.rpm) * approachFactor(dt, spool);
-            double abTarget = (s_.throttle >= kAbDetent && s_.rpm > 0.96)
+            double abTarget = (p.afterburner && s_.throttle >= kAbDetent && s_.rpm > 0.96)
                                   ? 0.55 + 0.45 * (s_.throttle - kAbDetent) / (1.0 - kAbDetent)
                                   : 0.0;
             s_.abLevel += (abTarget - s_.abLevel) * approachFactor(dt, boost ? 0.15 : 0.35);
@@ -199,7 +201,7 @@ void FlightModel::arcadeVelocity(const ControlInputs& in, double dt, double rho)
     double turnRate = std::sqrt(s_.omega.z * s_.omega.z + s_.omega.y * s_.omega.y);
     double cosA = clampd(dot(fwd, dir), -1.0, 1.0);
     // arcade guarantees a full-afterburner thrust/weight of at least 1.25 for every aircraft
-    double thrustScale = std::max(1.0, 1.25 * m * kG / std::max(p.thrustAbN, 1.0));
+    double thrustScale = p.role == AircraftRole::Fighter ? std::max(1.0, 1.25 * m * kG / std::max(p.thrustAbN, 1.0)) : 1.0;
     double accel = (s_.thrustN * thrustScale * cosA - qS * cd) / m - kG * dir.y - 0.045 * turnRate * V;
     if (arcadeBoost_) {
         // Arcade performance profile: the speed chases a target set by the lever, at rates that
@@ -208,9 +210,9 @@ void FlightModel::arcadeVelocity(const ControlInputs& in, double dt, double rho)
         // weapons load. Below the boost band (slow flight, gear down) the physics above applies,
         // so the jet can still slow down for a landing and never stops or reverses in the air.
         const double vmax = arcadeTopSpeed(s_.pos.y);
-        const double vIdle = 0.30 * vmax, vMil = 0.74 * vmax;
+        const double vIdle = 0.30 * vmax, vMil = p.afterburner ? 0.74 * vmax : vmax;
         const double vCtrl = std::max(p.approachSpeedMs * 1.6, 0.36 * vmax);   // "controllable" speed after braking
-        double dry = clampd(s_.throttle / kAbDetent, 0.0, 1.0);
+        double dry = p.afterburner ? clampd(s_.throttle / kAbDetent, 0.0, 1.0) : clampd(s_.throttle, 0.0, 1.0);
         bool running = s_.engine == EngineState::Running;
         double rpmFrac = clampd((s_.rpm - 0.62) / (1.0 - 0.62), 0.0, 1.0);   // 0.62 = idle rpm (updateEngine)
         double vt = running ? lerpd(vIdle, vMil, std::pow(std::min(dry, rpmFrac + 0.02), 1.15)) + (vmax - vMil) * clampd(s_.abLevel, 0.0, 1.0) : 0.0;
@@ -243,7 +245,7 @@ void FlightModel::arcadeVelocity(const ControlInputs& in, double dt, double rho)
     if (arcadeBoost_) {
         // arcade G follows the stick: full pull at fighting speed is the jet's G limit at any
         // speed (turn rate x speed would read tens of g at the arcade top speeds)
-        double pmax = p.maxPitchRate * 2.05;
+        double pmax = p.maxPitchRate * (p.role == AircraftRole::Fighter ? 2.05 : 0.85);
         double frac = clampd(std::fabs(s_.omega.z) / std::max(pmax, 1e-6), 0.0, 1.0);
         double yawFrac = clampd(std::fabs(s_.omega.y) / 0.62, 0.0, 1.0) * 0.25;
         double pull = std::min(1.0, frac + yawFrac) * (p.gLimit - 1.0) * std::min(1.0, V / 180.0);
@@ -277,7 +279,9 @@ void FlightModel::updateAttitude(const ControlInputs& in, double dt) {
     if (mode_ == HandlingMode::Arcade) {
         double auth = 0.35 + 0.65 * smoothstep(40.0, 120.0, V);
         // per-aircraft arcade rates derived from the profile (F-22: ~280 deg/s roll, ~66 deg/s pitch)
-        double rollRate = p.maxRollRate * 1.28, pitchRate = p.maxPitchRate * 2.05;
+        // (a transport keeps its own, much gentler rates: it must not fly like a fighter)
+        const double rk = p.role == AircraftRole::Fighter ? 1.28 : 1.0, pk = p.role == AircraftRole::Fighter ? 2.05 : 0.85;
+        double rollRate = p.maxRollRate * rk, pitchRate = p.maxPitchRate * pk;
         Vec3 target{in.roll * rollRate * auth, -in.yaw * 0.62 * auth, in.pitch * pitchRate * (in.pitch > 0 ? 1.0 : 0.7) * auth};
         s_.omega = s_.omega + (target - s_.omega) * approachFactor(dt, 0.07);
         s_.q = s_.q.integrated(s_.omega, dt);

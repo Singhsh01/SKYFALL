@@ -68,6 +68,7 @@ struct Jet {
     bool routeLoop = true;
     bool formationLead = false;   // training lead: smooth loop, tight speed hold (a wingman formates on it)
     int kills = 0;
+    double ramp = 0;              // cargo ramp 0 closed .. 1 open (transport)
     ControlInputs lastInput{};
     // Trail bookkeeping for renderer
     double contrailTimer = 0;

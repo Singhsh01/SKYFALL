@@ -724,7 +724,7 @@ void Game::startMission(int n) {
     rain_ = campaignDef_ && campaignDef_->rain;
     if (campaignDef_ && campaignDef_->carrier) terrain_.setDeck(campaignDef_->deck);
     else terrain_.clearDeck();
-    Jet& p = battle_.createPlayer(static_cast<AircraftId>(settings_.aircraft));
+    Jet& p = battle_.createPlayer(static_cast<AircraftId>(combatAircraft(settings_.aircraft)));
     battle_.setAiEnabled(true);
     const RunwayInfo& rw = terrain_.runway();
     if (campaignDef_) {
@@ -821,7 +821,8 @@ void Game::startArena(bool keepPlayerState) {
         rain_ = false;
         tod_ = TimeOfDay::Morning;
         lighting_ = Lighting::preset(tod_);
-        Jet& p = battle_.createPlayer(static_cast<AircraftId>(settings_.aircraft));
+        // the arena fights in a fighter; Free Flight flies any aircraft (the C-17 too)
+        Jet& p = battle_.createPlayer(static_cast<AircraftId>(freeFlight_ ? settings_.aircraft : combatAircraft(settings_.aircraft)));
         // start east of the runway, heading east, clear of the terrain ahead
         const RunwayInfo& rw0 = terrain_.runway();
         Vec3 sp{rw0.center.x + 1500, 0, rw0.center.z - 400};
@@ -1736,7 +1737,7 @@ void Game::drawTitle() {
     y += bh + gap;
     if (ui::button(nav_, 3, {x, y, bw, bh}, "WORLD LOCATIONS", "Real terrain: Himalaya, Alps, Sahara, Andes, Rio...")) { audio_.play(Sfx::Click); screen_ = Screen::Locations; locStatus_.clear(); nav_.focus = 0; return; }
     y += bh + gap;
-    if (ui::button(nav_, 4, {x, y, bw, bh}, "HANGAR", "8 aircraft, " + std::to_string(kSkinCount) + " paint schemes")) { audio_.play(Sfx::Click); hangarSel_ = settings_.aircraft; startHangar(); nav_.focus = hangarSel_; return; }
+    if (ui::button(nav_, 4, {x, y, bw, bh}, "HANGAR", std::to_string(kAircraftCount) + " aircraft, " + std::to_string(kSkinCount) + " paint schemes")) { audio_.play(Sfx::Click); hangarSel_ = settings_.aircraft; startHangar(); nav_.focus = hangarSel_; return; }
     y += bh + gap;
     if (ui::button(nav_, 5, {x, y, bw, bh}, "SETTINGS", "Audio, graphics, controls")) { audio_.play(Sfx::Click); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 0; return; }
     y += bh + gap;
@@ -1832,10 +1833,10 @@ void Game::drawCampaign() {
     }
     {
         const auto& all = allProfiles();
-        int ac = settings_.aircraft;
+        int ac = combatAircraft(settings_.aircraft);
         int d = ui::selector(nav_, kAc, {50 * s + selW + 8 * s, selY, selW, selH}, "AIRCRAFT", all[ac].name);
         if (d != 0) {
-            settings_.aircraft = (ac + d + 8) % 8;
+            settings_.aircraft = (ac + d + kFighterCount) % kFighterCount;
             settings_.save(settingsPath_);
             audio_.play(Sfx::Click, 0.5f);
         }
@@ -1881,9 +1882,10 @@ void Game::drawHangar() {
     DrawRectangleGradientH(0, 0, static_cast<int>(w * 0.45f), static_cast<int>(h), Color{0, 0, 0, 190}, Color{0, 0, 0, 0});
     ui::title("HANGAR", 60 * s, 40 * s, 38 * s);
     const auto& all = allProfiles();
-    nav_.begin(11, in.up, in.down, in.confirm, in.left, in.right);
+    constexpr int kN = kAircraftCount, kFly = kN, kBack = kN + 1, kCamo = kN + 2;
+    nav_.begin(kN + 3, in.up, in.down, in.confirm, in.left, in.right);
     // left / right on an aircraft row changes its camouflage directly
-    if (nav_.focus < 8 && (in.left || in.right)) {
+    if (nav_.focus < kN && (in.left || in.right)) {
         int sk = settings_.skinFor(nav_.focus);
         sk = (sk + (in.right ? 1 : kSkinCount - 1)) % kSkinCount;
         settings_.setSkin(nav_.focus, sk);
@@ -1892,21 +1894,29 @@ void Game::drawHangar() {
         if (!battle_.jets().empty()) battle_.player().skin = sk;
         audio_.play(Sfx::Click, 0.5f);
     }
-    float y = 100 * s;
-    for (int i = 0; i < 8; ++i) {
+    float y = 92 * s;
+    for (int i = 0; i < kN; ++i) {
         const AircraftProfile& p = all[i];
         bool chosen = settings_.aircraft == i;
-        if (ui::button(nav_, i, {60 * s, y, 380 * s, 44 * s}, p.name, chosen ? "SELECTED - your aircraft" : "Press ENTER / click to select")) {
+        const char* sub = chosen ? (isFighter(i) ? "SELECTED - your aircraft" : "SELECTED - Free Flight (combat modes fly the F-22)")
+                                 : (isFighter(i) ? "Press ENTER / click to select" : "Transport: Free Flight only");
+        if (ui::button(nav_, i, {60 * s, y, 380 * s, 40 * s}, p.name, sub)) {
             settings_.aircraft = i;
             settings_.save(settingsPath_);
             audio_.play(Sfx::Click);
         }
-        if (chosen) DrawRectangle(static_cast<int>(430 * s), static_cast<int>(y + 14 * s), static_cast<int>(8 * s), static_cast<int>(16 * s), Color{150, 255, 205, 255});
+        if (chosen) DrawRectangle(static_cast<int>(430 * s), static_cast<int>(y + 12 * s), static_cast<int>(8 * s), static_cast<int>(16 * s), Color{150, 255, 205, 255});
         if (nav_.focus == i && hangarSel_ != i) { hangarSel_ = i; startHangar(); }
-        y += 48 * s;
+        y += 42 * s;
     }
-    if (ui::button(nav_, 8, {60 * s, y + 8 * s, 380 * s, 44 * s}, "FLY DOGFIGHT ARENA", all[settings_.aircraft].name)) { startArenaBriefed(); return; }
-    if (ui::button(nav_, 9, {60 * s, y + 58 * s, 380 * s, 40 * s}, "BACK") || in.back) { startTitle(); return; }
+    if (isFighter(settings_.aircraft)) {
+        if (ui::button(nav_, kFly, {60 * s, y + 6 * s, 380 * s, 40 * s}, "FLY DOGFIGHT ARENA", all[settings_.aircraft].name)) { startArenaBriefed(); return; }
+    } else if (ui::button(nav_, kFly, {60 * s, y + 6 * s, 380 * s, 40 * s}, "FREE FLIGHT", all[settings_.aircraft].name)) {
+        freeFlight_ = true;
+        startArena(false);
+        return;
+    }
+    if (ui::button(nav_, kBack, {60 * s, y + 52 * s, 380 * s, 36 * s}, "BACK") || in.back) { startTitle(); return; }
     // stats panel
     const AircraftProfile& p = all[hangarSel_];
     Rectangle r = {w - 400 * s, 110 * s, 360 * s, 320 * s};
@@ -1923,17 +1933,19 @@ void Game::drawHangar() {
     std::snprintf(b, sizeof b, "%.0f kg", p.emptyMassKg); row("Empty mass", b);
     std::snprintf(b, sizeof b, "%.1f m2", p.wingAreaM2); row("Wing area", b);
     std::snprintf(b, sizeof b, "%.1f / %.1f m", p.spanM, p.lengthM); row("Span / length", b);
-    std::snprintf(b, sizeof b, "%.0f / %.0f kN", p.thrustMilN / 1000, p.thrustAbN / 1000); row("Thrust dry / AB", b);
+    if (p.afterburner) { std::snprintf(b, sizeof b, "%.0f / %.0f kN", p.thrustMilN / 1000, p.thrustAbN / 1000); row("Thrust dry / AB", b); }
+    else { std::snprintf(b, sizeof b, "%.0f kN (4 turbofans)", p.thrustMilN / 1000); row("Thrust", b); }
     std::snprintf(b, sizeof b, "%.0f g", p.gLimit); row("FBW G limit", b);
     std::snprintf(b, sizeof b, "%.0f kt", p.rotateSpeedMs * 1.943844); row("Rotate speed", b);
     std::snprintf(b, sizeof b, "%.0f / %.0f deg/s", p.maxRollRate * 1.28 / kDeg, p.maxPitchRate * 2.05 / kDeg); row("Arcade roll / pitch", b);
-    std::snprintf(b, sizeof b, "%d ATA + 4 ATS", p.missiles); row("Missiles", b);
+    if (p.role == AircraftRole::Transport) row("Missiles", "none (flares only)");
+    else { std::snprintf(b, sizeof b, "%d ATA + 4 ATS", p.missiles); row("Missiles", b); }
     ui::text("Public, rounded figures; aero data tuned & illustrative.", r.x + 16 * s, r.y + r.height - 28 * s, 12 * s, Color{170, 190, 185, 200}, Align::Left, false);
     // camouflage selector for the aircraft on display
     int sk = settings_.skinFor(hangarSel_);
     std::vector<std::string> names;
     for (int i = 0; i < kSkinCount; ++i) names.push_back(skin(i).name);
-    if (ui::cycle(nav_, 10, {r.x, r.y + r.height + 14 * s, r.width, 44 * s}, "Camouflage", sk, names)) {
+    if (ui::cycle(nav_, kCamo, {r.x, r.y + r.height + 14 * s, r.width, 44 * s}, "Camouflage", sk, names)) {
         settings_.setSkin(hangarSel_, sk);
         settings_.aircraft = hangarSel_;      // painting an aircraft also makes it the one you fly
         settings_.save(settingsPath_);
@@ -2108,7 +2120,9 @@ int Game::runCapture() {
         updateCamera(1.0 / 30.0);
         renderFrame();
         char path[512];
-        std::snprintf(path, sizeof path, "%s/%02d_%s.png", opt_.captureDir.c_str(), ++shot, name.c_str());
+        std::string safe = name;
+        for (char& ch : safe) if (ch == '/' || ch == '\\' || ch == ' ') ch = '-';
+        std::snprintf(path, sizeof path, "%s/%02d_%s.png", opt_.captureDir.c_str(), ++shot, safe.c_str());
         saveScreenshot(path);
         std::printf("captured %s\n", path);
         std::fflush(stdout);
@@ -2121,13 +2135,19 @@ int Game::runCapture() {
     std::string set = setEnv ? setEnv : "all";
     if (set == "jet") {
         hideHud_ = true;
-        const AircraftId ids[] = {AircraftId::F22, AircraftId::Su35, AircraftId::MiG29, AircraftId::F16, AircraftId::Rafale, AircraftId::F35};
+        std::vector<AircraftId> ids;
+        // SKYFALL_JETS=8,9,10 picks aircraft by id; default: every aircraft
+        if (const char* only = std::getenv("SKYFALL_JETS")) {
+            for (const char* q = only; *q;) { ids.push_back(static_cast<AircraftId>(std::clamp(std::atoi(q), 0, kAircraftCount - 1))); while (*q && *q != ',') ++q; if (*q) ++q; }
+        } else {
+            for (int a = 0; a < kAircraftCount; ++a) ids.push_back(static_cast<AircraftId>(a));
+        }
         const double angles[][2] = {{0.7, 0.18}, {2.0, 0.55}, {3.6, 0.1}};
         for (AircraftId id : ids) {
             startArena(false);
             battle_.clearCombatants();
             Jet& p = battle_.createPlayer(id);
-            if (id != AircraftId::F22) p.team = Team::Red;
+            if (id == AircraftId::Su35 || id == AircraftId::Su57 || id == AircraftId::Su30 || id == AircraftId::MiG29) p.team = Team::Red;
             p.fm->resetAirborne({-4000, 2900, 1000}, 0.3, 220, 0.8);
             screen_ = Screen::Playing;
             for (auto& a : angles) {

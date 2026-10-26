@@ -2262,6 +2262,8 @@ std::string aircraftHandlingLine(int id) {
         case AircraftId::MiG29: return "You're in the Fulcrum. Quick and nimble, but small tanks: watch your fuel and your afterburner.";
         case AircraftId::Su30: return "You're in the Su-30. Big and stable, heavier in the roll: start your turns early.";
         case AircraftId::F16: return "You're in the Viper. Light, quick in the roll, single engine: be gentle, it responds fast.";
+        case AircraftId::FA18: return "You're in the Super Hornet. Superb nose authority at high angle of attack, less top speed: fight slow and keep the nose on.";
+        case AircraftId::Typhoon: return "You're in the Typhoon. It accelerates and climbs like nothing else: use the energy, then come back down on them.";
         default: return "";
     }
 }
@@ -2284,7 +2286,7 @@ std::vector<VoiceLine> trainingVoiceLines() {
     const Speaker I = Speaker::Instructor;
     for (const auto& L : trainingLevels())
         for (const auto& b : L.briefing) add(I, b);
-    for (int a = 0; a < static_cast<int>(AircraftId::Count); ++a) {
+    for (int a = 0; a < kFighterCount; ++a) {
         add(I, aircraftHandlingLine(a));
         add(I, rotateCall(profile(static_cast<AircraftId>(a))));
         add(I, approachCall(profile(static_cast<AircraftId>(a))));

@@ -2,6 +2,8 @@
 // Only SKYFALL's own file is ever written; unknown keys are preserved on save.
 #pragma once
 
+#include "../aircraft/AircraftProfile.hpp"
+
 #include <map>
 #include <string>
 
@@ -56,7 +58,7 @@ struct Settings {
     bool arcadeBoost = true;        // Arcade handling: fast acceleration / braking performance profile
     int aircraft = 0;
     std::string location = "desert";   // world location (see sim/Locations.hpp)
-    std::string skins = std::string(8, '0');   // camouflage per aircraft (digit = skin index)
+    std::string skins = std::string(kAircraftCount, '0');   // camouflage per aircraft (digit = skin index)
     // one character per aircraft: '0'-'9' then 'a'-'z' (skin index 0-35)
     int skinFor(int aircraftId) const {
         if (aircraftId < 0 || aircraftId >= static_cast<int>(skins.size())) return 0;

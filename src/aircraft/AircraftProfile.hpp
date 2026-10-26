@@ -14,10 +14,17 @@
 
 namespace sky {
 
-enum class AircraftId { F22, F35, Rafale, Su57, Su35, MiG29, Su30, F16, Count };
+// The fighters come first (ids 0..kFighterCount-1): menus, the Academy, the campaign and the AI
+// fighter pools only ever pick from them. Transports follow.
+enum class AircraftId { F22, F35, Rafale, Su57, Su35, MiG29, Su30, F16, FA18, Typhoon, C17, Count };
+constexpr int kAircraftCount = static_cast<int>(AircraftId::Count);
+constexpr int kFighterCount = static_cast<int>(AircraftId::C17);
+
+enum class AircraftRole { Fighter, Transport };
 
 /// Visual family used by the procedural mesh builder (original geometry, not copied models).
-enum class AirframeStyle { StealthTwinTail, StealthSingle, DeltaCanard, FlankerFamily, Fulcrum, ViperSingle };
+enum class AirframeStyle { StealthTwinTail, StealthSingle, DeltaCanard, FlankerFamily, Fulcrum, ViperSingle, Hornet, Typhoon, Transport, Count };
+constexpr int kAirframeStyleCount = static_cast<int>(AirframeStyle::Count);
 
 struct AircraftProfile {
     AircraftId id;
@@ -68,7 +75,17 @@ struct AircraftProfile {
     int missiles;
     int cannonRounds;
     int flareCharges;
+    // Role: transports have no afterburner, no weapons, a low G limit and fly only in Free Flight
+    // (and as AI aircraft in the Academy's logistics and escort missions)
+    AircraftRole role = AircraftRole::Fighter;
+    bool afterburner = true;
+    bool carrierCapable = false;   // naval fighter (catapult + arrestor hook in the real aircraft)
 };
+
+inline bool isFighter(AircraftId id) { return static_cast<int>(id) < kFighterCount; }
+inline bool isFighter(int id) { return id >= 0 && id < kFighterCount; }
+/// The aircraft a combat mode flies: transports fall back to the F-22.
+inline int combatAircraft(int id) { return isFighter(id) ? id : 0;}
 
 const AircraftProfile& profile(AircraftId id);
 const std::array<AircraftProfile, static_cast<size_t>(AircraftId::Count)>& allProfiles();

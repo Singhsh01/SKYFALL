@@ -757,6 +757,7 @@ uniform float uThrottle;   // 0..1 mil power
 uniform float uAb;         // 0..1 afterburner
 uniform vec3 uAxis;        // world direction of the plume (out of the nozzle)
 uniform float uDiamond;    // shock-diamond frequency (rises with speed / dynamic pressure)
+uniform float uHue;        // engine family: -1 bluer / whiter, +1 more orange
 uniform sampler2D uNoise;
 out vec4 finalColor;
 void main() {
@@ -773,8 +774,10 @@ void main() {
     vec3 core = vec3(0.86, 0.93, 1.0);      // white-hot, slightly blue
     vec3 blue = vec3(0.32, 0.52, 1.0);      // clean afterburner blue
     vec3 tail = vec3(1.0, 0.52, 0.22);      // cooler orange where the plume mixes with air
+    blue = mix(blue, vec3(0.62, 0.78, 1.0), max(-uHue, 0.0) * 0.6);
+    tail = mix(tail, vec3(1.0, 0.62, 0.30), max(uHue, 0.0) * 0.5);
     vec3 col = mix(core, blue, smoothstep(0.02, 0.42, t));
-    col = mix(col, tail, smoothstep(0.45, 1.0, t) * (0.65 - 0.35 * uAb));
+    col = mix(col, tail, smoothstep(0.45 - 0.2 * max(uHue, 0.0), 1.0, t) * (0.65 - 0.35 * uAb + 0.25 * max(uHue, 0.0)));
     col = mix(col, vec3(1.0), pow(rim, 4.0) * 0.35 * (1.0 - t));
     // seen from behind the jet the plume is end-on: the glowing nozzle and core still show
     float axial = pow(abs(dot(normalize(uAxis), v)), 4.0) * (1.0 - smoothstep(0.0, 0.35, t));

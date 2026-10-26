@@ -103,6 +103,10 @@ Vector3 paintFor(Team team, int skinIdx, const AircraftProfile& prof, Vector3& b
             case AirframeStyle::ViperSingle: b = {0.15f, 0.16f, 0.17f}; return {0.21f, 0.22f, 0.235f};
             case AirframeStyle::FlankerFamily: camo = 1; b = {0.10f, 0.14f, 0.20f}; return {0.26f, 0.31f, 0.37f};
             case AirframeStyle::Fulcrum: b = {0.16f, 0.18f, 0.20f}; return {0.24f, 0.26f, 0.29f};
+            case AirframeStyle::Hornet: b = {0.17f, 0.18f, 0.195f}; return {0.27f, 0.28f, 0.30f};       // naval tactical greys
+            case AirframeStyle::Typhoon: b = {0.22f, 0.23f, 0.24f}; return {0.31f, 0.32f, 0.335f};      // light air-superiority grey
+            case AirframeStyle::Transport: b = {0.12f, 0.125f, 0.135f}; return {0.16f, 0.165f, 0.175f}; // dark transport grey
+            default: break;
         }
     }
     // hostile "aggressor" desert splinter scheme: reads clearly against sky and sand
@@ -166,7 +170,7 @@ bool Renderer::init(const Terrain& t, const WorldLayout& layout, int width, int 
     auto t0 = std::chrono::steady_clock::now();
     world_.build(t);
     dressing_.build(t, layout, BuildingStyle::Desert, true);
-    for (int s = 0; s < 6; ++s) {
+    for (int s = 0; s < kAirframeStyleCount; ++s) {
         jets_[s] = buildJetModel(static_cast<AirframeStyle>(s));
         TraceLog(LOG_INFO, "SKYFALL: jet model %d: LOD triangles %d / %d / %d", s, jets_[s].triangles(0), jets_[s].triangles(1), jets_[s].triangles(2));
     }
@@ -1580,6 +1584,7 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
                 a = (-pose.pitch * 15.0f + pose.roll * 4.0f * part.side) * D;
                 break;
             case JetPartKind::Nozzle: a = nozzleAngle(); break;
+            case JetPartKind::Ramp: a = -pose.ramp * 0.62f; break;   // lowers aft end to the ground
             case JetPartKind::Wheel:
                 if (pose.gear <= 0.02f) continue;
                 a = -pose.wheelSpin;
@@ -1608,8 +1613,9 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
         if (pose.gear > 0.9f)
             lights_.push_back({Vector3Transform(Vector3Add(jm.landingLight, {0.1f, 0, 0}), gearM), s0 * 2.5f, Color{255, 246, 220, 255}});
     }
-    if (pose.throttle > 0.02f || pose.ab > 0.01f) {
+    if ((pose.throttle > 0.02f || pose.ab > 0.01f) && !jm.turbofan) {
         setAtmosphere(flameP_, f);
+        flameP_.setF("uHue", jm.plumeHue);
         flameP_.setF("uThrottle", pose.throttle);
         flameP_.setF("uAb", pose.ab);
         // speed and altitude shape the plume: thinner air -> longer, wider plume; high dynamic
@@ -1625,7 +1631,7 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
         BeginBlendMode(BLEND_ADDITIVE);
         for (int e = 0; e < jm.nozzleCount; ++e) {
             float pulse = 1.0f + 0.06f * std::sin(static_cast<float>(f.time) * 31.0f + e * 1.7f) * pose.ab;
-            float len = (1.2f + 1.5f * pose.throttle + 7.0f * pose.ab * (0.75f + 0.5f * (1.0f - rho))) * pulse * speedK;
+            float len = (1.2f + 1.5f * pose.throttle + 7.0f * pose.ab * (0.75f + 0.5f * (1.0f - rho))) * pulse * speedK * jm.plumeScale;
             float r = jm.nozzleRadius * (0.85f + 0.2f * pose.ab) * (1.0f + 0.25f * (1.0f - rho));
             Vector3 pv = jm.nozzlePivot[e], ex = jm.nozzles[e];
             Matrix vec = MatrixMultiply(MatrixMultiply(MatrixTranslate(-pv.x, -pv.y, -pv.z), MatrixRotateZ(na)), MatrixTranslate(pv.x, pv.y, pv.z));
@@ -1735,6 +1741,7 @@ void Renderer::drawJet(const Jet& j, const FrameParams& f, bool canopy, Vec3 ori
     }
     p.wheelSpin = spin.angle;
     p.compress = s.onGround ? 0.12f : 0.0f;
+    p.ramp = static_cast<float>(j.ramp);
     setAtmosphere(jet_, f);
     drawJetModel(j.fm->profile().style, M, pa, pb, camo, p, f, canopy);
 }

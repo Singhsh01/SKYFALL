@@ -36,6 +36,9 @@ std::array<AircraftProfile, static_cast<size_t>(AircraftId::Count)> baseProfiles
     make(AircraftId::MiG29,  "MiG-29",             "MIG-29",AirframeStyle::Fulcrum,         true, 11000, 3500, 38.0, 11.4, 17.4, 100, 163, 220, 30, 9.0, 70, 5.4, 23, 4),
     make(AircraftId::Su30,   "Su-30",              "SU-30", AirframeStyle::FlankerFamily,   true, 18400, 7800, 62.0, 14.7, 21.9, 149, 246, 200, 28, 9.0, 74, 6.0, 28, 6),
     make(AircraftId::F16,    "F-16 Fighting Falcon","F-16", AirframeStyle::ViperSingle,     true,   8600, 3200, 27.9, 10.0, 15.1,  76, 129, 240, 30, 9.0, 66, 4.0, 20, 4),
+    make(AircraftId::FA18,   "F/A-18E Super Hornet","F/A-18",AirframeStyle::Hornet,         true, 14550, 6780, 46.5, 13.6, 18.3, 116, 196, 200, 28, 7.6, 72, 5.2, 25, 6),
+    make(AircraftId::Typhoon,"Eurofighter Typhoon","TYPHOON",AirframeStyle::Typhoon,        true, 11000, 4996, 51.2, 10.95, 16.0,120, 180, 250, 33, 9.0, 68, 4.7, 22, 6),
+    make(AircraftId::C17,    "C-17 Globemaster III","C-17", AirframeStyle::Transport,       true,128100,30000,353.0, 51.7, 53.0, 720, 720,  40,  9, 2.5, 66,23.2,110, 0),
 }; }
 
 // Arcade top speeds and acceleration: each aircraft keeps its own character (the F-22 and Su-57
@@ -52,8 +55,34 @@ std::array<AircraftProfile, static_cast<size_t>(AircraftId::Count)> withArcade()
         {1.15, 2.10, 3.5},   // MiG-29
         {1.10, 1.90, 3.9},   // Su-30
         {1.15, 2.00, 3.4},   // F-16
+        {1.10, 1.65, 3.7},   // F/A-18E: draggy with its stores, the slowest fighter up high
+        {1.20, 2.00, 3.2},   // Typhoon: the quickest to accelerate
+        {0.62, 0.76, 14.0},  // C-17: subsonic transport, slow to accelerate
     };
+    static_assert(sizeof(arc) / sizeof(arc[0]) == static_cast<size_t>(AircraftId::Count));
     for (size_t i = 0; i < a.size(); ++i) { a[i].arcadeMachSL = arc[i].sl; a[i].arcadeMachHigh = arc[i].high; a[i].arcadeAccelS = arc[i].accel; }
+    // naval fighters
+    a[static_cast<size_t>(AircraftId::FA18)].carrierCapable = true;
+    a[static_cast<size_t>(AircraftId::FA18)].cannonRounds = 412;
+    a[static_cast<size_t>(AircraftId::Rafale)].carrierCapable = true;   // Rafale M
+    a[static_cast<size_t>(AircraftId::F35)].carrierCapable = true;      // F-35C
+    // the Super Hornet: excellent low-speed nose authority (high AoA), less top end
+    a[static_cast<size_t>(AircraftId::FA18)].alphaLimitRad = 32.0 * kDeg;
+    a[static_cast<size_t>(AircraftId::FA18)].clMax = 1.7;
+    // the Typhoon: unstable canard-delta, quick to roll and accelerate, slightly draggier when turning
+    a[static_cast<size_t>(AircraftId::Typhoon)].inducedK = 0.145;
+    a[static_cast<size_t>(AircraftId::Typhoon)].spoolTimeS = 1.4;
+    // C-17: four turbofans without afterburner, flaps / slats for a slow approach, heavy and stable
+    AircraftProfile& c = a[static_cast<size_t>(AircraftId::C17)];
+    c.role = AircraftRole::Transport;
+    c.afterburner = false;
+    c.cl0 = 0.32; c.clMax = 2.05; c.alphaStallRad = 16.0 * kDeg; c.alphaLimitRad = 13.0 * kDeg;
+    c.cd0 = 0.024; c.inducedK = 0.05; c.gearCd = 0.012; c.airbrakeCd = 0.03;
+    c.spoolTimeS = 4.5; c.tsfcMil = 0.06; c.tsfcAb = 0.06;
+    c.maxYawRate = 5.0 * kDeg; c.rateTau = 0.55;
+    c.approachSpeedMs = 70.0;
+    c.eyeY = 4.6;
+    c.cannonRounds = 0; c.flareCharges = 6;
     return a;
 }
 const std::array<AircraftProfile, static_cast<size_t>(AircraftId::Count)> kProfiles = withArcade();

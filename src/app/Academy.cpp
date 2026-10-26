@@ -122,9 +122,9 @@ void Game::drawAcademy() {
         y += oh + 4 * s;
     }
     {
-        int ac = settings_.aircraft;
+        int ac = combatAircraft(settings_.aircraft);
         std::vector<std::string> names;
-        for (const AircraftProfile& p : allProfiles()) names.push_back(p.name);
+        for (int a = 0; a < kFighterCount; ++a) names.push_back(allProfiles()[a].name);   // fighters only
         if (ui::cycle(nav_, kAc, {x, y, bw, oh}, "Aircraft", ac, names)) { settings_.aircraft = ac; settings_.save(settingsPath_); audio_.play(Sfx::Click, 0.5f); }
         y += oh + 4 * s;
     }
@@ -146,7 +146,7 @@ void Game::drawAcademy() {
     const LocationDef* ld = findLocation(loc);
     bool avail = locationAvailable(loc);
     std::string launchSub = !avail ? "Download " + (ld ? ld->name : loc) + " first (WORLD LOCATIONS)"
-                                   : std::string(allProfiles()[settings_.aircraft].name) + "  -  " + (ld ? ld->name : loc);
+                                   : std::string(allProfiles()[combatAircraft(settings_.aircraft)].name) + "  -  " + (ld ? ld->name : loc);
     if (ui::button(nav_, kLaunch, {x, y, bw * 0.62f, 50 * s}, "LAUNCH", launchSub, avail)) {
         audio_.play(Sfx::Click);
         startTraining(lv);
@@ -173,20 +173,20 @@ void Game::drawAcademy() {
     ty += 10 * s;
     ui::text("YOUR RECORD", r.x + 16 * s, ty, 12 * s, kAmber);
     ty += 18 * s;
-    AcademyRecord rec = academyRecord(settings_, lv, settings_.aircraft);
+    AcademyRecord rec = academyRecord(settings_, lv, combatAircraft(settings_.aircraft));
     char b[160];
-    if (rec.attempts == 0 && !rec.done) std::snprintf(b, sizeof b, "Not flown in the %s yet.", allProfiles()[settings_.aircraft].shortName);
-    else if (!rec.done) std::snprintf(b, sizeof b, "%s: %d attempt%s, not finished yet.", allProfiles()[settings_.aircraft].shortName, rec.attempts, rec.attempts == 1 ? "" : "s");
-    else std::snprintf(b, sizeof b, "%s: COMPLETED, best score %.0f, %d attempt%s, %s", allProfiles()[settings_.aircraft].shortName, rec.best, rec.attempts,
+    if (rec.attempts == 0 && !rec.done) std::snprintf(b, sizeof b, "Not flown in the %s yet.", allProfiles()[combatAircraft(settings_.aircraft)].shortName);
+    else if (!rec.done) std::snprintf(b, sizeof b, "%s: %d attempt%s, not finished yet.", allProfiles()[combatAircraft(settings_.aircraft)].shortName, rec.attempts, rec.attempts == 1 ? "" : "s");
+    else std::snprintf(b, sizeof b, "%s: COMPLETED, best score %.0f, %d attempt%s, %s", allProfiles()[combatAircraft(settings_.aircraft)].shortName, rec.best, rec.attempts,
                        rec.attempts == 1 ? "" : "s", mmss(rec.seconds).c_str());
     ui::text(b, r.x + 16 * s, ty, 14 * s, WHITE, Align::Left, false);
     ty += 22 * s;
     // completion per aircraft: two rows of four
-    for (int a = 0; a < static_cast<int>(AircraftId::Count); ++a) {
+    for (int a = 0; a < kFighterCount; ++a) {
         float colW2 = (r.width * 0.5f - 24 * s) / 4.0f;
         float mx = r.x + 16 * s + (a % 4) * colW2, my = ty + (a / 4) * 22 * s;
         AcademyRecord ra = academyRecord(settings_, lv, a);
-        ui::text(allProfiles()[a].shortName, mx, my, 12 * s, a == settings_.aircraft ? WHITE : kDim, Align::Left, false);
+        ui::text(allProfiles()[a].shortName, mx, my, 12 * s, a == combatAircraft(settings_.aircraft) ? WHITE : kDim, Align::Left, false);
         float bx = mx + ui::measure(allProfiles()[a].shortName, 12 * s, false) + 12 * s;
         if (ra.done) doneBadge(bx, my + 7 * s, 5 * s);
         else ui::text("-", bx, my, 12 * s, kDim, Align::Center, false);
@@ -285,7 +285,7 @@ void Game::startTraining(int level) {
     terrain_.setObstacles(course.obstacles);
     if (course.carrier || course.carrierStart) terrain_.setDeck(course.deck);
     else terrain_.clearDeck();
-    const int aircraft = settings_.aircraft;
+    const int aircraft = combatAircraft(settings_.aircraft);
     Jet& p = battle_.createPlayer(static_cast<AircraftId>(aircraft));
     battle_.setAiEnabled(true);
     p.fm->resetOnRunway(!course.coldStart);
@@ -420,7 +420,7 @@ void Game::updateTrainingFrame(double /*dt*/) {
     if (mission_ && mission_->status() == MissionStatus::Complete && !trainingDone_) {
         trainingDone_ = true;
         trainingResult_ = training_.finalScore();
-        trainingNewBest_ = recordAcademyResult(settings_, trainingLevel_, settings_.aircraft, trainingResult_);
+        trainingNewBest_ = recordAcademyResult(settings_, trainingLevel_, combatAircraft(settings_.aircraft), trainingResult_);
         settings_.save(settingsPath_);
         radioQueue_.clear();
         queueRadio(Speaker::Instructor, trainingCourseCompleteLine());

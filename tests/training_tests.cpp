@@ -899,7 +899,7 @@ TEST(steep_descent_physics) {
     if (!std::getenv("STEEP")) { std::printf("    (debug tool: set STEEP=... to run)\n"); return; }
     // Can each aircraft hold a steep glide at approach speed with idle, gear and airbrake?
     World& w = world("desert");
-    for (int a = 0; a < static_cast<int>(AircraftId::Count); ++a)
+    for (int a = 0; a < kFighterCount; ++a)
         for (int mode = 0; mode < 3; ++mode) {
             FlightModel fm(profile(static_cast<AircraftId>(a)), *w.terrain);
             fm.setHandling(static_cast<HandlingMode>(mode));
@@ -1069,7 +1069,7 @@ TEST(bot_flies_every_level_with_every_aircraft_in_every_mode) {
     for (int lv = lvA; lv <= lvB; ++lv) {
         std::string loc = kRecommended[lv];
         World& w = world(loc);
-        for (int a = 0; a < static_cast<int>(AircraftId::Count); ++a)
+        for (int a = 0; a < kFighterCount; ++a)
             for (int m = 0; m < 3; ++m) {
                 if (quick && m != 1) continue;
                 TrainingBot bot(w, lv, static_cast<AircraftId>(a), static_cast<HandlingMode>(m));

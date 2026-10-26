@@ -107,7 +107,7 @@ bool Settings::load(const std::string& path) {
             else if (k == "sensitivity") sensitivity = std::clamp(std::stod(v), 0.3, 2.0);
             else if (k == "deadzone") deadzone = std::clamp(std::stod(v), 0.0, 0.5);
             else if (k == "handling") handling = std::clamp(std::stoi(v), 0, 2);
-            else if (k == "aircraft") aircraft = std::clamp(std::stoi(v), 0, 7);
+            else if (k == "aircraft") aircraft = std::clamp(std::stoi(v), 0, kAircraftCount - 1);
             else if (k == "location") location = v;
             else if (k == "skins") { for (size_t i = 0; i < v.size() && i < skins.size(); ++i) skins[i] = ((v[i] >= '0' && v[i] <= '9') || (v[i] >= 'a' && v[i] <= 'z')) ? v[i] : '0'; }
             else if (k == "master") master = std::clamp(std::stod(v), 0.0, 1.0);

@@ -53,6 +53,7 @@ struct JetPose {
     float flaps = 0;                        // degrees down
     float wheelSpin = 0;                    // radians
     float compress = 0;                     // gear compression (m)
+    float ramp = 0;                         // cargo ramp 0..1 (transport)
     float mach = 0, altitude = 0;           // plume shape
     bool lights = false;                    // navigation / strobe / landing lights
     int id = 0;
@@ -167,7 +168,7 @@ private:
     const Terrain* terrain_ = nullptr;
     WorldMeshes world_;
     Effects effects_;
-    JetModel jets_[6];
+    JetModel jets_[kAirframeStyleCount];
     Mesh flame_{}, missile_{};
     Mesh tank_{}, truck_{}, aaa_{}, sam_{}, bunker_{}, radar_{};
     Mesh gun_{}, artillery_{}, oilRig_{}, fuelTank_{}, hangar_{}, command_{}, ship_{};

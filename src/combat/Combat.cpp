@@ -956,6 +956,12 @@ void Battle::updateJet(Jet& j, double dt, const ControlInputs* override, const P
         return;
     }
     j.hitFlash = std::max(0.0, j.hitFlash - dt);
+    if (j.fm && j.fm->profile().role == AircraftRole::Transport) {
+        // the cargo ramp opens once the transport stands parked on the ground (about 8 s)
+        const FlightState& fs = j.fm->state();
+        bool open = j.alive && fs.onGround && fs.airspeed < 1.5 && (fs.parkingBrake || !j.isPlayer);
+        j.ramp = std::clamp(j.ramp + (open ? dt : -dt) / 8.0, 0.0, 1.0);
+    }
     j.missileCooldown = std::max(0.0, j.missileCooldown - dt);
     // flare recharge (one charge per cooldown period)
     if (j.flareCharges < 3) {
