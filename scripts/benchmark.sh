@@ -30,6 +30,8 @@ REPORT="benchmarks/report-$STAMP.md"
   echo "| Scene | Preset | Scene resolution | mean ms | fps | p50 | p95 | p99 | draw calls | triangles | res % | detail drop |"
   echo "|---|---|---|---|---|---|---|---|---|---|---|---|"
 } > "$REPORT"
+echo "The game window will open and close once per run (16 runs + 2 profiled, about 12 minutes)."
+echo "That is expected: don't close it, click it or press keys in it until the report is written."
 for scene in ${SCENES:-arena c52 op03 op07}; do
   for q in 2 3 4 5; do
     log="$DIR/${scene}_q$q.txt"
@@ -46,10 +48,13 @@ for scene in ${SCENES:-arena c52 op03 op07}; do
     dd=$(echo "$disp" | sed -nE 's/.*detail drop ([0-9]+).*/\1/p')
     echo "| $scene | $qn | $r | $m | $f | $p50 | $p95 | $p99 | $dc | $tr | $rs | ${dd:-0} |" >> "$REPORT"
     echo "$scene $qn: $b"
+    if grep -q "incomplete" "$log"; then echo "   (window closed early: this row is incomplete - don't close or click the game windows during the run)"; fi
   done
 done
 # one profiled run for the per-pass breakdown (the profiler waits for the GPU after every pass,
 # so its frame times are longer than the timing runs above and are not used for them)
+echo "" >> "$REPORT"
+echo "Display of the runs: $(grep -hE '^display ' "$DIR"/*_q2.txt 2>/dev/null | head -1)" >> "$REPORT"
 for scene in c52 op03; do
   SKYFALL_FULL_DETAIL=1 SKYFALL_PROFILE=1 ./build/skyfall --bench "$DUR" --mode $scene --quality 3 --size 1280x720 --windowed > "$DIR/${scene}_q3_profile.txt" 2>&1 || true
   {

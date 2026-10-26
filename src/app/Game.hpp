@@ -201,6 +201,8 @@ private:
     bool corridorOn() const;
     CampaignDirector director_;
     // dynamic resolution: 3D scene scale chosen from measured frame times
+    /// Writes the settings file, except in capture / benchmark runs (they must not change the player's settings).
+    void saveSettings() { if (!capturing_) settings_.save(settingsPath_); }
     double dynScale_ = 1.0;          // = governor_.scale()
     FrameGovernor governor_;         // adaptive rendering: resolution, then scene detail
     double dynTimer_ = 0, dynAccum_ = 0;

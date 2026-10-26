@@ -1,5 +1,51 @@
 # Benchmarks
 
+## MacBook Air M1 (8 GB), build e30a1e5, 26 Oct 2026 — first real v1.x measurements
+
+`./scripts/benchmark.sh`, window 1280x720, VSync off, no cap, 20 s per run, dynamic resolution
+and the adaptive detail drop active as in play. The game reported a 1280x720 drawable for these
+runs (1x pixel density), so the window was probably on a non-Retina display; Cinematic 4K could
+not use more pixels than that, which is why it renders 1280x720 here. Only the rows below are
+valid: during the run keys were pressed in the game windows (the pause menu changed the preset in
+one arena run) and the remaining windows were closed early, so those rows were discarded. The
+benchmark now ignores input and marks a run whose window is closed as incomplete.
+
+| Scene | Preset | Scene resolution | mean ms | fps | p95 ms | p99 ms | draw calls |
+|---|---|---|---|---|---|---|---|
+| Dogfight Arena | High | 1728x972 (90 %) | 8.14 | 123 | 11.05 | 12.74 | 212 |
+| Dogfight Arena | Ultra | 1280x720 | 5.24 | 191 | 7.50 | 8.35 | 218 |
+| Dogfight Arena | Cinematic 4K | 1280x720 | 6.72 | 149 | 9.18 | 9.81 | 214 |
+| Mission 52 (carrier, rain) | High | 1280x720 | 5.53 | 181 | 9.05 | 9.60 | 126 |
+| Mission 52 | Ultra | 1280x720 | 7.02 | 142 | 9.46 | 9.90 | 190 |
+| Mission 52 | Cinematic 4K | 1280x720 | 6.74 | 148 | 9.13 | 9.76 | 173 |
+| Mission 52 | Performance 120 | 1280x720 | 6.68 | 150 | 9.22 | 9.69 | 172 |
+| Operation 3 (on the airfield) | High | 1280x720 | 6.07 | 165 | 8.88 | 9.58 | 231 |
+| Operation 3 | Ultra | 1280x720 | 5.95 | 168 | 8.74 | 9.41 | 230 |
+
+So at this window size the M1 Air runs every measured scene above 120 fps on average, with the
+95th-percentile frame under 9.5 ms except the arena in High (11 ms, while its dynamic resolution
+was still settling at 90 % of a larger High scene). The 99th percentile is under 10 ms in all but
+that row, i.e. occasional frames miss an 8.3 ms (120 Hz) deadline. **Not yet measured: the Retina
+display's native resolution, Cinematic 4K at real 4K pixels, operation 7.**
+
+Per-pass GPU time (profiled run, passes serialised with glFinish, so the sum is longer than a
+real frame), Ultra, full detail:
+
+| Pass | Mission 52 | Operation 3 |
+|---|---|---|
+| terrain + sea | 5.95 ms (59 draws) | 4.85 ms (96 draws) |
+| post (bloom, tone map, eye adaptation) | 5.58 ms | 4.22 ms |
+| scenery | 3.66 ms (81 draws) | 2.70 ms (82 draws) |
+| shadow map | 2.02 ms | 0.89 ms |
+| HUD | 1.55 ms | 1.83 ms |
+| rain | 1.53 ms | 0.46 ms |
+| clouds | 1.17 ms | 0.85 ms |
+| aircraft | 0.01 ms | 0.96 ms |
+| airbase life / parked jets / traffic | 1.10 ms | 1.82 ms |
+
+Terrain and post-processing are the two largest costs on the M1, as in the earlier 1440p
+profile; the next optimisation targets are the terrain fragment shader and the bloom chain.
+
 ## v1.1 rendering work (draw-call merging, eye adaptation, PBR props, adaptive detail)
 
 All figures from the cloud container (Mesa software rasteriser, `--bench 12 --size 640x360

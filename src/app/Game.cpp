@@ -128,7 +128,7 @@ int Game::run(const Options& opt) {
                  p.samples, p.mean, p.mean > 0 ? 1000.0 / p.mean : 0.0, p.p50, p.p95, p.p99, renderer_.width(), renderer_.height(),
                  GetScreenWidth(), GetScreenHeight(), static_cast<int>(settings_.quality));
     }
-    settings_.save(settingsPath_);
+    saveSettings();
     shutdown();
     return 0;
 }
@@ -221,7 +221,7 @@ void Game::updateBriefing(double dt) {
         int id = static_cast<int>(p.fm->profile().id);
         int sk = (settings_.skinFor(id) + (in.right ? 1 : kSkinCount - 1)) % kSkinCount;
         settings_.setSkin(id, sk);
-        settings_.save(settingsPath_);
+        saveSettings();
         p.skin = sk;
         audio_.play(Sfx::Click, 0.5f);
     }
@@ -495,7 +495,7 @@ bool Game::loadLocation(const std::string& id, bool showProgress) {
     battle_.setLayout(&layout_);
     replayStage_.setLayout(&layout_);
     settings_.location = id;
-    settings_.save(settingsPath_);
+    saveSettings();
     TraceLog(LOG_INFO, "SKYFALL: location %s loaded in %.0f ms (runway at %.0f m)", id.c_str(),
              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(), terrain_.runway().center.y);
     locStatus_.clear();
@@ -1185,7 +1185,7 @@ void Game::updatePlaying(double dt) {
         if (mission_->status() == MissionStatus::Complete && !missionDone_) {
             missionDone_ = true;
             markCampaignCompletedAt(settings_, terrain_.info().id, missionNo_);
-            settings_.save(settingsPath_);
+            saveSettings();
             if (campaignDef_) radio(Speaker::Awacs, campaignDef_->debrief, 9);
             else if (missionNo_ == 1) radio(Speaker::Tower, lines::kTowerDone1, 9);
             else if (missionNo_ == 2) radio(Speaker::Instructor, lines::kInstructorDone2, 8);
@@ -1843,7 +1843,7 @@ void Game::drawCampaign() {
         if (d != 0) {
             li = (li + d + static_cast<int>(L.size())) % static_cast<int>(L.size());
             setCampaignLocation(L[li].id);
-            settings_.save(settingsPath_);
+            saveSettings();
             locStatus_.clear();
             audio_.play(Sfx::Click, 0.5f);
         }
@@ -1854,7 +1854,7 @@ void Game::drawCampaign() {
         int d = ui::selector(nav_, kAc, {50 * s + selW + 8 * s, selY, selW, selH}, "AIRCRAFT", all[ac].name);
         if (d != 0) {
             settings_.aircraft = (ac + d + kFighterCount) % kFighterCount;
-            settings_.save(settingsPath_);
+            saveSettings();
             audio_.play(Sfx::Click, 0.5f);
         }
     }
@@ -1865,7 +1865,7 @@ void Game::drawCampaign() {
                                  std::to_string(sk + 1) + " / " + std::to_string(kSkinCount));
         if (d != 0) {
             settings_.setSkin(ac, (sk + d + kSkinCount) % kSkinCount);
-            settings_.save(settingsPath_);
+            saveSettings();
             audio_.play(Sfx::Click, 0.5f);
         }
     }
@@ -1907,7 +1907,7 @@ void Game::drawHangar() {
         sk = (sk + (in.right ? 1 : kSkinCount - 1)) % kSkinCount;
         settings_.setSkin(nav_.focus, sk);
         settings_.aircraft = nav_.focus;      // painting an aircraft also makes it the one you fly
-        settings_.save(settingsPath_);
+        saveSettings();
         if (!battle_.jets().empty()) battle_.player().skin = sk;
         audio_.play(Sfx::Click, 0.5f);
     }
@@ -1919,7 +1919,7 @@ void Game::drawHangar() {
                                  : (isFighter(i) ? "Press ENTER / click to select" : "Transport: Free Flight only");
         if (ui::button(nav_, i, {60 * s, y, 380 * s, 40 * s}, p.name, sub)) {
             settings_.aircraft = i;
-            settings_.save(settingsPath_);
+            saveSettings();
             audio_.play(Sfx::Click);
         }
         if (chosen) DrawRectangle(static_cast<int>(430 * s), static_cast<int>(y + 12 * s), static_cast<int>(8 * s), static_cast<int>(16 * s), Color{150, 255, 205, 255});
@@ -1965,7 +1965,7 @@ void Game::drawHangar() {
     if (ui::cycle(nav_, kCamo, {r.x, r.y + r.height + 14 * s, r.width, 44 * s}, "Camouflage", sk, names)) {
         settings_.setSkin(hangarSel_, sk);
         settings_.aircraft = hangarSel_;      // painting an aircraft also makes it the one you fly
-        settings_.save(settingsPath_);
+        saveSettings();
         if (!battle_.jets().empty()) battle_.player().skin = sk;
         audio_.play(Sfx::Click, 0.5f);
     }
@@ -2047,7 +2047,7 @@ void Game::drawSettings() {
         for (const LocationDef& l : locations()) if (l.id != "desert") { ++total; if (locationAvailable(l.id)) ++have; }
         std::string sub = std::to_string(have) + " of " + std::to_string(total) + " real-world maps downloaded" + (download_.busy() ? " - downloading..." : "");
         if (ui::button(nav_, 21, {x2, y2 + 10 * s, cw, rh + 4 * s}, have < total ? "DOWNLOAD WORLD MAPS" : "WORLD MAPS", sub)) {
-            settings_.save(settingsPath_);
+            saveSettings();
             locReturn_ = Screen::Settings;
             screen_ = Screen::Locations;
             nav_.focus = 0;
@@ -2055,7 +2055,7 @@ void Game::drawSettings() {
         }
     }
     if (ui::button(nav_, 18, {x2 + cw - 200 * s, h - 60 * s, 200 * s, 42 * s}, "BACK") || in.back) {
-        settings_.save(settingsPath_);
+        saveSettings();
         screen_ = settingsReturn_;
         nav_.focus = 0;
         if (screen_ == Screen::Paused) audio_.setPaused(true);
@@ -3408,10 +3408,16 @@ int Game::runBench() {
     double elapsed = 0;
     double sumCalls = 0, sumTris = 0;
     long counted = 0;
-    while (elapsed < opt_.benchSeconds && !WindowShouldClose()) {
+    bool closedEarly = false;
+    while (elapsed < opt_.benchSeconds) {
+        if (WindowShouldClose()) { closedEarly = true; break; }
         auto now = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double>(now - last).count();
         last = now;
+        // a benchmark is not playable: keys pressed in its window (Esc, the pause menu, the
+        // settings) must not pause the run or change the preset being measured
+        if (screen_ != Screen::Playing) screen_ = Screen::Playing;
+        if (opt_.quality >= 0) settings_.quality = static_cast<GraphicsQuality>(std::clamp(opt_.quality, 0, kQualityCount - 1));
         // gentle scripted turn so the view changes
         battle_.player().lastInput.roll = std::sin(elapsed * 0.3) * 0.4;
         frame(std::min(dt, 0.25));
@@ -3431,7 +3437,8 @@ int Game::runBench() {
     meanMax(benchHud_, hm, hx);
     std::printf("cpu: simulation mean %.3f ms max %.3f ms | hud mean %.3f ms max %.3f ms\n", sm, sx, hm, hx);
     if (renderer_.profiling()) std::printf("gpu passes (per frame, serialised):\n%s", renderer_.profReport().c_str());
-    std::printf("display %dx%d, resolution scale %d%%, detail drop %d\n", GetRenderWidth(), GetRenderHeight(), static_cast<int>(std::lround(dynScale_ * 100)), governor_.detailDrop());
+    std::printf("display %dx%d (%.0fx pixel density), resolution scale %d%%, detail drop %d\n", GetRenderWidth(), GetRenderHeight(),
+                static_cast<double>(GetRenderWidth()) / std::max(1, GetScreenWidth()), static_cast<int>(std::lround(dynScale_ * 100)), governor_.detailDrop());
     std::printf("scene %dx%d, quality %s, draw calls %.0f, triangles %.0fk (per-frame means)\n", renderer_.width(), renderer_.height(), qualityName(settings_.quality),
                 sumCalls / std::max(1L, counted), sumTris / std::max(1L, counted) / 1000.0);
     std::fflush(stdout);
@@ -3442,7 +3449,8 @@ int Game::runBench() {
     Percentiles p = FrameStats::computeFrom(stats_.all());
     std::printf("benchmark: %zu frames, mean %.2f ms (%.0f fps), p50 %.2f, p95 %.2f, p99 %.2f ms\n", p.samples, p.mean,
                 p.mean > 0 ? 1000.0 / p.mean : 0, p.p50, p.p95, p.p99);
-    return 0;
+    if (closedEarly) std::printf("benchmark: the window was closed after %.1f s - this run is incomplete\n", elapsed);
+    return closedEarly ? 2 : 0;
 }
 
 }  // namespace sky

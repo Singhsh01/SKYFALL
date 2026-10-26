@@ -125,19 +125,19 @@ void Game::drawAcademy() {
         int ac = combatAircraft(settings_.aircraft);
         std::vector<std::string> names;
         for (int a = 0; a < kFighterCount; ++a) names.push_back(allProfiles()[a].name);   // fighters only
-        if (ui::cycle(nav_, kAc, {x, y, bw, oh}, "Aircraft", ac, names)) { settings_.aircraft = ac; settings_.save(settingsPath_); audio_.play(Sfx::Click, 0.5f); }
+        if (ui::cycle(nav_, kAc, {x, y, bw, oh}, "Aircraft", ac, names)) { settings_.aircraft = ac; saveSettings(); audio_.play(Sfx::Click, 0.5f); }
         y += oh + 4 * s;
     }
     {
         int md = settings_.handling;
-        if (ui::cycle(nav_, kMode, {x, y, bw, oh}, "Handling", md, {"ARCADE", "ASSISTED", "SIMULATION"})) { settings_.handling = md; settings_.save(settingsPath_); audio_.play(Sfx::Click, 0.5f); }
+        if (ui::cycle(nav_, kMode, {x, y, bw, oh}, "Handling", md, {"ARCADE", "ASSISTED", "SIMULATION"})) { settings_.handling = md; saveSettings(); audio_.play(Sfx::Click, 0.5f); }
         y += oh + 4 * s;
     }
     {
         bool corr = corridorOn();
         if (ui::toggle(nav_, kCorr, {x, y, bw, oh}, "Corridor markers to the waypoints", corr)) {
             settings_.extra["academy_corridor"] = corr ? "1" : "0";
-            settings_.save(settingsPath_);
+            saveSettings();
             audio_.play(Sfx::Click, 0.5f);
         }
         y += oh + 8 * s;
@@ -318,7 +318,7 @@ void Game::startTraining(int level) {
     trainingDone_ = trainingNewBest_ = trainingCrashNoted_ = false;
     trainingResult_ = ScoreCard{};
     recordAcademyAttempt(settings_, level, aircraft);
-    settings_.save(settingsPath_);
+    saveSettings();
     missionDone_ = false;
     voicedStep_ = 0;
     radioStage_ = 99;
@@ -453,7 +453,7 @@ void Game::updateTrainingFrame(double /*dt*/) {
         trainingDone_ = true;
         trainingResult_ = training_.finalScore();
         trainingNewBest_ = recordAcademyResult(settings_, trainingLevel_, combatAircraft(settings_.aircraft), trainingResult_);
-        settings_.save(settingsPath_);
+        saveSettings();
         radioQueue_.clear();
         queueRadio(Speaker::Instructor, trainingCourseCompleteLine());
         queueRadio(Speaker::Instructor, trainingRemarkLine(trainingResult_.total));
