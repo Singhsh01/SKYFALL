@@ -569,7 +569,7 @@ struct TrainingBot {
     double fireHold = 0;
     bool extending = false;
     int stickyGround = 0;
-    ControlInputs fight(const FlightState& s, const Section& sec, FlightModel& fm, PlayerCommands& cmd) {
+    ControlInputs fight(const FlightState& s, const Section& sec, FlightModel& /*fm*/, PlayerCommands& cmd) {
         Jet& p = battle.player();
         const Engagement& e = course.engagements[static_cast<size_t>(sec.value)];
         std::vector<int> jets, ground;

@@ -460,7 +460,7 @@ void buildSceneProps(const Terrain& t, const WorldLayout& L, bool desertArmy, st
                 m.box({0, 5.0f, 20}, {30, 10, 18}, shade(wall, 0.95f), xf);
                 for (int f2 = 0; f2 < 4; ++f2)
                     for (float sd : {-11.05f, 11.05f})
-                        m.box({0, 2.6f + f2 * 4.2f, sd}, {42, 1.5f, 0.08f}, Color{250, 236, 196, (f2 + p.variant) % 3 ? 253 : 251}, xf);
+                        m.box({0, 2.6f + f2 * 4.2f, sd}, {42, 1.5f, 0.08f}, Color{250, 236, 196, static_cast<unsigned char>((f2 + p.variant) % 3 ? 253 : 251)}, xf);
                 m.box({0, 18.2f, 0}, {14, 0.3f, 14}, Color{60, 60, 60, 255}, xf);
                 m.box({0, 18.4f, 0}, {9, 0.06f, 1.6f}, kWhite, xf);
                 m.box({0, 18.4f, 0}, {1.6f, 0.06f, 9}, kWhite, xf);

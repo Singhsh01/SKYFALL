@@ -3401,6 +3401,9 @@ int Game::runBench() {
     camMode_ = CameraMode::Chase;
     renderer_.setProfiling(std::getenv("SKYFALL_PROFILE") != nullptr);
     stats_.keepAll(true);
+    // the first frames compile shaders, allocate the render targets and build terrain meshes; at
+    // native 4K they can take longer than the whole run, so the clock starts after them
+    for (int i = 0; i < 3 && !WindowShouldClose(); ++i) frame(1.0 / 60.0);
     auto last = std::chrono::steady_clock::now();
     double elapsed = 0;
     double sumCalls = 0, sumTris = 0;
