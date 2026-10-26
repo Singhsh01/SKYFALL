@@ -71,8 +71,8 @@ Vector3 g_paintC{0, 0, 0};   // third camouflage colour for the jet drawn next
 float g_paintRough = 0.42f;
 float g_paintMetal = 0.12f;
 Vector3 g_paintGlow{0, 0, 0};
-float g_noseNumbers = 0, g_serial = 0;   // markings for the jet drawn next
-Vector3 g_mark0{0, 0, 0};
+float g_noseNumbers = 0, g_serial = 0, g_roundel = 0;   // markings for the jet drawn next
+Vector3 g_mark0{0, 0, 0}, g_ring0{0, 0, 0}, g_ring1{0, 0, 0}, g_ring2{0, 0, 0};
 long g_tris = 0;   // triangles submitted this frame (benchmark statistics)
 long g_draws = 0;
   // mesh draw calls submitted this frame (exact: every mesh goes through drawMeshC)
@@ -87,7 +87,7 @@ Vector3 paintFor(Team team, int skinIdx, const AircraftProfile& prof, Vector3& b
     g_paintRough = 0.42f;
     g_paintMetal = 0.12f;
     g_paintGlow = {0, 0, 0};
-    g_noseNumbers = 0; g_mark0 = {0, 0, 0};
+    g_noseNumbers = 0; g_roundel = 0; g_mark0 = {0, 0, 0};
     if (skinIdx > 0) {
         const Skin& k = skin(skinIdx);
         b = k.b;
@@ -98,6 +98,8 @@ Vector3 paintFor(Team team, int skinIdx, const AircraftProfile& prof, Vector3& b
         g_paintGlow = k.glow;
         g_noseNumbers = k.noseNumbers ? 1.0f : 0.0f;
         g_mark0 = k.stencil;
+        g_roundel = k.roundel ? 1.0f : 0.0f;
+        g_ring0 = k.r0; g_ring1 = k.r1; g_ring2 = k.r2;
         return k.a;
     }
     AirframeStyle st = prof.style;
@@ -1852,8 +1854,12 @@ void Renderer::drawJetModel(AirframeStyle style, const Matrix& M, Vector3 paintA
     jet_.setF("uNoseNumbers", g_noseNumbers);
     jet_.setF("uSerial", g_serial);
     jet_.setV3("uMark0", g_mark0);
+    jet_.setF("uRoundel", g_roundel);
+    jet_.setV3("uRing0", g_ring0);
+    jet_.setV3("uRing1", g_ring1);
+    jet_.setV3("uRing2", g_ring2);
     jet_.setF("uMarkOn", lod < 2 ? 1.0f : 0.0f);
-    g_noseNumbers = 0; g_serial = 0; g_mark0 = {0, 0, 0};
+    g_noseNumbers = 0; g_serial = 0; g_roundel = 0; g_mark0 = {0, 0, 0};
     g_paintC = {0, 0, 0};
     g_paintRough = 0.42f;
     g_paintMetal = 0.12f;

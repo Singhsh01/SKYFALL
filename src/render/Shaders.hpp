@@ -550,6 +550,10 @@ uniform vec4 uWalk;         // root |z|, front x, rear x, outboard |z|
 uniform float uNoseNumbers; // 1: service schemes also carry a two-digit nose number
 uniform float uSerial;      // airframe number (0 = none)
 uniform vec3 uMark0;        // stencil colour (0 = automatic: dark on light paint, light on dark)
+uniform float uRoundel;     // 1: tricolour wing roundels and fin flash
+uniform vec3 uRing0;        // outer ring (fin flash: front)
+uniform vec3 uRing1;        // middle ring
+uniform vec3 uRing2;        // centre (fin flash: rear)
 uniform vec3 uPaintB;
 uniform vec3 uPaintC;
 uniform float uCamo;        // pattern: 0 two-tone, 1 splinter, 2 woodland, 3 digital, 4 stripes,
@@ -740,14 +744,26 @@ void main() {
                 paint = mix(paint, stencil, (1.0 - smoothstep(0.025, 0.045, e)) * 0.8);
             }
             if (dot(uMark0, uMark0) > 0.0) stencil = uMark0;
-            // fin: the airframe number at mid height
+            // tricolour roundels on the upper and lower surfaces of both wings
+            if (uRoundel > 0.5 && abs(on.y) > 0.45 && abs(vObj.y - uWingMark.y) < 0.9) {
+                float d = length(vec2(az - uWingMark.z, vObj.x - uWingMark.x)) / uWingMark.w;
+                if (d < 1.0) paint = d > 0.66 ? uRing0 : (d > 0.33 ? uRing1 : uRing2);
+            }
             float finH = vObj.y - uFinMark.y;
             float finZ = uFinMark.z + uFinTan * finH;
-            if (uSerial > 0.5 && abs(on.z) > 0.5 && abs(az - finZ) < 0.35 && vObj.x < uWingMark.x) {
+            if (abs(on.z) > 0.5 && abs(az - finZ) < 0.35 && vObj.x < uWingMark.x) {
                 float side = sign(on.z);
-                float hgt = uFinMark.w * 0.5;
-                vec2 np = vec2(side * (vObj.x - uFinMark.x) + 1.2 * hgt, finH + uFinMark.w * 1.25) / hgt - vec2(0.0, 1.6);
-                paint = mix(paint, stencil, number(np, uSerial, 3));
+                vec2 fq = vec2(vObj.x - uFinMark.x, finH) / uFinMark.w;
+                // fin flash: three vertical bands, the outer roundel colour leading
+                if (uRoundel > 0.5 && abs(fq.x) < 1.05 && abs(fq.y) < 0.62)
+                    paint = fq.x > 0.35 ? uRing0 : (fq.x > -0.35 ? uRing1 : uRing2);
+                // the airframe number: below the fin flash, or at mid height
+                if (uSerial > 0.5) {
+                    float hgt = uFinMark.w * 0.5;
+                    vec2 np = vec2(side * (vObj.x - uFinMark.x) + 1.2 * hgt, finH + uFinMark.w * 1.25) / hgt;
+                    if (uRoundel < 0.5) np.y -= 1.6;
+                    paint = mix(paint, stencil, number(np, uSerial, 3));
+                }
             }
             // nose number (service schemes): two digits on the forward fuselage sides
             if (uNoseNumbers > 0.5 && uSerial > 0.5 && abs(on.z) > 0.55 && abs(vObj.x - uNoseMark.x) < uNoseMark.z * 1.2) {

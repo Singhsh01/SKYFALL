@@ -12,7 +12,7 @@ Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ plann
 | C-17 escort, airlift, airdrop, resupply; convoy, rescue, airbase, fleet, troops defence | ✅ | asset loss fails the operation |
 | F/A-18E, Typhoon, C-17 | ✅ | C-17 in Free Flight |
 | Living airbases, more military and urban props | ✅ | |
-| Air-force-inspired and environment / demo paint schemes, stencils | ✅ | 16 new, 40 total; national insignia and flags removed |
+| Air-force-inspired and environment / demo paint schemes, stencils | ✅ | 16 new, 40 total; national markings only on the Indian-inspired scheme |
 | Smarter AI (strike, hunting helicopters, break-off, squadron tactics) | ✅ | |
 | Existing modes kept (campaign, arena, free flight) | ✅ | tests unchanged and passing |
 | Bot flies every operation / fighter / mode | ✅ | 578 / 600 (17 lost fights, 5 other) |

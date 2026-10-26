@@ -10,8 +10,8 @@ enum class CamoPattern { TwoTone = 0, Splinter = 1, Woodland = 2, Digital = 3, S
                          CounterShade = 5, Shard = 6, Demo = 7, Metal = 8, Carbon = 9,
                          Armor = 10, Circuit = 11, HexVector = 12 };
 
-// Markings are stencils only (fin and nose numbers, wing walkways), drawn in the jet shader: no
-// national insignia, roundels or flags.
+// Markings are drawn in the jet shader: fin and nose numbers and wing walkways on every scheme;
+// one scheme (Indian air-force-inspired) also wears a tricolour roundel and fin flash.
 struct Skin {
     const char* name;
     Vector3 a, b, c;      // base, second and third colour
@@ -21,6 +21,8 @@ struct Skin {
     Vector3 glow{0, 0, 0};          // emissive accent colour (linear, HDR) for circuit / seam patterns
     bool noseNumbers = false;       // service schemes: a two-digit number on the nose as well
     Vector3 stencil{0, 0, 0};       // stencil colour (0 = automatic contrast)
+    bool roundel = false;           // tricolour wing roundels and a matching fin flash
+    Vector3 r0{0, 0, 0}, r1{0, 0, 0}, r2{0, 0, 0};   // outer ring / middle ring / centre (fin flash: front to rear)
 };
 
 constexpr int kSkinCount = 40;
@@ -61,7 +63,8 @@ inline const Skin& skin(int i) {
         {"RAF AIR DEFENCE", {0.24f, 0.25f, 0.265f}, {0.31f, 0.32f, 0.33f}, {0.0f, 0.0f, 0.0f}, CamoPattern::TwoTone, 0.42f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
         {"LUFTWAFFE GREY", {0.21f, 0.22f, 0.235f}, {0.12f, 0.13f, 0.14f}, {0.30f, 0.31f, 0.32f}, CamoPattern::Splinter, 0.45f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
         {"FRENCH AIR BLUE", {0.17f, 0.20f, 0.25f}, {0.10f, 0.12f, 0.16f}, {0.27f, 0.30f, 0.34f}, CamoPattern::CounterShade, 0.38f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
-        {"INDIAN AIR SPLINTER", {0.26f, 0.29f, 0.33f}, {0.13f, 0.15f, 0.19f}, {0.38f, 0.40f, 0.43f}, CamoPattern::Splinter, 0.45f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
+        {"INDIAN AIR SPLINTER", {0.26f, 0.29f, 0.33f}, {0.13f, 0.15f, 0.19f}, {0.38f, 0.40f, 0.43f}, CamoPattern::Splinter, 0.45f, 0.12f, {0, 0, 0}, true, {0, 0, 0},
+         true, {0.85f, 0.32f, 0.03f}, {0.78f, 0.78f, 0.78f}, {0.03f, 0.25f, 0.05f}},
         {"BRAZILIAN JUNGLE", {0.10f, 0.13f, 0.07f}, {0.27f, 0.21f, 0.12f}, {0.05f, 0.06f, 0.04f}, CamoPattern::Woodland, 0.55f, 0.12f, {0, 0, 0}, true, {0, 0, 0}},
         // environment schemes
         {"DIGITAL DESERT", {0.42f, 0.34f, 0.22f}, {0.27f, 0.20f, 0.12f}, {0.55f, 0.47f, 0.34f}, CamoPattern::Digital, 0.55f, 0.12f, {0, 0, 0}, false, {0.08f, 0.07f, 0.05f}},
