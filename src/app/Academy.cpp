@@ -135,7 +135,7 @@ void Game::drawAcademy() {
     }
     {
         bool corr = corridorOn();
-        if (ui::toggle(nav_, kCorr, {x, y, bw, oh}, "Corridor markers between the gates", corr)) {
+        if (ui::toggle(nav_, kCorr, {x, y, bw, oh}, "Corridor markers to the waypoints", corr)) {
             settings_.extra["academy_corridor"] = corr ? "1" : "0";
             settings_.save(settingsPath_);
             audio_.play(Sfx::Click, 0.5f);
@@ -159,7 +159,7 @@ void Game::drawAcademy() {
     Rectangle r = {px, 72 * s, pw, h - 112 * s};
     ui::panel(r, Color{0, 0, 0, 150}, Color{150, 255, 205, 50});
     float ty = r.y + 12 * s;
-    ui::text("LEVEL " + std::to_string(lv), r.x + 16 * s, ty, 13 * s, kAmber);
+    ui::text("OPERATION " + std::to_string(lv), r.x + 16 * s, ty, 13 * s, kAmber);
     std::string stars;
     for (int i = 0; i < 5; ++i) stars += i < L.difficulty ? '*' : '.';
     ui::text("DIFFICULTY " + stars, r.x + r.width - 16 * s, ty, 13 * s, kAmber, Align::Right);
@@ -169,6 +169,10 @@ void Game::drawAcademy() {
     for (const std::string& l : wrap(L.summary, 15 * s, r.width * 0.5f - 24 * s)) { ui::text(l, r.x + 16 * s, ty, 15 * s, Color{225, 232, 232, 235}, Align::Left, false); ty += 20 * s; }
     ty += 6 * s;
     for (const std::string& sk : L.skills) { ui::text("-  " + sk, r.x + 16 * s, ty, 14 * s, kDim, Align::Left, false); ty += 19 * s; }
+    if (L.recommendedAircraft >= 0) {
+        ui::text(std::string("Best flown in the ") + allProfiles()[L.recommendedAircraft].name, r.x + 16 * s, ty, 14 * s, Color{120, 210, 255, 240}, Align::Left, false);
+        ty += 19 * s;
+    }
     // previous scores
     ty += 10 * s;
     ui::text("YOUR RECORD", r.x + 16 * s, ty, 12 * s, kAmber);
@@ -195,7 +199,7 @@ void Game::drawAcademy() {
     // route preview (needs the location loaded)
     float mapS = std::min(r.width * 0.5f - 20 * s, r.height - 70 * s);
     Rectangle mr = {r.x + r.width - mapS - 16 * s, r.y + 74 * s, mapS, mapS};
-    ui::text("ROUTE PREVIEW", mr.x, mr.y - 18 * s, 12 * s, kAmber);
+    ui::text("OPERATION AREA", mr.x, mr.y - 18 * s, 12 * s, kAmber);
     bool here = terrain_.info().id == loc;
     if (here) {
         if (previewLevel_ != lv || previewLoc_ != loc) {
@@ -233,13 +237,27 @@ void Game::drawAcademy() {
                 if (b0 < sec.gateEnd) { DrawLineEx(P(prev), P(c.gates[b0].pos), 1.0f * s, Color{255, 255, 255, 110}); prev = c.gates[sec.gateEnd - 1].pos; }
             }
             for (const Obstacle& o : c.obstacles) DrawCircleV(P(o.pos), 2.4f * s, Color{255, 255, 255, 230});
+            // protected assets: the C-17's path, the convoy's road, the rescue route, the base / fleet / troops
+            const Color assetCol = {120, 200, 255, 255};
+            for (const Asset& a : c.assets) {
+                for (size_t k = 1; k < a.path.size(); ++k) DrawLineEx(P(a.path[k - 1]), P(a.path[k]), 1.6f * s, ui::withAlpha(assetCol, 0.85f));
+                Vec3 at = a.path.empty() ? a.area : (a.kind == AssetKind::Transport ? a.path.front() : a.path.front());
+                if (a.kind == AssetKind::Base || a.kind == AssetKind::Fleet || a.kind == AssetKind::Troops) DrawCircleLinesV(P(a.area), 6.0f * s, assetCol);
+                ui::text(a.kind == AssetKind::Transport ? "C-17" : a.name, P(at).x + 7 * s, P(at).y + 3 * s, 10 * s, assetCol);
+                if (a.dropS > 0) { DrawCircleV(P(a.area), 3.5f * s, assetCol); ui::text("DROP", P(a.area).x + 6 * s, P(a.area).y - 6 * s, 10 * s, assetCol); }
+            }
             if (c.tanker) DrawCircleLinesV(P(c.tankerCenter), static_cast<float>(c.tankerRadius / (2 * map)) * mr.width, Color{255, 225, 120, 200});
             for (const Vec3& p : c.formationRoute) DrawCircleV(P(p), 1.5f * s, Color{200, 200, 255, 220});
             DrawCircleV(P(c.startPos), 4.5f * s, WHITE);
             ui::text("START", P(c.startPos).x + 7 * s, P(c.startPos).y - 6 * s, 10 * s, WHITE);
             if (c.carrier) { DrawCircleV(P(c.landAim), 4.5f * s, kAmber); ui::text("CARRIER", P(c.landAim).x + 7 * s, P(c.landAim).y - 6 * s, 10 * s, kAmber); }
             char est[96];
-            std::snprintf(est, sizeof est, "ABOUT %.0f MIN   %zu GATES   %zu OBSTACLES", c.estimatedSeconds / 60.0, c.gates.size(), c.obstacles.size());
+            int waves = 0, wps = 0;
+            for (const Section& sec : c.sections) {
+                if (sec.kind == SectionKind::Engage) ++waves;
+                if (sec.kind == SectionKind::Route) wps += sec.gateEnd - sec.gateBegin;
+            }
+            std::snprintf(est, sizeof est, "ABOUT %d MIN   %d WAVES   %d WAYPOINTS%s", L.minutes, waves, wps, c.wingmen.empty() ? "" : (c.wingmen.size() > 1 ? "   2 WINGMEN" : "   WINGMAN"));
             ui::text(est, mr.x, mr.y + mr.height + 8 * s, 12 * s, WHITE, Align::Left, false);
         }
     } else {
@@ -360,6 +378,20 @@ void Game::buildGateMarkers() {
     const int end = sec.gateEnd;
     for (int i = gi; i < std::min(end, gi + 4); ++i) {
         const Gate& gt = c.gates[i];
+        if (gt.cue == GateCue::Glide) continue;   // the approach is flown on the HUD's glide path, no rings
+        if (gt.waypoint) {
+            if (i > gi + 1) continue;
+            GateMarker m;
+            m.pos = gt.pos;
+            m.dir = gt.dir;
+            m.beacon = true;
+            m.ground = gt.ground;
+            m.radius = static_cast<float>(gt.radius);
+            m.color = i == gi ? Color{150, 255, 205, 255} : Color{70, 120, 100, 255};
+            m.glow = i == gi ? 1.4f : 0.5f;
+            gateMarkers_.push_back(m);
+            continue;
+        }
         GateMarker m;
         m.pos = gt.pos;
         m.dir = gt.dir;

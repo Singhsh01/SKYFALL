@@ -1671,7 +1671,7 @@ void Game::renderFrame() {
             hc.trainingDone = trainingDone_;
             hc.trainingResult = &trainingResult_;
             hc.trainingNewBest = trainingNewBest_;
-            hc.trainingTitle = "LEVEL " + std::to_string(trainingLevel_) + "  " + trainingLevel(trainingLevel_).title;
+            hc.trainingTitle = "OPERATION " + std::to_string(trainingLevel_) + "  " + trainingLevel(trainingLevel_).title;
             for (char& ch : hc.trainingTitle) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
             hc.trainingNext = "ENTER  BACK TO THE ACADEMY      R  FLY IT AGAIN";
             hc.campaign = nullptr;
@@ -2539,16 +2539,49 @@ int Game::runCapture() {
         }
         // the carrier levels refuse a location without sea
         acLocation_ = "matterhorn";
-        expect(academyLocationFor(20) == "musandam" && academyLocationFor(19) == "rio", "the carrier levels keep a sea location");
+        expect(academyLocationFor(20) == "musandam" && academyLocationFor(13) == "musandam" && academyLocationFor(5) == "rio", "the carrier operations keep a sea location");
+        // operations: the C-17 of the escort, the base of the airbase defence, the wingman
+        {
+            acLocation_ = "desert";
+            startTraining(7);
+            run(5);
+            const Course& c7 = training_.course();
+            size_t esc = c7.sections.size();
+            for (size_t k = 0; k < c7.sections.size(); ++k) if (c7.sections[k].kind == SectionKind::Escort) { esc = k; break; }
+            expect(esc < c7.sections.size() && !c7.assets.empty() && c7.assets[0].kind == AssetKind::Transport, "operation 7 escorts a C-17");
+            if (esc < c7.sections.size()) {
+                // the jet is airborne for the escort (as after the takeoff)
+                battle_.player().fm->resetAirborne(battle_.player().fm->state().pos + Vec3{0, 900, 0}, 0.0, 220.0, 0.8);
+                mission_->skipTo(esc);
+                run(30);
+                TrainingSession::AssetStatus st = training_.assetStatus(0, battle_);
+                const Jet* c17 = battle_.jetById(st.jet);
+                expect(st.active && c17 && c17->alive && c17->kinematic && c17->fm->profile().id == AircraftId::C17 && c17->callsign == "REACH 21",
+                       "REACH 21 is flying its path");
+                expect(!training_.wingmenIds().empty() && battle_.jetById(training_.wingmenIds()[0]) && battle_.jetById(training_.wingmenIds()[0])->team == Team::Blue,
+                       "the wingman joined after the takeoff");
+                double p0 = st.progress;
+                run(120);
+                expect(training_.assetStatus(0, battle_).progress > p0, "the C-17 moves along its path");
+            }
+            startTraining(3);
+            run(5);
+            battle_.player().fm->resetAirborne(battle_.player().fm->state().pos + Vec3{0, 900, 0}, 0.0, 220.0, 0.8);
+            mission_->skipTo(static_cast<size_t>(std::max(0, training_.course().assets.empty() ? 0 : training_.course().assets[0].beginSection)));
+            run(10);
+            int blue = 0;
+            for (const GroundTarget& g : battle_.ground()) if (g.alive && g.team == Team::Blue) ++blue;
+            expect(blue >= 8 && training_.assetCount() == 1, "operation 3 has the airbase installations to defend");
+        }
         // a combat level: the engagement spawns its targets when its section begins
         if (locationAvailable("geiranger")) {
             acLocation_ = "geiranger";
-            startTraining(5);
+            startTraining(2);
             run(5);
             const Course& c5 = training_.course();
             size_t eng = c5.sections.size();
             for (size_t k = 0; k < c5.sections.size(); ++k) if (c5.sections[k].kind == SectionKind::Engage) { eng = k; break; }
-            expect(eng < c5.sections.size(), "level 5 has a combat section");
+            expect(eng < c5.sections.size(), "operation 2 has a combat section");
             if (eng < c5.sections.size()) {
                 size_t before = battle_.ground().size();
                 mission_->skipTo(eng);
@@ -2561,6 +2594,130 @@ int Game::runCapture() {
         startTitle();
         std::printf("flow: %d failures\n", fails);
         return fails == 0 ? 0 : 1;
+    }
+    if (set == "ops") {
+        // Academy operations: the menu, the C-17 escort (join, attack, landing roll and unloading),
+        // the airdrop, a waypoint, the airbase under attack
+        hideHud_ = false;
+        const char* locEnv = std::getenv("SKYFALL_LOC");
+        std::string loc = locEnv ? locEnv : "desert";
+        loadLocation(loc, false);
+        acLocation_ = loc;
+        openAcademy(); acLevel_ = 7; nav_.focus = 6;
+        snap("ops_00_menu", 2);
+        auto follow = [&](int jetId, Vec3 off) {
+            const Jet* j = battle_.jetById(jetId);
+            if (!j) return;
+            const FlightState& t = j->fm->state();
+            FlightState& ps = battle_.player().fm->mutableState();
+            Vec3 f = normalize(Vec3{t.vel.x, 0, t.vel.z});
+            if (length(f) < 0.5) f = {1, 0, 0};
+            Vec3 r{-f.z, 0, f.x};
+            ps.pos = t.pos + f * off.x + Vec3{0, off.y, 0} + r * off.z;
+            ps.vel = t.vel;
+            ps.q = Quat::fromEuler(std::atan2(f.z, f.x), 0, 0);
+            ps.onGround = false;
+            ps.gearDown = false; ps.gearPos = 0;
+        };
+        auto skipToKind = [&](SectionKind k, int nth) {
+            const Course& c = training_.course();
+            int seen = 0;
+            for (size_t i = 0; i < c.sections.size(); ++i)
+                if (c.sections[i].kind == k && seen++ == nth) { mission_->skipTo(i); return static_cast<int>(i); }
+            return -1;
+        };
+        // 1. C-17 escort: join, first attack, landing roll + unloading
+        startTraining(7);
+        battle_.player().fm->resetAirborne(battle_.player().fm->state().pos + Vec3{0, 1500, 0}, 0.0, 200.0, 0.8);
+        skipToKind(SectionKind::Escort, 0);
+        scriptedStep(1.0, [&](double) {});
+        int c17 = training_.assetStatus(0, battle_).jet;
+        scriptedStep(25.0, [&](double) { follow(c17, {-160, 25, 70}); });
+        camMode_ = CameraMode::Chase; chaseInit_ = false;
+        snap("ops_10_escort_join", 4);
+        camMode_ = CameraMode::External; orbitYaw_ = 2.4; orbitPitch_ = 0.12; zoom_ = 1.0;
+        snap("ops_11_escort_external", 3);
+        skipToKind(SectionKind::Engage, 0);
+        scriptedStep(4.0, [&](double) { follow(c17, {-160, 25, 70}); updateRadioQueue(); });
+        camMode_ = CameraMode::Chase; chaseInit_ = false;
+        snap("ops_12_wave_inbound", 3);
+        // fast forward along the path to the landing (the wave is cleared)
+        {
+            std::vector<int> js, gs;
+            training_.engagementTargets(js, gs);
+            for (int id : js) battle_.debugKillJet(id);
+        }
+        int land = skipToKind(SectionKind::Escort, 2);
+        (void)land;
+        for (int k = 0; k < 40 && training_.assetStatus(0, battle_).progress < 0.93; ++k)
+            scriptedStep(6.0, [&](double) { follow(c17, {-400, 300, 300}); }, false);
+        scriptedStep(4.0, [&](double) { follow(c17, {-300, 160, 260}); });
+        camMode_ = CameraMode::Chase; chaseInit_ = false;
+        snap("ops_13_c17_final", 3);
+        for (int k = 0; k < 20 && !training_.assetStatus(0, battle_).done; ++k)
+            scriptedStep(3.0, [&](double) { follow(c17, {-500, 220, 300}); }, false);
+        {
+            const Jet* j = battle_.jetById(c17);
+            if (j) {
+                camMode_ = CameraMode::External;
+                // look at the C-17 on the runway from the player's position, ramp down, pallets out
+                // from behind and above the open ramp, looking up the runway at the C-17
+                FlightState& ps = battle_.player().fm->mutableState();
+                const FlightState& t = j->fm->state();
+                Vec3 f = t.q.forward();
+                f = normalize(Vec3{f.x, 0, f.z});
+                ps.pos = t.pos - f * 190.0 + Vec3{0, 38, 0} + Vec3{-f.z, 0, f.x} * 25.0;
+                ps.q = Quat::fromEuler(std::atan2(f.z, f.x), -6.0 * kDeg, 0);
+                ps.vel = f * 1.0;
+                camMode_ = CameraMode::Chase; chaseInit_ = false;
+                scriptedStep(0.05, [&](double) {});
+                std::printf("ops capture: C-17 ramp %.2f, done %d\n", j->ramp, training_.assetStatus(0, battle_).done);
+                snap("ops_14_c17_unloading", 3);
+            }
+        }
+        // 2. airdrop
+        startTraining(11);
+        battle_.player().fm->resetAirborne(battle_.player().fm->state().pos + Vec3{0, 1500, 0}, 0.0, 200.0, 0.8);
+        skipToKind(SectionKind::Escort, 0);
+        scriptedStep(1.0, [&](double) {});
+        {
+            int jet = training_.assetStatus(0, battle_).jet;
+            const Asset& a = training_.course().assets[0];
+            double L = 0;
+            for (size_t k = 1; k < a.path.size(); ++k) L += length(a.path[k] - a.path[k - 1]);
+            for (int k = 0; k < 80 && training_.assetStatus(0, battle_).progress * L < a.dropS + 250.0; ++k)
+                scriptedStep(4.0, [&](double) { follow(jet, {-500, 250, 300}); }, false);
+            scriptedStep(5.0, [&](double) { follow(jet, {-180, -40, 160}); });
+            int pallets = 0;
+            for (const GroundTarget& g : battle_.ground()) if (g.kind == GroundKind::Cargo && g.alive) ++pallets;
+            std::printf("ops capture: airdrop progress %.0f / drop at %.0f, %d pallets\n", training_.assetStatus(0, battle_).progress * L, a.dropS, pallets);
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            snap("ops_20_airdrop", 3);
+        }
+        // 3. a waypoint, then the airbase under attack
+        startTraining(3);
+        battle_.player().fm->resetAirborne(battle_.player().fm->state().pos + Vec3{0, 1200, 0}, 0.0, 220.0, 0.8);
+        skipToKind(SectionKind::Engage, 0);
+        scriptedStep(40.0, [&](double) { setInput(0, 0, 0, 0); updateRadioQueue(); });
+        camMode_ = CameraMode::Chase; chaseInit_ = false;
+        snap("ops_30_airbase_attack", 3);
+        startTraining(8);
+        {
+            int rt = -1;
+            const Course& c = training_.course();
+            for (size_t i = 0; i < c.sections.size(); ++i) if (c.sections[i].kind == SectionKind::Route && c.sections[i].gateEnd > c.sections[i].gateBegin) { rt = static_cast<int>(i); break; }
+            if (rt >= 0) {
+                const Gate& g = c.gates[static_cast<size_t>(c.sections[static_cast<size_t>(rt)].gateBegin)];
+                Vec3 d = normalize(Vec3{g.dir.x, 0, g.dir.z});
+                battle_.player().fm->resetAirborne(g.pos - d * 3500.0 + Vec3{0, 150, 0}, std::atan2(d.z, d.x), 220.0, 0.8);
+                mission_->skipTo(static_cast<size_t>(rt));
+                scriptedStep(1.0, [&](double) { setInput(0, 0, 0, 0); });
+                camMode_ = CameraMode::Chase; chaseInit_ = false;
+                snap("ops_40_waypoint", 3);
+            }
+        }
+        startTitle();
+        return 0;
     }
     if (set == "academy") {
         // menus: title, academy (route preview), the campaign screen

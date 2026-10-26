@@ -65,6 +65,8 @@ struct GateMarker {
     float radius = 100;
     Color color = {120, 255, 190, 255};
     float glow = 1.0f;       // emissive strength
+    bool beacon = false;     // a tactical waypoint: a light column from the ground, not a ring
+    double ground = 0;       // beacon: surface height under it
 };
 
 struct FrameParams {
@@ -173,7 +175,7 @@ private:
     Mesh tank_{}, truck_{}, aaa_{}, sam_{}, bunker_{}, radar_{};
     Mesh gun_{}, artillery_{}, oilRig_{}, fuelTank_{}, hangar_{}, command_{}, ship_{};
     Mesh powerPlant_{}, refinery_{}, bridgeDeck_{}, bridgePier_{}, commTower_{}, factory_{}, locomotive_{}, wagon_{},
-         launcher_{}, ammo_{}, substation_{}, tanker_{}, drogue_{}, carrier_{}, heli_{}, heliAttack_{}, heliRotor_{};
+         launcher_{}, ammo_{}, substation_{}, tanker_{}, drogue_{}, carrier_{}, heli_{}, heliAttack_{}, heliRotor_{}, cargo_{}, chute_{};
     void buildCarrier();
     void drawObstacles(const FrameParams& f);
     void drawGates(const FrameParams& f);

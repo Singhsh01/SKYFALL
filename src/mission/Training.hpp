@@ -39,6 +39,7 @@ struct Gate {
     double ground = 0;           // surface height under the gate
     GateCue cue = GateCue::None; // what the instructor announces for it
     int section = 0;
+    bool waypoint = false;       // a tactical waypoint (reached within `radius`, any height), not a ring
 };
 
 enum class SectionKind {
@@ -48,7 +49,30 @@ enum class SectionKind {
     Formation, Rendezvous, Refuel,
     Landing,                     // runway: approach gates, touchdown, stop (go-around pattern on a miss)
     CarrierLanding,              // approach gates, trap (bolter pattern)
-    Engage                       // combat: destroy the section's targets (or survive), see Engagement
+    Engage,                      // combat: destroy the section's targets (or survive), see Engagement
+    Escort                       // stay with a protected asset until it reaches Section::value metres
+                                 // along its path (< 0: the end, landed / delivered / home)
+};
+
+/// What an operation protects. Losing more than `lossLimit` of it fails the operation.
+enum class AssetKind { None, Transport, Convoy, Rescue, Base, Fleet, Troops };
+struct Asset {
+    AssetKind kind = AssetKind::None;
+    std::string name;                      // radio callsign ("REACH 21", "CONVOY", ...)
+    std::vector<Vec3> path;                // transport: flight path (y = altitude MSL, runway points on the ground);
+                                           // convoy: road; rescue: helicopter route out (flown back after the pick-up)
+    double speed = 150;                    // m/s cruise / convoy / helicopter speed
+    int count = 1;                         // vehicles, helicopters or installations
+    int lossLimit = 0;
+    Vec3 area;                             // base / fleet / troops / rescue pick-up
+    double radius = 400;                   // spread of the installations / units
+    bool takesOff = false;                 // transport: starts rolling on the runway
+    bool landsAtEnd = false;               // transport: lands, stops and unloads at the end of its path
+    double liftoffS = 0, touchdownS = 0;   // path distances of the liftoff / touchdown points
+    double dropS = -1;                     // airdrop at this path distance (-1: none)
+    double holdSeconds = 0;                // rescue: time on the pick-up
+    int beginSection = 0;                  // spawned when this section begins
+    std::vector<int> unitKinds;            // GroundKind per unit (convoy / base / fleet / troops)
 };
 
 /// Weapons the player may use in an engagement.
@@ -73,6 +97,11 @@ struct Engagement {
     double surviveSeconds = 0;             // > 0: defensive exercise, survive this long
     int continueFrom = -1;                 // >= 0: fight the survivors of that engagement (no new spawns)
     bool fromBase = false;                 // bandits launch in formation from an enemy base and fly at you
+    bool split = false;                    // two groups from different directions (a coordinated attack)
+    int attackAsset = -1;                  // the attackers go for this asset (escort / defence)
+    int strikeJets = 0;                    // the first N jets are strike aircraft (air-to-surface on our ground units)
+    bool helisHunt = false;                // attack helicopters close on our ground units / transport
+    double spawnDist = 7500;               // bandits appear this far out
 };
 
 enum class RouteStyle { Navigation, Valley, LowLevel, Precision, HighSpeed, Obstacles, Transit, Approach };
@@ -88,6 +117,7 @@ struct Section {
     double ceilingAgl = 0;                // hard ceiling of low-level sections (scored), 0 = none
     double value = 0, value2 = 0;         // task parameters (bank, g, height change, seconds...)
     double estSeconds = 0;                // estimated duration
+    int asset = -1;                       // Escort: the asset to stay with
 };
 
 struct Prop { GroundKind kind; Vec3 pos; double heading; std::string label; };
@@ -124,6 +154,9 @@ struct Course {
     std::string error;                     // non-empty if the course could not be built
     double minRequiredTurnRadius = 0;      // tightest turn the route asks for (validation)
     std::vector<Engagement> engagements;   // Engage sections (Section::value = index)
+    std::vector<Asset> assets;             // protected assets of the operation
+    std::vector<int> wingmen;              // AircraftId of each allied wingman (join after takeoff)
+    int tactics = 1;                       // enemy tactics level (Battle tactics, 0..3)
 };
 
 /// Glide-path height above the touchdown aim point at a distance `d` before it (two segments).
@@ -138,6 +171,8 @@ struct TrainingLevelDef {
     bool needsSea = false;                 // carrier landing
     std::vector<std::string> briefing;     // radio briefing parts (static text)
     std::vector<std::string> skills;       // shown in the menu
+    int recommendedAircraft = -1;          // suggested aircraft (the player may fly any fighter)
+    int minutes = 15;                      // typical duration
 };
 const std::vector<TrainingLevelDef>& trainingLevels();
 const TrainingLevelDef& trainingLevel(int number);
@@ -172,7 +207,8 @@ struct RadioCall {
     int priority = 1;          // 0 chatter, 1 normal, 2 urgent (interrupts)
 };
 
-enum class TrainingEventKind { GateHit, GateMissed, SectionDone, Trap, Bolter, Touchdown, GoAround, RefuelContact, Crash, TargetDestroyed };
+enum class TrainingEventKind { GateHit, GateMissed, SectionDone, Trap, Bolter, Touchdown, GoAround, RefuelContact, Crash, TargetDestroyed,
+                               AssetLost, AssetDelivered, WaveInbound };
 struct TrainingEvent { TrainingEventKind kind; int index = 0; double value = 0; };
 
 class TrainingSession {
@@ -212,6 +248,19 @@ public:
     double surviveRemaining() const;
     /// Jet ids and ground indices of the running engagement (empty outside one).
     void engagementTargets(std::vector<int>& jets, std::vector<int>& ground) const;
+    // ---- protected assets ----
+    struct AssetStatus {
+        bool active = false, done = false;
+        int alive = 0, total = 0, lost = 0, lossLimit = 0;
+        double progress = 0;               // 0..1 along the path
+        Vec3 pos;                          // where it is (HUD marker)
+        int jet = -1;                      // transport jet id
+        std::vector<int> ground;           // ground indices of its units
+    };
+    AssetStatus assetStatus(int i, const Battle& battle) const;
+    int assetCount() const { return static_cast<int>(course_.assets.size()); }
+    const std::string& failureReason() const { return failure_; }
+    const std::vector<int>& wingmenIds() const { return wingmenIds_; }
     std::vector<RadioCall> drainRadio();
     std::vector<TrainingEvent> drainEvents();
 
@@ -229,6 +278,11 @@ private:
     void beginEngagement(const Section& s, const MissionContext& ctx, Battle& battle);
     void updateEngagement(const Section& s, const MissionContext& ctx, Battle& battle, double dt);
     void endEngagement(Battle& battle, bool removeSurvivors);
+    void spawnAsset(int i, Battle& battle, double startS);
+    void updateAssets(const MissionContext& ctx, Battle& battle, double dt);
+    void driveTransport(int i, Battle& battle, double dt);
+    void spawnWingmen(const MissionContext& ctx, Battle& battle);
+    double transportSpeedAt(const Asset& a, double s) const;
     void instructor(const MissionContext& ctx, const Battle& battle, double dt);
     void say(Speaker who, const std::string& text, int priority, const std::string& key, double cooldown);
     void sayVariant(Speaker who, const std::vector<std::string>& variants, int priority, const std::string& key, double cooldown);
@@ -274,6 +328,25 @@ private:
     double unstableHold_ = 0;
     double flightTime_ = 0;
     bool refuelRequired_ = false, refuelDone_ = false;
+    // protected assets
+    struct AssetRun {
+        bool spawned = false, done = false, unloading = false, dropped = false;
+        double s = 0, v = 0;               // path distance and speed (transport)
+        double timer = 0;                  // unloading / pick-up
+        double prevHeading = 0, bank = 0;
+        int jet = -1;
+        std::vector<int> ground;           // units
+        std::vector<int> cargo;            // dropped / unloaded pallets
+        int lost = 0;
+        bool hitCalled = false;
+        double lastHealth = 100;
+    };
+    std::vector<AssetRun> assetRun_;
+    struct AssetCheckpoint { bool spawned = false, done = false; double s = 0, v = 0; std::vector<char> alive; std::vector<double> unitS; int lost = 0; };
+    std::vector<AssetCheckpoint> assetCp_;
+    std::string failure_;
+    std::vector<int> wingmenIds_;
+    bool wingmenSpawned_ = false;
     // combat
     struct Spawned { std::vector<int> jets, ground, friendly; };
     std::vector<Spawned> spawned_;          // per engagement
@@ -327,6 +400,10 @@ private:
 
 /// Every line the training instructor can say (for the voice pack and its test).
 std::vector<VoiceLine> trainingVoiceLines();
+/// The operation radio (wingmen, AWACS picture, transport / convoy / rescue / base calls).
+std::vector<VoiceLine> trainingOpsLines();
+/// AWACS picture call for a wave appearing at `to` seen from `from` (8 compass sectors).
+std::string pictureCall(Vec3 from, Vec3 to, bool helicopters);
 /// Debrief calls (instructor): end of the course, then a remark on the score (no medals).
 const char* trainingCourseCompleteLine();
 const char* trainingRemarkLine(double total);

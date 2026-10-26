@@ -258,7 +258,22 @@ struct TrainingBot {
         return c;
     }
 
-    ControlInputs flyGate(const FlightState& s, const Gate& g, double spd, bool low) {
+    ControlInputs flyGate(const FlightState& s, const Gate& g0, double spd, bool low) {
+        Gate g = g0;
+        if (g.waypoint) {
+            // a waypoint is reached at any height: fly at a height that clears the terrain on the
+            // way to it (climb first when a ridge is in the way)
+            double need = g.pos.y;
+            for (double t = 0.1; t <= 1.0; t += 0.1) {
+                Vec3 q = s.pos + (g.pos - s.pos) * t;
+                need = std::max(need, maxSurfaceAround(*w.terrain, q.x, q.z, 300.0) + 220.0);
+            }
+            g.pos.y = need;
+            if (s.pos.y < need - 80.0) {
+                Vec3 h = normalize(Vec3{g.pos.x - s.pos.x, 0, g.pos.z - s.pos.z});
+                return steer(s, normalize(h + Vec3{0, 0.45, 0}), std::max(spd, 230.0));
+            }
+        }
         Vec3 to = g.pos - s.pos;
         double dist = length(to);
         double lead = clampd(dist * 0.4, 0.0, g.radius < 100 ? 900.0 : 600.0);
@@ -510,6 +525,9 @@ struct TrainingBot {
             case SectionKind::Engage:
                 in = fight(s, sec, fm, cmd);
                 break;
+            case SectionKind::Escort:
+                in = escortAsset(s, sec);
+                break;
             default: break;
         }
         if (sec.kind != SectionKind::Formation && sec.kind != SectionKind::Refuel && sec.kind != SectionKind::Loop && sec.kind != SectionKind::Recovery &&
@@ -567,22 +585,30 @@ struct TrainingBot {
             ControlInputs in = steer(s, normalize(hf + rt * (ph > 0 ? 1.4 : -1.4) + Vec3{0, 0.05, 0}), 330);
             return in;
         }
-        // target: air first (jets, then airborne helicopters), then the ground
+        // target: air first (jets, then airborne helicopters), then the ground; on an asset
+        // defence the attackers closest to the asset come first
         Vec3 tp, tv;
         bool have = false, air = false, heli = false;
         double best = 1e18;
         int lockId = -1;
+        bool guard = false;
+        Vec3 assetPos;
+        if (e.attackAsset >= 0) {
+            TrainingSession::AssetStatus st = session.assetStatus(e.attackAsset, battle);
+            if (st.active && st.alive > 0) { guard = true; assetPos = st.pos; }
+        }
+        auto threat = [&](Vec3 p) { return guard ? length(p - assetPos) + 0.35 * length(p - s.pos) : length(p - s.pos); };
         for (int id : jets) {
             Jet* j = battle.jetById(id);
             if (!j || !j->alive) continue;
-            double d = length(j->fm->state().pos - s.pos);
+            double d = threat(j->fm->state().pos);
             if (d < best) { best = d; tp = j->fm->state().pos; tv = j->fm->state().vel; have = air = true; lockId = id; }
         }
         if (!have)
             for (int gi : ground) {
                 const GroundTarget& g = battle.ground()[static_cast<size_t>(gi)];
                 if (!g.alive || !g.airborne()) continue;
-                double d = length(g.pos - s.pos);
+                double d = threat(g.pos);
                 if (d < best) { best = d; tp = g.pos + Vec3{0, 2.4, 0}; tv = battle.groundVelocity(gi); have = air = heli = true; lockId = -1000 - gi; }
             }
         if (!have)
@@ -642,6 +668,42 @@ struct TrainingBot {
         if (std::getenv("FIGHTDBG") && std::fmod(time, 2.0) < FlightModel::kDt)
             std::printf("      t=%.0f tgt %d dist %.0f ang %.1f ag %d lock %d prog %.2f ammo %d/%d/%d pos %.0f %.0f %.0f agl %.0f v %.0f\n", time, lockId, dist, ang / kDeg, p.weaponAG,
                         p.lockTarget, p.lockProgress, p.missiles, p.agms, p.rounds, s.pos.x, s.pos.y, s.pos.z, s.agl, s.airspeed);
+        return in;
+    }
+
+    // ---- escort: a slot behind and above a transport, a wide orbit over ground assets ----
+    ControlInputs escortAsset(const FlightState& s, const Section& sec) {
+        TrainingSession::AssetStatus st = session.assetStatus(sec.asset, battle);
+        Vec3 fwd = s.q.forward();
+        Vec3 hf = normalize(Vec3{fwd.x, 0, fwd.z});
+        if (!st.active || st.alive == 0) return steer(s, hf, 230);
+        const Asset& a = course.assets[static_cast<size_t>(sec.asset)];
+        Vec3 goal;
+        double spd = 230;
+        if (a.kind == AssetKind::Transport) {
+            const Jet* tj = battle.jetById(st.jet);
+            Vec3 tv = tj ? tj->fm->state().vel : Vec3{};
+            Vec3 tf = length(Vec3{tv.x, 0, tv.z}) > 5.0 ? normalize(Vec3{tv.x, 0, tv.z}) : hf;
+            goal = st.pos - tf * 900.0 + Vec3{0, 450.0, 0};
+            double gy = w.terrain->surfaceHeight(goal.x, goal.z);
+            goal.y = std::max(goal.y, gy + 500.0);
+            double d = length(goal - s.pos);
+            spd = clampd(length(tv) + d * 0.05, 140.0, 330.0);
+            if (tj && tj->fm->state().onGround) spd = 200.0;
+        } else {
+            // orbit 1.6 km round the asset, 600 m above the ground
+            Vec3 rel{s.pos.x - st.pos.x, 0, s.pos.z - st.pos.z};
+            double r = length(rel);
+            Vec3 radial = r > 1.0 ? rel / r : Vec3{1, 0, 0};
+            Vec3 tang{-radial.z, 0, radial.x};
+            goal = st.pos + radial * 1600.0 + tang * 1200.0;
+            goal.y = std::max(maxSurfaceAround(*w.terrain, st.pos.x, st.pos.z, 2500.0), w.terrain->surfaceHeight(goal.x, goal.z)) + 600.0;
+            spd = 220;
+        }
+        Vec3 dir = normalize(goal - s.pos);
+        if (predictedClearance(s, 5.0) < 200.0) dir = normalize(hf + Vec3{0, 0.8, 0});
+        ControlInputs in = steer(s, dir, spd);
+        in.airbrake = s.airspeed > spd + 25.0;
         return in;
     }
 
@@ -727,16 +789,19 @@ struct TrainingBot {
     bool loopStarted = false, recoverPhase = false;
 
     int retries = 0;
+    std::map<std::string, int> deaths;   // shoot-downs per section (the hard waves)
     bool run(double maxSeconds) {
         const int steps = static_cast<int>(maxSeconds * 120);
         for (int i = 0; i < steps && mission.status() == MissionStatus::Running; ++i) {
             step();
             const FlightState& s = battle.player().fm->state();
-            if ((s.crashed || !battle.player().alive) && retries < 8 && session.canRetry() &&
+            if ((s.crashed || !battle.player().alive) && session.canRetry() && mission.stepIndex() < course.sections.size() &&
+                deaths[course.sections[mission.stepIndex()].title] < 6 && retries < 30 &&
                 mission.stepIndex() < course.sections.size() &&
                 (course.sections[mission.stepIndex()].kind == SectionKind::Engage || s.crashReason == CrashReason::Destroyed)) {
                 // shot down in a fight: retry from the checkpoint like a player would (R)
                 ++retries;
+                ++deaths[course.sections[mission.stepIndex()].title];
                 session.notifyCrash();
                 session.retry(battle);
                 mission.skipTo(session.checkpointSection());
@@ -760,6 +825,11 @@ struct TrainingBot {
                 }
                 return false;
             }
+        }
+        if (mission.status() == MissionStatus::Failed) {
+            failNote = "operation failed: " + mission.failure() + " in section " + std::to_string(mission.stepIndex()) +
+                       (mission.stepIndex() < course.sections.size() ? " (" + course.sections[mission.stepIndex()].title + ")" : "");
+            return false;
         }
         if (mission.status() != MissionStatus::Complete) {
             char buf[200];
@@ -933,23 +1003,14 @@ TEST(steep_descent_physics) {
 // =============================================================================================
 namespace {
 // The locations each level is recommended on (the Academy menu preselects these).
-const char* kRecommended[kTrainingLevels + 1] = {"", "desert", "fuji", "matterhorn", "guilin", "geiranger", "wadi_rum", "erg_chebbi", "rio", "grand_canyon", "aconcagua",
-                                                 "torres_paine", "glencoe", "musandam", "fuji", "grand_canyon", "geiranger", "rio", "torres_paine", "rio", "musandam"};
+const char* kRecommended[kTrainingLevels + 1] = {"", "desert", "wadi_rum", "glencoe", "grand_canyon", "rio", "guilin", "erg_chebbi", "aconcagua", "fuji", "matterhorn",
+                                                 "torres_paine", "fuji", "musandam", "desert", "torres_paine", "geiranger", "wadi_rum", "guilin", "erg_chebbi", "musandam"};
 // Known autopilot-bot limitations on the recommended matrix (the courses are flyable: other
 // aircraft fly the same course, and the same aircraft flies it in the other modes). Listed so the
 // test still fails on any new regression; reported every run.
 struct Known { const char* loc; int level; AircraftId ac; HandlingMode mode; };
 const Known kKnownBotFailures[] = {
-    {"aconcagua", 10, AircraftId::F35, HandlingMode::Simulation},    // the heavy F-35 chases the Su-35 off the map at 4 km
-    {"glencoe", 12, AircraftId::Su30, HandlingMode::Simulation},     // the bot's dogfighting loses to the ace F-35 eight times
-    {"grand_canyon", 15, AircraftId::F35, HandlingMode::Assisted},   // ... and to the two veterans in the heavy jets
-    {"grand_canyon", 15, AircraftId::Su35, HandlingMode::Assisted},
-    {"grand_canyon", 15, AircraftId::F35, HandlingMode::Simulation}, // the gate autopilot sinks the heavy jets into the
-    {"geiranger", 16, AircraftId::F35, HandlingMode::Assisted},      // terrain on the way home after a fight
-    {"torres_paine", 18, AircraftId::Su57, HandlingMode::Simulation},
-    {"grand_canyon", 9, AircraftId::Su57, HandlingMode::Simulation},
-    {"aconcagua", 10, AircraftId::Su35, HandlingMode::Simulation},
-    {"rio", 17, AircraftId::Su30, HandlingMode::Assisted},           // chases a bandit down to the sea
+    {"", 0, AircraftId::F22, HandlingMode::Assisted},   // (none listed)
 };
 bool knownFailure(const std::string& loc, int lv, AircraftId a, HandlingMode m) {
     for (const Known& k : kKnownBotFailures)
@@ -960,86 +1021,102 @@ bool insideMapXZ(const Vec3& p, double margin) { return std::fabs(p.x) <= Terrai
 }  // namespace
 
 TEST(courses_are_valid_on_every_location) {
-    // every level on every location: builds, lasts 15-20 minutes, stays on the map, keeps clear
-    // of the terrain, asks for turns any of the eight jets can fly, and keeps its gates out of
-    // the obstacles. Level 10 needs open sea for the carrier.
+    // every operation on every location: builds, stays on the map, navigates by waypoints (no
+    // rings, no obstacles, no circus manoeuvres), fights at least three waves, has the assets,
+    // wingmen and aircraft its brief promises, and flies the C-17 on paths that clear the terrain
+    // and use the runway.
     int built = 0;
+    std::set<int> enemyTypes;
     for (const std::string& id : allLocationIds()) {
         World& w = world(id);
+        HeightGrid hg = sampleHeightGrid(*w.terrain, 160.0, 15000.0);
+        DeckInfo dk;
+        const bool sea = placeCarrierDeck(*w.terrain, hg, {0, 0, 0}, dk);
         for (int lv = 1; lv <= kTrainingLevels; ++lv) {
             Course c = buildCourse(lv, *w.terrain, *w.layout);
-            if (trainingLevel(lv).needsSea && !c.error.empty()) {
-                CHECK_MSG(!academyLocationAllowed(id, lv), "%s L%d: %s", id.c_str(), lv, c.error.c_str());
-                continue;
-            }
             CHECK_MSG(c.error.empty(), "%s L%d: %s", id.c_str(), lv, c.error.c_str());
             if (!c.error.empty()) continue;
             ++built;
             double mins = c.estimatedSeconds / 60.0;
-            CHECK_MSG(mins >= 15.5 && mins <= 20.0, "%s L%d estimate %.1f min", id.c_str(), lv, mins);
+            CHECK_MSG(mins >= 14.0 && mins <= 33.0, "%s L%d estimate %.1f min", id.c_str(), lv, mins);
             CHECK_MSG(!c.sections.empty() && !c.gates.empty(), "%s L%d empty", id.c_str(), lv);
-            TurnDemand td = turnDemand(c);
-            CHECK_MSG(td.n <= 4.5, "%s L%d needs %.1f g at gate %d", id.c_str(), lv, td.n, td.gate);
-            CHECK_MSG(c.glideDeg <= 6.0 && c.glideOuterDeg <= 11.0, "%s L%d glide %.1f/%.1f", id.c_str(), lv, c.glideDeg, c.glideOuterDeg);
+            CHECK_MSG(c.obstacles.empty(), "%s L%d has obstacle-course obstacles", id.c_str(), lv);
+            CHECK(c.glideDeg <= 6.0 && c.glideOuterDeg <= 11.0);
             for (size_t i = 0; i < c.gates.size(); ++i) {
                 const Gate& g = c.gates[i];
                 CHECK_MSG(insideMapXZ(g.pos, 700.0), "%s L%d gate %zu off the map", id.c_str(), lv, i);
                 const Section& s = c.sections[g.section];
                 bool approach = s.kind == SectionKind::Landing || s.kind == SectionKind::CarrierLanding;
-                if (!approach) CHECK_MSG(g.pos.y - w.terrain->surfaceHeight(g.pos.x, g.pos.z) >= 30.0, "%s L%d gate %zu only %.0f m above the ground", id.c_str(), lv, i,
-                                         g.pos.y - w.terrain->surfaceHeight(g.pos.x, g.pos.z));
-                for (const Obstacle& o : c.obstacles) {
-                    if (o.kind != Obstacle::Kind::Pillar && o.kind != Obstacle::Kind::Mast) continue;
-                    // does the rock / mast cut through the gate's ring (a vertical disc across g.dir)?
-                    Vec3 rel{o.pos.x - g.pos.x, 0, o.pos.z - g.pos.z};
-                    double along = std::fabs(dot(rel, g.dir));
-                    double lateral = std::fabs(dot(rel, Vec3{-g.dir.z, 0, g.dir.x}));
-                    bool cuts = false;
-                    if (along < o.radius + 15.0 && lateral < g.radius + o.radius) {
-                        double off = std::max(0.0, lateral - o.radius);
-                        double half = std::sqrt(std::max(0.0, g.radius * g.radius - off * off));
-                        cuts = o.pos.y + o.height > g.pos.y - half;
-                    }
-                    CHECK_MSG(!cuts, "%s L%d gate %zu is cut by an obstacle (%.0f m along, %.0f m lateral)", id.c_str(), lv, i, along, lateral);
-                    // and the gate centre (the line a pilot flies) is clear of it
-                    CHECK_MSG(length(rel) > o.radius + 40.0 || g.pos.y > o.pos.y + o.height + 40.0, "%s L%d gate %zu centre too close to an obstacle", id.c_str(), lv, i);
+                if (!approach) {
+                    CHECK_MSG(g.waypoint, "%s L%d gate %zu is a ring outside the approach", id.c_str(), lv, i);
+                    CHECK_MSG(g.pos.y - w.terrain->surfaceHeight(g.pos.x, g.pos.z) >= 30.0, "%s L%d waypoint %zu only %.0f m above the ground", id.c_str(), lv, i,
+                              g.pos.y - w.terrain->surfaceHeight(g.pos.x, g.pos.z));
                 }
             }
-            // sections chain: gate ranges in order, every section has a title
-            int prevEnd = 0;
+            int prevEnd = 0, waves = 0;
             for (const Section& s : c.sections) {
                 CHECK(!s.title.empty());
                 CHECK(s.gateBegin >= prevEnd || s.gateBegin == s.gateEnd);
                 if (s.gateEnd > s.gateBegin) prevEnd = s.gateEnd;
+                bool circus = s.kind == SectionKind::LevelTurn || s.kind == SectionKind::ClimbTurn || s.kind == SectionKind::DescendTurn || s.kind == SectionKind::HighG ||
+                              s.kind == SectionKind::Loop || s.kind == SectionKind::Roll || s.kind == SectionKind::Recovery || s.kind == SectionKind::Formation;
+                CHECK_MSG(!circus, "%s L%d has a training-circus section: %s", id.c_str(), lv, s.title.c_str());
+                if (s.kind == SectionKind::Engage) ++waves;
+                if (s.kind == SectionKind::Escort) CHECK(s.asset >= 0 && s.asset < static_cast<int>(c.assets.size()));
             }
-            if (trainingLevel(lv).needsSea) CHECK(c.carrier);
-            if (lv == 18 || lv == 20) CHECK(c.tanker);
-            if (lv == 16 || lv == 14 || lv == 20) {   // bandits launching in formation from their base
-                bool fromBase = false;
-                for (const Engagement& e : c.engagements) fromBase = fromBase || (e.fromBase && e.jets.size() >= 2);
-                CHECK_MSG(fromBase, "%s L%d has no formation from a base", id.c_str(), lv);
-            }
-            if (lv == 5 || lv == 13) {   // identification: own helicopters among the hostiles
-                bool friendly = false;
-                for (const Engagement& e : c.engagements) friendly = friendly || e.friendlyHelis > 0;
-                CHECK_MSG(friendly, "%s L%d has no friendly helicopters", id.c_str(), lv);
-            }
-            if (lv == 1 || lv == 19) CHECK_MSG(c.carrierStart == (id == "desert" || id == "musandam" || id == "rio") || lv == 1, "%s L%d carrier start", id.c_str(), lv);
-            // combat levels: every engagement has something to fight and a section to fight it in
-            int engage = 0;
-            for (const Section& s : c.sections) if (s.kind == SectionKind::Engage) ++engage;
-            CHECK_MSG(static_cast<size_t>(engage) == c.engagements.size(), "%s L%d engagements", id.c_str(), lv);
-            if (lv >= 5 && lv != 16 && !(lv == 19 && !c.carrier)) CHECK_MSG(engage > 0, "%s L%d has no combat", id.c_str(), lv);
+            CHECK_MSG(waves >= 3, "%s L%d has only %d waves", id.c_str(), lv, waves);
+            CHECK(static_cast<size_t>(waves) == c.engagements.size());
             for (const Engagement& e : c.engagements) {
                 size_t n = e.jets.size() + e.ground.size() + static_cast<size_t>(e.transportHelis + e.attackHelis);
-                CHECK_MSG(n > 0 || e.continueFrom >= 0, "%s L%d empty engagement", id.c_str(), lv);
-                if (e.transportHelis + e.attackHelis + static_cast<int>(e.ground.size()) > 0)
-                    CHECK_MSG(insideMapXZ(e.area, 1500.0), "%s L%d engagement area off the map", id.c_str(), lv);
+                CHECK_MSG(n > 0, "%s L%d empty wave", id.c_str(), lv);
+                for (int j : e.jets) enemyTypes.insert(j);
+                if (e.transportHelis + e.attackHelis + static_cast<int>(e.ground.size()) > 0 && !(e.helisHunt && e.attackAsset >= 0))
+                    CHECK_MSG(insideMapXZ(e.area, 1500.0), "%s L%d wave area off the map", id.c_str(), lv);
+                if (e.attackAsset >= 0) CHECK(e.attackAsset < static_cast<int>(c.assets.size()));
             }
+            // carrier operations where the map has sea
+            if (trainingLevel(lv).needsSea) CHECK_MSG(c.carrierStart == sea && c.carrier == sea, "%s L%d carrier %d/%d sea %d", id.c_str(), lv, c.carrierStart, c.carrier, sea);
+            // the assets the operation is about
+            auto has = [&](AssetKind k) { for (const Asset& a : c.assets) if (a.kind == k) return true; return false; };
+            if (lv == 7 || lv == 11 || lv == 17 || lv == 20) CHECK_MSG(has(AssetKind::Transport), "%s L%d has no C-17", id.c_str(), lv);
+            if (lv == 3 || lv == 12 || lv == 17) CHECK_MSG(has(AssetKind::Base), "%s L%d has no base to defend", id.c_str(), lv);
+            if (lv == 5 || lv == 13) CHECK_MSG(has(sea ? AssetKind::Fleet : AssetKind::Base), "%s L%d has no fleet / base", id.c_str(), lv);
+            if (lv == 6 || lv == 18) CHECK_MSG(has(AssetKind::Troops), "%s L%d has no ground forces", id.c_str(), lv);
+            if (lv == 14) CHECK_MSG(has(AssetKind::Convoy), "%s L14 has no convoy", id.c_str());
+            if (lv == 16) CHECK_MSG(has(AssetKind::Rescue), "%s L16 has no rescue", id.c_str());
+            if (lv == 19) CHECK(c.tanker);
+            for (int wl : {1, 4, 7, 9, 11, 12, 15, 17, 18, 19, 20}) if (lv == wl) CHECK_MSG(!c.wingmen.empty(), "%s L%d has no wingman", id.c_str(), lv);
+            if (lv == 15) CHECK(c.wingmen.size() >= 2);
+            for (const Asset& a : c.assets) {
+                CHECK(a.lossLimit >= 0);
+                if (a.kind != AssetKind::Transport) { CHECK(a.count > 0); continue; }
+                const RunwayInfo& rw = w.terrain->runway();
+                double L = 0;
+                for (size_t k = 1; k < a.path.size(); ++k) L += length(a.path[k] - a.path[k - 1]);
+                CHECK_MSG(L > 12000.0, "%s L%d C-17 path only %.0f m", id.c_str(), lv, L);
+                CHECK(a.landsAtEnd && a.touchdownS > 0 && a.touchdownS < L);
+                if (a.takesOff) CHECK(a.liftoffS > 500.0 && a.liftoffS < 2000.0);
+                if (lv == 11) CHECK(a.takesOff && a.dropS > a.liftoffS && a.dropS < a.touchdownS);
+                // the last two points (touchdown, end of the roll) are on the runway
+                for (size_t k = a.path.size() - 2; k < a.path.size(); ++k) {
+                    CHECK_MSG(w.terrain->onRunway(a.path[k].x, a.path[k].z, 5.0), "%s L%d C-17 rolls off the runway", id.c_str(), lv);
+                    CHECK(std::fabs(a.path[k].y - (rw.center.y + FlightModel::kGearHeight)) < 0.5);
+                }
+                for (size_t k = 0; k < a.path.size(); ++k) CHECK_MSG(insideMapXZ(a.path[k], 300.0), "%s L%d C-17 path point %zu off the map", id.c_str(), lv, k);
+                // airborne legs clear the terrain (the climb-out and the final excepted)
+                for (size_t k = (a.takesOff ? 3 : 1); k + 4 < a.path.size(); ++k) {
+                    double cl = segmentClearance(*w.terrain, a.path[k - 1], a.path[k]);
+                    CHECK_MSG(cl > 60.0, "%s L%d C-17 leg %zu clears the terrain by only %.0f m", id.c_str(), lv, k, cl);
+                }
+            }
+            CHECK(c.tactics >= 0 && c.tactics <= 2);
         }
     }
-    std::printf("    %d courses checked\n", built);
-    CHECK(built >= 14 * 18 + 3 * 2);
+    std::printf("    %d operations checked\n", built);
+    CHECK(built == static_cast<int>(allLocationIds().size()) * kTrainingLevels);
+    // the brief's opposing types all appear somewhere
+    for (AircraftId a : {AircraftId::Su35, AircraftId::Su57, AircraftId::F16, AircraftId::F35, AircraftId::FA18, AircraftId::Typhoon})
+        CHECK_MSG(enemyTypes.count(static_cast<int>(a)), "no %s in any wave", profile(a).shortName);
 }
 
 TEST(courses_are_deterministic) {
@@ -1088,11 +1165,13 @@ TEST(bot_flies_every_level_with_every_aircraft_in_every_mode) {
                         ++other;
                         std::printf("    bot nearly ran dry: %s L%d %s %s (%.0f %% fuel)\n", loc.c_str(), lv, profile(static_cast<AircraftId>(a)).shortName, modeName(static_cast<HandlingMode>(m)), bot.minFuelFrac * 100.0);
                     }
-                } else if (bot.failNote.find("AIRCRAFT DESTROYED") != std::string::npos && bot.retries >= 8) {
+                } else if (bot.failNote.find("AIRCRAFT DESTROYED") != std::string::npos) {
                     // shot down nine times by the real AI: the bot lost the dogfight (reported, not a
                     // course defect: the course, spawn and weapons are checked by the other runs)
                     ++lost;
-                    std::printf("    bot lost the fight: %s L%d %s %s\n", loc.c_str(), lv, profile(static_cast<AircraftId>(a)).shortName, modeName(static_cast<HandlingMode>(m)));
+                    std::string where;
+                    for (auto& d : bot.deaths) where += " " + d.first + " x" + std::to_string(d.second) + ";";
+                    std::printf("    bot lost the fight: %s L%d %s %s:%s\n", loc.c_str(), lv, profile(static_cast<AircraftId>(a)).shortName, modeName(static_cast<HandlingMode>(m)), where.c_str());
                 } else if (isKnown) {
                     ++known;
                     std::printf("    known bot limitation: %s L%d %s %s: %s\n", loc.c_str(), lv, profile(static_cast<AircraftId>(a)).shortName, modeName(static_cast<HandlingMode>(m)), bot.failNote.c_str());

@@ -338,7 +338,7 @@ void Renderer::shutdown() {
     UnloadMesh(flame_); UnloadMesh(missile_);
     UnloadMesh(tank_); UnloadMesh(truck_); UnloadMesh(aaa_); UnloadMesh(sam_); UnloadMesh(bunker_); UnloadMesh(radar_);
     for (Mesh* m : {&gun_, &artillery_, &oilRig_, &fuelTank_, &hangar_, &command_, &ship_, &powerPlant_, &refinery_, &bridgeDeck_,
-                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_, &carrier_, &heli_, &heliAttack_, &heliRotor_})
+                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_, &carrier_, &heli_, &heliAttack_, &heliRotor_, &cargo_, &chute_})
         UnloadMesh(*m);
     if (obstacleMeshValid_) UnloadMesh(obstacleMesh_);
     if (ringMesh_.vertexCount) { UnloadMesh(ringMesh_); UnloadMesh(beaconMesh_); }
@@ -353,6 +353,40 @@ void Renderer::shutdown() {
 
 void Renderer::buildGroundModels() {
     Color olive = {120, 118, 88, 255}, dark = {60, 62, 50, 255}, sand = {170, 150, 110, 255}, grey = {150, 150, 145, 255};
+    {
+        MeshBuilder m;  // supply pallet: skid, stacked crates, cargo net straps
+        m.box({0, 0.12f, 0}, {2.7f, 0.24f, 2.2f}, Color{110, 96, 70, 255});
+        m.box({-0.6f, 0.75f, -0.5f}, {1.2f, 1.0f, 1.0f}, olive);
+        m.box({0.6f, 0.75f, -0.5f}, {1.2f, 1.0f, 1.0f}, Color{104, 104, 80, 255});
+        m.box({-0.6f, 0.75f, 0.55f}, {1.2f, 1.0f, 1.0f}, Color{96, 100, 76, 255});
+        m.box({0.6f, 0.75f, 0.55f}, {1.2f, 1.0f, 1.0f}, olive);
+        m.box({0, 1.55f, 0}, {2.2f, 0.6f, 1.9f}, sand);
+        for (float x : {-0.9f, 0.0f, 0.9f}) m.box({x, 1.0f, 0}, {0.06f, 1.95f, 2.25f}, dark);
+        cargo_ = m.build();
+    }
+    {
+        MeshBuilder m;  // round cargo parachute 30 m above the pallet, with rigging lines
+        const int n = 16;
+        const float R = 7.5f, top = 32.0f;
+        Color cA = {200, 204, 190, 255}, cB = {160, 120, 70, 255};
+        for (int i = 0; i < n; ++i) {
+            float a0 = 2 * PI * i / n, a1 = 2 * PI * (i + 1) / n;
+            Vector3 c = {0, top + 2.2f, 0};
+            Vector3 p0 = {cosf(a0) * R, top, sinf(a0) * R}, p1 = {cosf(a1) * R, top, sinf(a1) * R};
+            m.tri2(c, p0, p1, i % 2 ? cA : cB);
+            Vector3 q0 = {cosf(a0) * R * 0.92f, top - 1.6f, sinf(a0) * R * 0.92f}, q1 = {cosf(a1) * R * 0.92f, top - 1.6f, sinf(a1) * R * 0.92f};
+            m.tri2(p0, q0, q1, i % 2 ? cA : cB);
+            m.tri2(p0, q1, p1, i % 2 ? cA : cB);
+            if (i % 4 == 0) {
+                Vector3 d = Vector3Subtract({0, 1.9f, 0}, q0);
+                float L = Vector3Length(d);
+                m.cylinder({0, 0, 0}, 0.03f, L, 3, dark,
+                           MatrixMultiply(MatrixRotate(Vector3Normalize(Vector3CrossProduct({0, 1, 0}, d)), acosf(std::clamp(d.y / L, -1.0f, 1.0f))),
+                                          MatrixTranslate(q0.x, q0.y, q0.z)));
+            }
+        }
+        chute_ = m.build();
+    }
     {
         MeshBuilder m;  // tank
         m.box({0, 1.0f, 0}, {7.0f, 1.4f, 3.6f}, olive);
@@ -942,6 +976,21 @@ void Renderer::drawGates(const FrameParams& f) {
     lit_.setF("uSpecular", 0.0f);
     lit_.setF("uFogOn", 0.0f);
     for (const GateMarker& g : *f.gates) {
+        if (g.beacon) {
+            // waypoint: a thin light column from the ground to 300 m above the waypoint height,
+            // a few pixels wide at any range, with a brighter band at the waypoint height
+            float dist = Vector3Distance(toRl(g.pos), f.cam.position);
+            float w = std::clamp(dist / 260.0f, 3.0f, 60.0f);
+            float y0 = static_cast<float>(g.ground), y1 = static_cast<float>(g.pos.y) + 300.0f;
+            lit_.setF("uEmissive", g.glow);
+            litMat_.maps[MATERIAL_MAP_DIFFUSE].color = g.color;
+            drawMeshC(beaconMesh_, litMat_, MatrixMultiply(MatrixScale(w, y1 - y0, w), MatrixTranslate(static_cast<float>(g.pos.x), (y0 + y1) * 0.5f, static_cast<float>(g.pos.z))));
+            float b = w * 4.0f;
+            drawMeshC(beaconMesh_, litMat_, MatrixMultiply(MatrixMultiply(MatrixScale(b, b * 0.5f, b), MatrixRotateY(PI / 4)),
+                                                          MatrixTranslate(static_cast<float>(g.pos.x), static_cast<float>(g.pos.y), static_cast<float>(g.pos.z))));
+            drawCalls_ += 2;
+            continue;
+        }
         float r = std::max(g.radius, 12.0f);
         // keep the ring visibly thick at distance (at least ~2 px)
         float dist = Vector3Distance(toRl(g.pos), f.cam.position);
@@ -1211,11 +1260,24 @@ void Renderer::drawGroundTargets(const FrameParams& f) {
         if (g.kind == GroundKind::ParkedJet) {
             Vector3 pb;
             float camo;
-            Vector3 pa = paintFor(Team::Red, 0, profile(AircraftId::Su35), pb, camo);
+            const AircraftProfile& ap = profile(g.aircraft >= 0 && g.aircraft < kAircraftCount ? static_cast<AircraftId>(g.aircraft) : AircraftId::Su35);
+            Vector3 pa = paintFor(g.team, 0, ap, pb, camo);
             setAtmosphere(jet_, f);
             Matrix M = MatrixMultiply(R, MatrixTranslate(static_cast<float>(g.pos.x), static_cast<float>(g.pos.y + 2.35), static_cast<float>(g.pos.z)));
-            drawJetModel(AirframeStyle::FlankerFamily, M, pa, pb, camo, 1, 0, 0, 0, 0, g.alive ? 0.0f : 1.0f, f);
+            drawJetModel(ap.style, M, pa, pb, camo, 1, 0, 0, 0, 0, g.alive ? 0.0f : 1.0f, f);
             setAtmosphere(lit_, f);
+            continue;
+        }
+        if (g.kind == GroundKind::Cargo) {
+            // pallet: crates under a cargo net on a skid; a round parachute while it descends
+            if (!g.alive) continue;
+            drawMeshC(cargo_, litMat_, MatrixMultiply(R, T));
+            ++drawCalls_;
+            if (g.chuteV > 0) {
+                float sway = 0.08f * std::sin(static_cast<float>(f.time) * 1.3f + static_cast<float>(g.pos.x));
+                drawMeshC(chute_, litMat_, MatrixMultiply(MatrixMultiply(MatrixRotateZ(sway), R), T));
+                ++drawCalls_;
+            }
             continue;
         }
         if (g.kind == GroundKind::Bridge) {

@@ -29,6 +29,7 @@ add_library(skyfall_core STATIC
   src/mission/Mission.cpp
   src/mission/Campaign.cpp
   src/mission/Training.cpp
+  src/mission/TrainingOps.cpp
   src/mission/CampaignWorld.cpp
   src/mission/Progress.cpp
   src/mission/Voice.cpp

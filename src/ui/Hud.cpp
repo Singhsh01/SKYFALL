@@ -426,12 +426,13 @@ void Hud::targets(const HudContext& c) {
     };
     for (size_t gi = 0; gi < c.battle->ground().size(); ++gi) {
         const GroundTarget& g = c.battle->ground()[gi];
-        if (!g.alive) continue;
+        if (!g.alive || g.kind == GroundKind::Cargo) continue;   // supply pallets are scenery
         double dist = length(g.pos - ps.pos);
         bool objective = g.group > 0 && g.team == Team::Red;
         bool friendly = g.team == Team::Blue;
-        // mission targets are marked from far away so they can be found; others only up close
-        if (dist > (objective || friendly ? 26000.0 : 3500.0)) continue;
+        // mission targets are marked from far away so they can be found; our own units (the
+        // operation's assets have their own marker) only within 6 km; others only up close
+        if (dist > (objective ? 26000.0 : friendly ? 6000.0 : 3500.0)) continue;
         double off = std::acos(std::clamp(dot(normalize(g.pos - ps.pos), ps.q.forward()), -1.0, 1.0));
         bool important = objective || friendly || groundShootsAir(g.kind);
         if (off > (important ? 40.0 : 14.0) * kDeg && p.lockTarget != -1000 - static_cast<int>(gi)) continue;
@@ -1186,7 +1187,7 @@ void Hud::trainingPanel(const HudContext& c) {
     }
     // live score line
     ScoreCard sc = t.liveScore();
-    std::string live = fmt2("GATES %d / %d", sc.gatesHit, sc.gatesTotal);
+    std::string live = fmt2("TARGETS %d / %d", sc.kills, sc.targets);
     if (sc.accuracy >= 0) live += fmti("   ACCURACY %d", static_cast<int>(sc.accuracy));
     live += fmti("   TIME %d:", static_cast<int>(sc.flightSeconds) / 60) + fmti("%02d", static_cast<int>(sc.flightSeconds) % 60);
     ui::text(live, r.x + 12 * s, r.y + h - 22 * s, 12 * s, Color{255, 225, 120, 230});
@@ -1204,6 +1205,46 @@ void Hud::trainingMarkers(const HudContext& c) {
     const FlightState& ps = c.player->fm->state();
     float s = c.h / 720.0f;
     if (c.battle && c.battle->tanker().active) refuelCues(c);
+    // protected assets: a labelled box with their state (an edge arrow when off screen)
+    if (c.battle) {
+        Vector2 ctr0 = {c.w * 0.5f, c.h * 0.5f};
+        for (int ai = 0; ai < t.assetCount(); ++ai) {
+            TrainingSession::AssetStatus st = t.assetStatus(ai, *c.battle);
+            if (!st.active || st.done || st.alive == 0) continue;
+            const Asset& a = t.course().assets[static_cast<size_t>(ai)];
+            Color ac = st.lost > 0 ? Color{255, 200, 90, 255} : Color{120, 210, 255, 255};
+            std::string label = a.name;
+            if (a.kind == AssetKind::Transport) {
+                // the transport carries the normal friendly marker with its callsign: add the hull
+                const Jet* tj = c.battle->jetById(st.jet);
+                label = fmti("HULL %d%%", tj ? static_cast<int>(tj->health) : 0);
+            } else {
+                label += fmt2("  %d/%d", st.alive, st.total);
+            }
+            bool fr;
+            Vector2 ap = project(c, toRl(st.pos + Vec3{0, a.kind == AssetKind::Transport ? 8.0 : 4.0, 0}), &fr);
+            bool on = fr && ap.x > 30 * s && ap.x < c.w - 30 * s && ap.y > 30 * s && ap.y < c.h - 30 * s;
+            if (!on) {
+                Vector2 d = {ap.x - ctr0.x, ap.y - ctr0.y};
+                if (!fr) { d.x = -d.x; d.y = -d.y; }
+                float len = std::max(1.0f, std::sqrt(d.x * d.x + d.y * d.y));
+                float rad = std::min(c.w, c.h) * 0.38f;
+                Vector2 e = {ctr0.x + d.x / len * rad, ctr0.y + d.y / len * rad};
+                DrawPoly(e, 4, 8 * s, 45.0f, ac);
+                ui::textShadow(label, e.x, e.y + 12 * s, 10 * s, ac, Align::Center);
+                continue;
+            }
+            float b = 11 * s;
+            double dist = length(st.pos - ps.pos);
+            if (a.kind == AssetKind::Transport) {
+                ui::textShadow(label, ap.x, ap.y + b + 18 * s, 11 * s, ac, Align::Center);
+                continue;
+            }
+            DrawRectangleLinesEx({ap.x - b, ap.y - b, 2 * b, 2 * b}, 1.5f * s, ac);
+            ui::textShadow(label, ap.x, ap.y - b - 16 * s, 11 * s, ac, Align::Center);
+            ui::textShadow(dist > 2000 ? fmt("%.1f KM", dist / 1000.0) : fmti("%d M", static_cast<int>(dist)), ap.x, ap.y + b + 4 * s, 10 * s, ac, Align::Center);
+        }
+    }
     const Gate* g = t.currentGate();
     if (!g) return;
     bool front;
@@ -1222,6 +1263,11 @@ void Hud::trainingMarkers(const HudContext& c) {
         float rad = std::min(c.w, c.h) * 0.42f;
         sp = {ctr.x + d.x / len * rad, ctr.y + d.y / len * rad};
         DrawPoly(sp, 3, 10 * s, std::atan2(d.y, d.x) * RAD2DEG, col);
+    } else if (g->waypoint || g->cue == GateCue::Glide) {
+        // tactical waypoint / approach point: a diamond, no ring
+        float k = (g->waypoint ? 9.0f : 6.0f) * s;
+        Vector2 pts[5] = {{sp.x, sp.y - k}, {sp.x + k, sp.y}, {sp.x, sp.y + k}, {sp.x - k, sp.y}, {sp.x, sp.y - k}};
+        for (int i = 0; i < 4; ++i) ui::line(pts[i], pts[i + 1], 1.8f * s, col);
     } else {
         // bracket the gate ring and label it
         Vector2 edge = project(c, toRl(g->pos + Vec3{0, g->radius, 0}));
@@ -1236,7 +1282,9 @@ void Hud::trainingMarkers(const HudContext& c) {
     int gn = sec.gateEnd - (sec.kind == SectionKind::Route ? sec.gateBegin : sec.gateStart);
     if (gi < 1) gi = 0;   // flying the go-around pattern
     ui::textShadow(dist > 2000 ? fmt("%.1f KM", dist / 1000.0) : fmti("%d M", static_cast<int>(dist)), sp.x, sp.y - 30 * s, 12 * s, col, Align::Center);
-    if (gi > 0) ui::textShadow(fmt2("GATE %d / %d", gi, gn), sp.x, sp.y + 22 * s, 11 * s, col, Align::Center);
+    if (g->waypoint) ui::textShadow(fmt2("WAYPOINT %d / %d", gi, gn), sp.x, sp.y + 22 * s, 11 * s, col, Align::Center);
+    else if (g->cue == GateCue::Glide) ui::textShadow("APPROACH", sp.x, sp.y + 22 * s, 11 * s, col, Align::Center);
+    else if (gi > 0) ui::textShadow(fmt2("GATE %d / %d", gi, gn), sp.x, sp.y + 22 * s, 11 * s, col, Align::Center);
     else ui::textShadow("PATTERN", sp.x, sp.y + 22 * s, 11 * s, col, Align::Center);
     // altitude window / ceiling / speed band read-outs (top centre)
     float y = c.h * 0.24f;
@@ -1328,7 +1376,7 @@ void Hud::trainingDebrief(const HudContext& c) {
         y += 21 * s;
     }
     int secs = static_cast<int>(sc.flightSeconds);
-    std::string foot = fmt2("GATES %d / %d", sc.gatesHit, sc.gatesTotal) + fmt2("     TIME %d:%02d", secs / 60, secs % 60);
+    std::string foot = fmt2("TARGETS %d / %d", sc.kills, sc.targets) + fmt2("     TIME %d:%02d", secs / 60, secs % 60);
     if (sc.targets > 0) foot += fmt2("     KILLS %d / %d", sc.kills, sc.targets);
     if (sc.crashes) foot += fmti("     RETRIES %d", sc.crashes);
     if (sc.wire > 0) foot += fmti("     WIRE %d", sc.wire);

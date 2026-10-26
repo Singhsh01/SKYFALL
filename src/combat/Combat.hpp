@@ -69,6 +69,15 @@ struct Jet {
     bool formationLead = false;   // training lead: smooth loop, tight speed hold (a wingman formates on it)
     int kills = 0;
     double ramp = 0;              // cargo ramp 0 closed .. 1 open (transport)
+    // ---- mission roles (Training Academy operations) ----
+    int aiPrefer = -1;            // jet id this aircraft hunts first (escort missions: the transport)
+    bool strike = false;          // attacks the other side's ground units (air-to-surface missiles, gun)
+    int strikeTarget = -1;        // ground index of the current strike
+    double strikeTimer = 0;       // > 0: egressing after a pass
+    int followId = -1;            // wingman: holds a loose formation on this jet when nothing to fight
+    double damageScale = 1.0;     // heavy aircraft take less damage per hit
+    bool kinematic = false;       // the flight state is driven by a script (transport paths) until it is hit hard
+    double breakTimer = 0;        // > 0: damaged, breaking off to regroup
     ControlInputs lastInput{};
     // Trail bookkeeping for renderer
     double contrailTimer = 0;
@@ -127,6 +136,7 @@ enum class GroundKind { Tank, Truck, AAA, SAM, Bunker, Radar,
                         Ammo,       // earth-covered ammunition bunker
                         Substation, // electrical transformer yard
                         Helicopter, // flying: transport or (armed) attack helicopter, targetable by ATA and ATS
+                        Cargo,      // supply pallet (airdropped under a parachute, or unloaded from a transport)
                         Count };
 
 /// Display name, missile aim height above the base, hit radius and default health per kind.
@@ -162,7 +172,21 @@ struct GroundTarget {
     double flySpeed = 38;     // m/s along the circle
     bool attack = false;      // attack helicopter (fires its cannon at aircraft when armed)
     double fallV = 0;         // shot down: vertical speed of the falling wreck
+    // a route (convoys, rescue helicopters): driven / flown along the polyline at routeSpeed,
+    // stopping at the end; routeS = distance travelled
+    std::vector<Vec3> route;
+    double routeS = 0, routeSpeed = 0;
+    double hold = 0;          // > 0: waits (seconds) before moving on (a rescue helicopter on the pick-up)
+    bool huntGround = false;  // attack helicopter: closes on and fires at the other side's ground units
+    int aircraft = -1;        // ParkedJet: AircraftId shown (-1 = a Flanker)
+    double chuteV = 0;        // Cargo: descending under a parachute at this rate (m/s), 0 = on the ground
     bool airborne() const { return kind == GroundKind::Helicopter && alive && flyAgl > 0; }
+    bool arrived() const { return !route.empty() && routeS >= routeLength() - 1.0; }
+    double routeLength() const {
+        double L = 0;
+        for (size_t i = 1; i < route.size(); ++i) L += std::hypot(route[i].x - route[i - 1].x, route[i].z - route[i - 1].z);
+        return L;
+    }
 };
 
 enum class EventType { Explosion, SmallExplosion, Hit, JetKilled, GroundKilled, MissileLaunch, FlaresOut,
@@ -212,6 +236,9 @@ struct BattleConfig {
     /// management), 2 = squadron (adds bracketing flankers, high cover, cranking after a shot,
     /// unpredictable reversals, tighter air defences), 3 = final battle (as 2, faster tempo).
     int tactics = 0;
+    /// Academy operations: damaged AI aircraft break off and regroup, wingmen hold formation on
+    /// their leader between fights, strike aircraft attack ground units.
+    bool smartAi = false;
 };
 
 struct PlayerCommands {
@@ -293,16 +320,27 @@ public:
     static Vec3 proportionalNav(const Vec3& mPos, const Vec3& mVel, const Vec3& tPos, const Vec3& tVel, double N);
     bool lineOfSight(const Vec3& a, const Vec3& b) const;
     void fireMissile(Jet& shooter);
+    /// An air-to-surface missile from an AI aircraft at a ground index (strike roles).
+    void fireStrikeMissile(Jet& shooter, int groundIdx);
+    /// Air-to-surface missiles and gun runs of every aircraft against one side's ground units.
+    int groundAliveOfTeam(Team t) const;
     void launchSurfaceMissile(const Vec3& from, int targetJet);
     void dropFlares(Jet& j);
     Missile& debugAddMissile(const Missile& m) { missiles_.push_back(m); return missiles_.back(); }
     Jet& debugAddJet(Team team, AircraftId id, const Vec3& pos, double heading, double speed);
     void setAiEnabled(bool on) { aiEnabled_ = on; }
+    void setSmartAi(bool on) { cfg_.smartAi = on; }
+    /// A scripted battle (Academy operations): no arena spawns or waves, ground units move and
+    /// shoot, the AI uses the given tactics level and the smart behaviours.
+    void startScripted(int tactics);
+    void setTactics(int t) { cfg_.tactics = t; }
+    void setActive(bool on) { active_ = on; }
 
 private:
     void spawnWave();
     void updateJet(Jet& j, double dt, const ControlInputs* override, const PlayerCommands* cmd);
     ControlInputs aiPilot(Jet& j, double dt, PlayerCommands& out);
+    int strikeTargetFor(Jet& j);
     void updateLock(Jet& j, double dt, bool cycle);
     void updateMissiles(double dt);
     void updateBullets(double dt);

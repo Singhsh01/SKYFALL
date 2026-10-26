@@ -60,6 +60,7 @@ const char* groundKindName(GroundKind k) {
         case GroundKind::Ammo: return "AMMO BUNKER";
         case GroundKind::Substation: return "SUBSTATION";
         case GroundKind::Helicopter: return "HELICOPTER";
+        case GroundKind::Cargo: return "SUPPLIES";
         default: return "TARGET";
     }
 }
@@ -127,6 +128,7 @@ double groundMaxHealth(GroundKind k) {
         case GroundKind::Ammo: return 180;
         case GroundKind::Substation: return 160;
         case GroundKind::Helicopter: return 70;
+        case GroundKind::Cargo: return 40;
         default: return 100;
     }
 }
@@ -142,6 +144,8 @@ int Battle::addGround(GroundTarget g) {
         g.heading = std::atan2(tan.z, tan.x);
     } else if (g.kind == GroundKind::Bridge && g.pos.y > 0) {
         // bridge deck height comes from the layout (already in pos.y)
+    } else if (g.kind == GroundKind::Cargo && g.chuteV > 0) {
+        // airdropped: falls from where it left the ramp
     } else if (groundIsNaval(g.kind)) g.pos.y = std::max(Terrain::kSeaLevel, terrain_->height(g.pos.x, g.pos.z));
     else if (g.kind == GroundKind::Helicopter && g.flyAgl > 0) {
         if (g.pathRadius > 0) {
@@ -345,6 +349,41 @@ void Battle::removeJet(int id) {
         if (j->lockTarget == id) { j->lockTarget = -1; j->lockProgress = 0; }
         if (j->aiTarget == id) j->aiTarget = -1;
     }
+}
+
+void Battle::startScripted(int tactics) {
+    cfg_ = BattleConfig{};
+    cfg_.enemyJets = 0;
+    cfg_.allyJets = 0;
+    cfg_.groundTargets = false;
+    cfg_.endlessWaves = false;
+    cfg_.tactics = tactics;
+    cfg_.smartAi = true;
+    active_ = true;
+}
+
+void Battle::fireStrikeMissile(Jet& j, int gi) {
+    if (j.agms <= 0 || j.missileCooldown > 0 || gi < 0 || gi >= static_cast<int>(ground_.size())) return;
+    const FlightState& s = j.fm->state();
+    Missile m;
+    m.id = nextMissileId_++;
+    m.owner = j.id;
+    m.team = j.team;
+    m.pos = s.pos + s.q.rotate(Vec3{2.0, -1.6, (j.agms % 2 ? 1.6 : -1.6)});
+    m.vel = s.vel + s.q.forward() * 15.0 - s.q.up() * 6.0;
+    m.motor = 6.0;
+    m.airToSurface = true;
+    m.targetGround = gi;
+    missiles_.push_back(m);
+    j.agms--;
+    j.missileCooldown = 3.0;
+    events_.push_back({EventType::MissileLaunch, m.pos, 1.0, j.id, -1000 - gi, "ATS", m.id});
+}
+
+int Battle::groundAliveOfTeam(Team t) const {
+    int n = 0;
+    for (const GroundTarget& g : ground_) if (g.alive && g.team == t) ++n;
+    return n;
 }
 
 void Battle::retireGround(int index) {
@@ -577,6 +616,7 @@ void Battle::fireGunRound(Jet& j) {
 void Battle::damageJet(Jet& victim, double dmg, int attacker, const char* weapon) {
     if (!victim.alive) return;
     if (victim.isPlayer && cfg_.playerInvulnerable) dmg = 0;
+    if (!victim.isPlayer) dmg *= victim.damageScale;
     victim.health -= dmg;
     victim.hitFlash = 0.35;
     if (victim.isPlayer) stats_.damageTaken += static_cast<int>(std::lround(dmg));
@@ -683,6 +723,25 @@ void Battle::updateLock(Jet& j, double dt, bool cycle) {
         events_.push_back({EventType::LockAcquired, s.pos, 1.0, j.id, j.lockTarget, ""});
 }
 
+int Battle::strikeTargetFor(Jet& j) {
+    // keep the current target while it lives; otherwise the nearest of the other side's ground
+    // units within 15 km (helicopters only when they are on the ground or hovering low)
+    const Vec3 p = j.fm->state().pos;
+    if (j.strikeTarget >= 0 && j.strikeTarget < static_cast<int>(ground_.size())) {
+        const GroundTarget& g = ground_[static_cast<size_t>(j.strikeTarget)];
+        if (g.alive && g.team != j.team) return j.strikeTarget;
+    }
+    j.strikeTarget = -1;
+    double best = 15000.0;
+    for (int gi = 0; gi < static_cast<int>(ground_.size()); ++gi) {
+        const GroundTarget& g = ground_[static_cast<size_t>(gi)];
+        if (!g.alive || g.team == j.team) continue;
+        double d = std::hypot(g.pos.x - p.x, g.pos.z - p.z);
+        if (d < best) { best = d; j.strikeTarget = gi; }
+    }
+    return j.strikeTarget;
+}
+
 ControlInputs Battle::aiPilot(Jet& j, double dt, PlayerCommands& out) {
     ControlInputs in;
     FlightModel& fm = *j.fm;
@@ -691,6 +750,7 @@ ControlInputs Battle::aiPilot(Jet& j, double dt, PlayerCommands& out) {
     const double V = std::max(s.airspeed, 1.0);
     j.aiTimer -= dt;
 
+    if (cfg_.smartAi && !j.isPlayer && j.breakTimer == 0.0 && j.health < 45.0 && j.health > 0.0) j.breakTimer = 11.0;
     // 1. Threat assessment: incoming missiles
     const Missile* threat = nullptr;
     double threatD = 1e9;
@@ -708,6 +768,8 @@ ControlInputs Battle::aiPilot(Jet& j, double dt, PlayerCommands& out) {
             if (!t->alive || t->team == j.team) continue;
             double d = length(t->fm->state().pos - s.pos);
             if (t->isPlayer) d *= 0.7;
+            if (t->id == j.aiPrefer) d *= 0.3;   // the escort target comes first
+            if (cfg_.smartAi && j.followId >= 0 && d > 11000.0) continue;   // wingmen do not wander off alone
             if (d < best) { best = d; j.aiTarget = t->id; }
         }
     }
@@ -826,6 +888,64 @@ ControlInputs Battle::aiPilot(Jet& j, double dt, PlayerCommands& out) {
         desired = normalize(r * (1.6 * j.jinkSign) + f * 0.25 + Vec3{0, vert, 0});
         desiredSpeed = 260;
         if (j.flareCharges > 0 && j.flareBurstTimer <= 0 && gunThreatLocked) out.flares = true;
+    } else if (cfg_.smartAi && j.breakTimer > 0 && target) {
+        // damaged: break off away from the fight, dive for speed, then regroup on a friend
+        j.ai = AiState::Extend;
+        j.breakTimer -= dt;
+        const Jet* friendJ = nullptr;
+        double fd = 1e18;
+        for (auto& t : jets_)
+            if (t->alive && t->team == j.team && t->id != j.id) {
+                double d = length(t->fm->state().pos - s.pos);
+                if (d < fd) { fd = d; friendJ = t.get(); }
+            }
+        Vec3 away = normalize(Vec3{s.pos.x - target->fm->state().pos.x, 0, s.pos.z - target->fm->state().pos.z});
+        Vec3 dirTo = friendJ && j.breakTimer < 4.0 ? normalize(friendJ->fm->state().pos - s.pos) : away;
+        desired = normalize(dirTo + Vec3{0, agl > 1200.0 ? -0.15 : 0.08, 0});
+        desiredSpeed = 400;
+        if (j.flareCharges > 0 && j.flareBurstTimer <= 0 && j.breakTimer > 8.0) out.flares = true;
+        if (j.breakTimer <= 0) j.breakTimer = -1.0;   // one break-off per jet
+    } else if (cfg_.smartAi && j.strike && j.strikeTimer <= 0 && (j.agms > 0 || j.rounds > 0) && strikeTargetFor(j) >= 0 &&
+               !(target && length(target->fm->state().pos - s.pos) < 2200.0 && target->isPlayer)) {
+        // strike run on the other side's ground units: run in at ~500 m, a shallow dive inside
+        // 5 km, missile at 3 km (gun inside 1 km without missiles), then egress and come round
+        j.ai = AiState::Engage;
+        const int gi = j.strikeTarget;
+        const GroundTarget& g = ground_[static_cast<size_t>(gi)];
+        Vec3 gp = groundAimPoint(gi);
+        Vec3 d = gp - s.pos;
+        double hd = std::hypot(d.x, d.z);
+        Vec3 aim = gp;
+        if (hd > 5000.0) aim.y = std::max(aim.y, terrain_->surfaceHeight(s.pos.x, s.pos.z) + 550.0);
+        desired = normalize(aim - s.pos);
+        desiredSpeed = 260;
+        double off = std::acos(clampd(dot(normalize(gp - s.pos), s.q.forward()), -1.0, 1.0));
+        if (j.agms > 0 && hd < 3400.0 && hd > 900.0 && off < 14.0 * kDeg && j.missileCooldown <= 0 && lineOfSight(s.pos, gp + Vec3{0, 3, 0})) {
+            fireStrikeMissile(j, gi);
+            j.strikeTimer = 9.0;
+        }
+        out.fireGun = j.agms <= 0 && hd < 1000.0 && off < 3.0 * kDeg && j.rounds > 0;
+        if (hd < 500.0) j.strikeTimer = 7.0;   // overflown: egress and come back
+        (void)g;
+    } else if (cfg_.smartAi && j.strike && j.strikeTimer > 0) {
+        j.strikeTimer -= dt;
+        j.ai = AiState::Extend;
+        Vec3 f = s.q.forward();
+        desired = normalize(Vec3{f.x, 0, f.z} + Vec3{0, agl < 600.0 ? 0.25 : 0.02, 0});
+        desiredSpeed = 320;
+    } else if (cfg_.smartAi && j.followId >= 0 && (!target || length(target->fm->state().pos - s.pos) > 11000.0) && jetById(j.followId) &&
+               jetById(j.followId)->alive) {
+        // wingman: loose fighting-wing position, 300 m back and 250 m out on the lead's right
+        j.ai = AiState::Patrol;
+        const FlightState& ls = jetById(j.followId)->fm->state();
+        Vec3 lf = normalize(Vec3{ls.vel.x, 0, ls.vel.z});
+        if (length(lf) < 0.5) lf = {1, 0, 0};
+        Vec3 lr{-lf.z, 0, lf.x};
+        Vec3 slot = ls.pos - lf * 300.0 + lr * 250.0 + Vec3{0, 40.0, 0};
+        slot.y = std::max(slot.y, terrain_->surfaceHeight(slot.x, slot.z) + 250.0);
+        Vec3 d = slot + ls.vel * 2.0 - s.pos;
+        desired = normalize(d);
+        desiredSpeed = clampd(length(ls.vel) + clampd(dot(d, lf) * 0.08, -40.0, 90.0), 140.0, 420.0);
     } else if (horiz > 13000.0) {
         j.ai = AiState::Patrol;
         desired = normalize(Vec3{-s.pos.x, 0, -s.pos.z} + Vec3{0, 0.1, 0});
@@ -940,12 +1060,19 @@ void Battle::updateJet(Jet& j, double dt, const ControlInputs* override, const P
     if (!j.alive) { j.deadTimer += dt; return; }
     PlayerCommands aiCmd;
     ControlInputs in;
+    const bool scripted = j.kinematic && !override;   // a transport on a scripted path: no AI, no physics
     if (override) in = *override;
+    else if (scripted) in = ControlInputs{};
     else if (aiEnabled_) in = aiPilot(j, dt, aiCmd);
     else in = ControlInputs{};
     const PlayerCommands& c = cmd ? *cmd : aiCmd;
     j.lastInput = in;
-    j.fm->step(in, dt);
+    if (scripted) {
+        for (const Missile& m : missiles_)
+            if (m.active && m.targetJet == j.id && m.decoyFlare < 0 && length(m.pos - j.fm->state().pos) < 1900.0) { aiCmd.flares = true; break; }
+    } else {
+        j.fm->step(in, dt);
+    }
     if (j.fm->state().crashed) {
         j.alive = false;
         j.health = 0;
@@ -960,7 +1087,7 @@ void Battle::updateJet(Jet& j, double dt, const ControlInputs* override, const P
         // the cargo ramp opens once the transport stands parked on the ground (about 8 s)
         const FlightState& fs = j.fm->state();
         bool open = j.alive && fs.onGround && fs.airspeed < 1.5 && (fs.parkingBrake || !j.isPlayer);
-        j.ramp = std::clamp(j.ramp + (open ? dt : -dt) / 8.0, 0.0, 1.0);
+        if (!scripted) j.ramp = std::clamp(j.ramp + (open ? dt : -dt) / 8.0, 0.0, 1.0);   // scripted: the script drives it
     }
     j.missileCooldown = std::max(0.0, j.missileCooldown - dt);
     // flare recharge (one charge per cooldown period)
@@ -1131,14 +1258,14 @@ void Battle::updateBullets(double dt) {
                 break;
             }
         }
-        if (!hit && b.team == Team::Blue) {
+        if (!hit && b.owner != -1) {   // aircraft and helicopter guns hit the other side's ground units (not flak)
             for (int gi = 0; gi < static_cast<int>(ground_.size()); ++gi) {
                 if (!ground_[gi].alive) continue;
                 const GroundTarget& gt = ground_[gi];
                 if (gt.team == b.team) continue;
                 double hr = std::max(kGroundHitRadius, groundHitRadius(gt.kind) * 0.7);
                 if (segmentPointDistance(prev, b.pos, gt.pos + Vec3{0, groundAimHeight(gt.kind), 0}) < hr) {
-                    damageGround(gi, kGunGroundDamage, b.owner);
+                    damageGround(gi, b.owner <= -2 ? kGunGroundDamage * 0.4 : kGunGroundDamage, b.owner);   // helicopter rounds are lighter
                     if (b.owner == player().id) ++stats_.roundHits;
                     hit = true;
                     break;
@@ -1150,7 +1277,7 @@ void Battle::updateBullets(double dt) {
             hit = true;
         }
         if (hit) b.life = 0;
-        else if (b.life <= 0 && b.owner < 0 && rng_.uniform() < 0.35) {
+        else if (b.life <= 0 && b.owner == -1 && rng_.uniform() < 0.35) {
             // AAA shell self-destructs: flak burst near the closest hostile aircraft
             for (auto& jp : jets_) {
                 if (!jp->alive || jp->team == b.team) continue;
@@ -1202,7 +1329,64 @@ void Battle::updateGround(double dt) {
             continue;
         }
         if (!g.alive) continue;
-        if (g.kind == GroundKind::Helicopter && g.flyAgl > 0) {
+        if (g.kind == GroundKind::Cargo && g.chuteV > 0) {
+            // under the parachute: free fall for a second, then a steady descent drifting downwind
+            double gy = terrain_->surfaceHeight(g.pos.x, g.pos.z);
+            g.fallV = std::max(-g.chuteV, g.fallV - kG * dt);
+            g.pos.y += g.fallV * dt;
+            g.pos.x += 2.0 * dt;
+            if (g.pos.y <= gy) { g.pos.y = gy; g.chuteV = 0; g.fallV = 0; }
+            continue;
+        }
+        if (!g.route.empty()) {
+            // along a route (convoy on a road, a rescue helicopter's flight path): stop at the end
+            if (g.hold > 0) g.hold -= dt;
+            else g.routeS = std::min(g.routeS + g.routeSpeed * dt, g.routeLength());
+            double sLeft = g.routeS;
+            Vec3 a = g.route.front(), b = a;
+            size_t k = 1;
+            for (; k < g.route.size(); ++k) {
+                double L = std::hypot(g.route[k].x - g.route[k - 1].x, g.route[k].z - g.route[k - 1].z);
+                if (sLeft <= L || k + 1 == g.route.size()) {
+                    double t = L > 1e-6 ? clampd(sLeft / L, 0.0, 1.0) : 1.0;
+                    a = g.route[k - 1];
+                    b = g.route[k];
+                    Vec3 p = a + (b - a) * t;
+                    g.pos.x = p.x;
+                    g.pos.z = p.z;
+                    break;
+                }
+                sLeft -= L;
+            }
+            if (k >= g.route.size()) { g.pos.x = g.route.back().x; g.pos.z = g.route.back().z; }
+            if (std::hypot(b.x - a.x, b.z - a.z) > 0.5) {
+                double hdg = std::atan2(b.z - a.z, b.x - a.x);
+                g.heading += wrapPi(hdg - g.heading) * std::min(1.0, dt * 2.0);
+            }
+            double gy = terrain_->surfaceHeight(g.pos.x, g.pos.z);
+            if (g.flyAgl > 0) {
+                Vec3 dir{std::cos(g.heading), 0, std::sin(g.heading)};
+                Vec3 ahead = g.pos + dir * (g.routeSpeed * 4.0);
+                double want = std::max(gy, terrain_->surfaceHeight(ahead.x, ahead.z)) + g.flyAgl;
+                if (g.hold > 0) want = gy + std::min(g.flyAgl, 6.0);   // hovering low over the pick-up
+                g.pos.y += clampd(want - g.pos.y, -8.0 * dt, 14.0 * dt);
+            } else {
+                g.pos.y = groundIsNaval(g.kind) ? std::max(Terrain::kSeaLevel, terrain_->height(g.pos.x, g.pos.z)) : terrain_->height(g.pos.x, g.pos.z);
+            }
+        } else if (g.kind == GroundKind::Helicopter && g.flyAgl > 0) {
+            if (g.huntGround && g.team == Team::Red) {
+                // an attack helicopter closes on the nearest of our ground units and orbits it at
+                // rocket range (the orbit centre creeps towards the target)
+                double bd = 1e18; Vec3 tgt = g.pathCenter;
+                for (const GroundTarget& o : ground_)
+                    if (o.alive && o.team != g.team) { double d = std::hypot(o.pos.x - g.pos.x, o.pos.z - g.pos.z); if (d < bd) { bd = d; tgt = o.pos; } }
+                if (bd < 1e17) {
+                    Vec3 dc{tgt.x - g.pathCenter.x, 0, tgt.z - g.pathCenter.z};
+                    double L = length(dc);
+                    if (L > 1.0) g.pathCenter += dc * (std::min(L, g.flySpeed * 0.8 * dt) / L);
+                    g.pathRadius += clampd(700.0 - g.pathRadius, -20.0 * dt, 20.0 * dt);
+                }
+            }
             if (g.pathRadius > 0) g.pathAngle += g.flySpeed / g.pathRadius * dt;
             Vec3 c = g.pathRadius > 0 ? Vec3{g.pathCenter.x + std::cos(g.pathAngle) * g.pathRadius, 0, g.pathCenter.z + std::sin(g.pathAngle) * g.pathRadius} : g.pos;
             // look ahead for rising ground so the helicopter climbs before a ridge, not into it
@@ -1227,9 +1411,36 @@ void Battle::updateGround(double dt) {
                                             : terrain_->height(g.pos.x, g.pos.z);
             g.heading = g.pathAngle + kPi / 2;
         }
-        if (!g.armed || g.team == Team::Blue || !groundShootsAir(g.kind)) continue;
+        if (!g.armed || !groundShootsAir(g.kind) || (g.team == Team::Blue && g.kind == GroundKind::Helicopter)) continue;
         g.fireCooldown -= dt;
         if (g.fireCooldown > 0) continue;
+        if (g.huntGround && g.airborne()) {
+            // rockets / cannon at the nearest of our ground units inside 1.6 km
+            int ti = -1; double td = 1600.0;
+            for (int o = 0; o < static_cast<int>(ground_.size()); ++o) {
+                const GroundTarget& og = ground_[static_cast<size_t>(o)];
+                if (!og.alive || og.team == g.team) continue;
+                double d = length(og.pos - g.pos);
+                if (d < td) { td = d; ti = o; }
+            }
+            if (ti >= 0) {
+                Vec3 aim = groundAimPoint(ti) + groundVelocity(ti) * (td / 600.0);
+                Vec3 dir = normalize(aim - g.pos);
+                for (int k = 0; k < 2; ++k) {
+                    Bullet b;
+                    b.pos = g.pos + dir * 4.0;
+                    Vec3 jitter{rng_.range(-1, 1), rng_.range(-1, 1), rng_.range(-1, 1)};
+                    b.vel = normalize(dir + jitter * 0.012) * 600.0 + Vec3{0, 0.5 * kG * td / 600.0, 0};
+                    b.team = g.team;
+                    b.owner = -2 - gi;    // helicopter fire: hits ground units, not counted as flak
+                    b.life = 3.5;
+                    b.tracer = true;
+                    bullets_.push_back(b);
+                }
+                g.fireCooldown = rng_.uniform() < 0.2 ? 3.5 : 0.45;   // bursts with pauses (rockets / cannon)
+                continue;
+            }
+        }
         // nearest blue aircraft
         Jet* best = nullptr;
         double bd = 1e9;
@@ -1240,8 +1451,9 @@ void Battle::updateGround(double dt) {
         }
         if (!best) { g.fireCooldown = 1.0; continue; }
         if (g.kind == GroundKind::Helicopter && (!g.attack || !g.airborne())) { g.fireCooldown = 1.0; continue; }
+        if (g.team == Team::Blue && bd > 2200.0) { g.fireCooldown = 1.0; continue; }   // our ships / guns: close defence only
         if ((g.kind == GroundKind::AAA || g.kind == GroundKind::Gun || g.kind == GroundKind::Ship ||
-             (g.kind == GroundKind::Helicopter && bd < 1500.0)) && bd < 2600.0) {
+             (g.kind == GroundKind::Helicopter && bd < (cfg_.smartAi ? 1100.0 : 1500.0))) && bd < 2600.0) {
             // short tracer burst with lead and dispersion
             const FlightState& ts = best->fm->state();
             double tof = bd / 900.0;
@@ -1251,7 +1463,9 @@ void Battle::updateGround(double dt) {
                 Bullet b;
                 b.pos = g.pos + Vec3{0, 3, 0};
                 Vec3 jitter{rng_.range(-1, 1), rng_.range(-1, 1), rng_.range(-1, 1)};
-                b.vel = normalize(dir + jitter * (cfg_.tactics >= 2 ? 0.024 : 0.03)) * 900.0;
+                // a helicopter's chin gun is no flak battery: wide dispersion against fast jets
+                double disp = g.kind == GroundKind::Helicopter && cfg_.smartAi ? 0.055 : (cfg_.tactics >= 2 ? 0.024 : 0.03);
+                b.vel = normalize(dir + jitter * disp) * 900.0;
                 b.team = g.team;
                 b.owner = -1;
                 b.life = 3.2;
@@ -1259,8 +1473,8 @@ void Battle::updateGround(double dt) {
                 bullets_.push_back(b);
             }
             g.fireCooldown = 0.12;
-            if (rng_.uniform() < 0.03) g.fireCooldown = 2.5;  // pause between bursts
-        } else if (g.kind == GroundKind::SAM && bd < (cfg_.tactics >= 2 ? 7200.0 : 6500.0) && best->isPlayer &&
+            if (rng_.uniform() < (g.kind == GroundKind::Helicopter && cfg_.smartAi ? 0.12 : 0.03)) g.fireCooldown = 2.5;  // pause between bursts
+        } else if (g.kind == GroundKind::SAM && g.team == Team::Red && bd < (cfg_.tactics >= 2 ? 7200.0 : 6500.0) && best->isPlayer &&
                    lineOfSight(g.pos + Vec3{0, 8, 0}, best->fm->state().pos)) {
             launchSurfaceMissile(g.pos, best->id);
             g.fireCooldown = cfg_.tactics >= 2 ? 16.0 : 22.0;

@@ -469,6 +469,134 @@ TEST(mission_fails_on_crash) {
     CHECK(!m.failure().empty());
 }
 
+TEST(strike_aircraft_and_attack_helicopters_destroy_ground_units) {
+    // operations AI: a strike jet runs in with air-to-surface missiles, an attack helicopter
+    // hunts the convoy with its cannon; both kill friendly ground units
+    for (int kind = 0; kind < 2; ++kind) {
+        Battle b(terrain());
+        Jet& p = b.createPlayer(AircraftId::F22);
+        p.fm->resetAirborne({-14000, 3000, -14000}, 0.0, 220.0, 0.8);   // far away, not involved
+        b.startScripted(1);
+        Vec3 base{6000, 0, 6000};
+        for (int k = 0; k < 4; ++k) {
+            GroundTarget g;
+            g.kind = k % 2 ? GroundKind::Truck : GroundKind::Tank;
+            g.team = Team::Blue;
+            g.armed = false;
+            g.pos = base + Vec3{k * 30.0, 0, k * 12.0};
+            b.addGround(g);
+        }
+        if (kind == 0) {
+            Jet& j = b.debugAddJet(Team::Red, AircraftId::Su30, base + Vec3{-12000, 1500, 0}, 0.0, 230.0);
+            j.strike = true;
+            j.agms = 4;
+        } else {
+            GroundTarget h;
+            h.kind = GroundKind::Helicopter;
+            h.team = Team::Red;
+            h.attack = true;
+            h.armed = true;
+            h.huntGround = true;
+            h.flyAgl = 70;
+            h.flySpeed = 45;
+            h.pathCenter = base + Vec3{-5000, 0, 1000};
+            h.pathRadius = 600;
+            h.pos = h.pathCenter;
+            b.addGround(h);
+        }
+        int before = b.groundAliveOfTeam(Team::Blue);
+        for (int i = 0; i < 120 * 240 && b.groundAliveOfTeam(Team::Blue) > 1; ++i) b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+        int after = b.groundAliveOfTeam(Team::Blue);
+        std::printf("    %s: friendly ground units %d -> %d\n", kind == 0 ? "strike jet" : "attack helicopter", before, after);
+        CHECK(before == 4);
+        CHECK(after <= 2);
+    }
+}
+
+TEST(convoys_follow_their_road_and_rescue_helicopters_hold_on_the_pickup) {
+    Battle b(terrain());
+    b.createPlayer(AircraftId::F22).fm->resetAirborne({0, 3000, 0}, 0.0, 220.0, 0.8);
+    b.startScripted(1);
+    GroundTarget t;
+    t.kind = GroundKind::Truck;
+    t.team = Team::Blue;
+    t.armed = false;
+    t.route = {{1000, 0, 1000}, {3000, 0, 1000}, {3000, 0, 3000}};
+    t.routeSpeed = 12.0;
+    t.pos = t.route.front();
+    int ti = b.addGround(t);
+    GroundTarget h;
+    h.kind = GroundKind::Helicopter;
+    h.team = Team::Blue;
+    h.armed = false;
+    h.flyAgl = 120;
+    h.flySpeed = 50;
+    h.route = {{-2000, 0, -2000}, {-2000, 0, 0}};
+    h.routeSpeed = 50;
+    h.hold = 30.0;
+    h.pos = h.route.front();
+    int hi = b.addGround(h);
+    for (int i = 0; i < 120 * 20; ++i) b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+    CHECK(length(b.ground()[hi].pos - Vec3{-2000, b.ground()[hi].pos.y, -2000}) < 2.0);   // still holding
+    CHECK(b.ground()[hi].pos.y - terrain().surfaceHeight(-2000, -2000) < 12.0);              // hovering low
+    for (int i = 0; i < 120 * 340; ++i) b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+    CHECK(b.ground()[ti].arrived());
+    CHECK(std::hypot(b.ground()[ti].pos.x - 3000, b.ground()[ti].pos.z - 3000) < 2.0);
+    CHECK(b.ground()[hi].arrived());
+}
+
+TEST(escort_target_is_hunted_first_and_armour_makes_it_survive_longer) {
+    Battle b(terrain());
+    Jet& p = b.createPlayer(AircraftId::F22);
+    p.fm->resetAirborne({-9000, 3000, -9000}, 0.0, 220.0, 0.8);
+    b.startScripted(1);
+    Jet& c17 = b.debugAddJet(Team::Blue, AircraftId::C17, {4000, 3000, 0}, 0.0, 170.0);
+    c17.kinematic = true;
+    c17.damageScale = 0.34;
+    c17.missiles = 0;
+    c17.rounds = 0;
+    Jet& red = b.debugAddJet(Team::Red, AircraftId::MiG29, {-1000, 3100, 0}, 0.0, 230.0);
+    red.aiPrefer = c17.id;
+    for (int i = 0; i < 120 * 4; ++i) b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+    CHECK(red.aiTarget == c17.id);   // the transport, although the player is a little closer by weight
+    // a single missile does not bring the C-17 down any more
+    double h0 = c17.health;
+    Missile m;
+    m.owner = red.id;
+    m.team = Team::Red;
+    m.targetJet = c17.id;
+    m.pos = c17.fm->state().pos - Vec3{60, 0, 0};
+    m.vel = Vec3{900, 0, 0};
+    b.debugAddMissile(m);
+    for (int i = 0; i < 30; ++i) b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{});
+    CHECK(c17.alive);
+    CHECK(c17.health < h0);
+    CHECK(c17.health > 50.0);
+}
+
+TEST(damaged_bandits_break_off_and_wingmen_hold_formation) {
+    Battle b(terrain());
+    Jet& p = b.createPlayer(AircraftId::F22);
+    p.fm->resetAirborne({0, 3500, 0}, 0.0, 230.0, 0.8);
+    b.startScripted(1);
+    Jet& wing = b.debugAddJet(Team::Blue, AircraftId::F16, {-1500, 3500, 800}, 0.0, 230.0);
+    wing.followId = p.id;
+    double far = 0;
+    for (int i = 0; i < 120 * 60; ++i) {
+        ControlInputs in;
+        in.throttleRate = p.fm->state().throttle < 0.8 ? 1.0 : 0.0;
+        b.update(FlightModel::kDt, in, PlayerCommands{});
+        if (i > 120 * 20) far = std::max(far, length(wing.fm->state().pos - p.fm->state().pos));
+    }
+    std::printf("    wingman stays within %.0f m of the lead\n", far);
+    CHECK(far < 1500.0);
+    Jet& red = b.debugAddJet(Team::Red, AircraftId::Su35, p.fm->state().pos + Vec3{3000, 0, 0}, kPi, 230.0);
+    red.health = 40.0;
+    bool broke = false;
+    for (int i = 0; i < 120 * 3; ++i) { b.update(FlightModel::kDt, ControlInputs{}, PlayerCommands{}); broke = broke || red.ai == AiState::Extend; }
+    CHECK(broke);
+}
+
 TEST(battle_roster_version_changes_when_jets_are_created_or_destroyed) {
     // the renderer keeps Jet* across a frame (smooth motion); a menu that rebuilds the battle
     // mid-frame (the HANGAR button) must be detectable, or the saved pointers dangle
