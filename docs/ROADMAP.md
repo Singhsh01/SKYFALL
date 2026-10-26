@@ -2,7 +2,24 @@
 
 Legend: ✅ implemented and exercised · 🟡 partial / in progress · ⬜ planned
 
-## v0.9 (this release)
+## v1.0 (this release)
+
+| Requirement | Status | Notes |
+|---|---|---|
+| Remove rings, obstacle courses and medal-style exercises from the Academy | ✅ | waypoints only |
+| 20 combat operations of 15-20 min | ✅ | estimates 16-20 min; the bot, flying fast, finishes in about 9-17 min |
+| Enemy waves, wingmen, AWACS picture calls | ✅ | |
+| C-17 escort, airlift, airdrop, resupply; convoy, rescue, airbase, fleet, troops defence | ✅ | asset loss fails the operation |
+| F/A-18E, Typhoon, C-17 | ✅ | C-17 in Free Flight |
+| Living airbases, more military and urban props | ✅ | |
+| Air-force-inspired and environment / demo paint schemes, markings, stencils | ✅ | 16 new, 40 total |
+| Smarter AI (strike, hunting helicopters, break-off, squadron tactics) | ✅ | |
+| Existing modes kept (campaign, arena, free flight) | ✅ | tests unchanged and passing |
+| 120 fps on the MacBook Air | 🟡 | not measured for v1.0; see BENCHMARKS.md |
+| Human play-testing of operation length and difficulty | ⬜ | bot-tested only |
+| Graphics brief (PBR, HDR, instancing / LOD, effects, adaptive rendering) | ⬜ | next |
+
+## v0.9
 
 | Requirement | Status | Notes |
 |---|---|---|

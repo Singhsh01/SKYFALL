@@ -1,5 +1,34 @@
 # Benchmarks
 
+## v1.0 (combat operations, new aircraft, living airbases, 40 paint schemes)
+
+Measured in the cloud container with Mesa's **software** rasteriser (`--bench 20 --size 640x360
+--quality 2`, High). Frame times here say nothing about a GPU; what carries over to the Mac is the
+CPU cost of the simulation and HUD and the draw-call / triangle load each scene submits.
+
+| Scene | Draw calls | Triangles | Simulation (CPU) | HUD (CPU) |
+|---|---|---|---|---|
+| Dogfight Arena | 190 (212 before v1.0) | 543k (460k) | 0.11 ms | 0.25 ms |
+| Mission 52 (carrier, rain) | 192 (187) | 288k (288k) | 0.02 ms | 0.57 ms |
+| Mission 14 | 243 (232) | 786k (803k) | 0.04 ms | 0.60 ms |
+| Operation 7 (C-17 escort, Erg Chebbi) | 246 | 860k | 0.02 ms | 0.72 ms |
+| Operation 3 (airbase defence, Glencoe, on the airfield) | 329 | 887k | 0.03 ms | 0.70 ms |
+
+Any operation can now be benchmarked with `--mode op01` … `--mode op20`.
+
+What changed the load: the arena's extra triangles are the new Hornet and Typhoon models; the
+operations add wingmen, the C-17, cargo and the asset units. The
+airfield in operation 3 is the busiest view in the game: the living airbase (C-17 unloading,
+forklift, tugs, fuel truck, taxiing and departing jets, helicopter circuit, rotating radars) is
+drawn object by object, which is why that scene has the most draw calls of those measured; it is
+culled by distance like the rest of the scenery. The paint markings are computed in the jet shader (no
+textures, no extra draw calls).
+
+**Not measured: frame rates on the MacBook Air** for v1.0 — no 120 fps figure is claimed. Run
+`./scripts/benchmark.sh` (or `./build/skyfall --bench 30 --mode op03`) on the Mac to get them;
+if the airfield scenes are the ones that miss the target, the next step is instancing the
+airbase vehicles into one draw call per mesh.
+
 ## v0.9: how to measure all presets
 
 ```bash

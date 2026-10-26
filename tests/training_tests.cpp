@@ -1239,17 +1239,14 @@ TEST(academy_progress_history_without_medals_or_locks) {
     Settings s2;
     s2.extra = s.extra;   // the settings file keeps these keys
     CHECK(academyRecord(s2, 1, f16).done);
-    // records of the ten-level academy carry over to the level that grew out of each
+    // records of the earlier academies are not carried over to the new operations, and stay untouched
     Settings old;
-    old.extra["academy_l05_a7"] = "2,81.0,3,950";    // old level 5 (aircraft control) -> new level 2
-    old.extra["academy_l03_a7"] = "1,66.0,2,1000";   // old 3 + 4 -> new level 4
-    old.extra["academy_l04_a7"] = "0,0.0,4,0";
-    AcademyRecord m2 = academyRecord(old, 2, 7), m4 = academyRecord(old, 4, 7);
-    CHECK(m2.done && std::fabs(m2.best - 81) < 0.6 && m2.attempts == 3);
-    CHECK(m4.done && std::fabs(m4.best - 66) < 0.6 && m4.attempts == 6);
-    CHECK(!academyRecord(old, 5, 7).done);   // new combat levels start fresh
-    recordAcademyAttempt(old, 2, 7);
-    CHECK(academyRecord(old, 2, 7).attempts == 4 && old.extra.count("academy_l05_a7"));   // the old key stays for older builds
+    old.extra["academy_l05_a7"] = "2,81.0,3,950";     // ten-level academy
+    old.extra["academy2_l03_a7"] = "1,66.0,2,1000";   // twenty-level ring courses
+    CHECK(!academyRecord(old, 2, 7).done && academyRecord(old, 2, 7).attempts == 0);
+    CHECK(!academyRecord(old, 3, 7).done);
+    recordAcademyAttempt(old, 3, 7);
+    CHECK(academyRecord(old, 3, 7).attempts == 1 && old.extra.count("academy2_l03_a7") && old.extra.count("academy_l05_a7"));
     // the debrief remark never mentions medals
     for (double t : {10.0, 65.0, 80.0, 95.0}) CHECK(std::string(trainingRemarkLine(t)).find("medal") == std::string::npos);
     // campaign progress is per location (the desert keeps the original record)

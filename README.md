@@ -25,6 +25,8 @@ copyrighted models, textures, sounds or code from commercial games.
 
 | | |
 |---|---|
+| ![Academy: twenty combat operations, operation area and asset route](docs/screenshots/academy_operations_menu.jpg) | ![Operation 7: escorting the C-17](docs/screenshots/ops_c17_escort.jpg) |
+| ![A wave inbound on the transport, AWACS on the radio](docs/screenshots/ops_wave_inbound.jpg) | ![Living airbase: a C-17 unloading, cargo, a fighter taxiing](docs/screenshots/airbase_life.jpg) |
 | ![Missile camera](docs/screenshots/missile_cam.jpg) | ![Hit camera](docs/screenshots/hit_cam.jpg) |
 | ![Crash replay](docs/screenshots/crash_replay.jpg) | ![Canyon](docs/screenshots/canyon.jpg) |
 | ![Cockpit](docs/screenshots/cockpit_air.jpg) | ![Radio briefing in the cockpit](docs/screenshots/briefing.jpg) |
@@ -63,9 +65,39 @@ In **VS Code** (`Terminal → Run Task…`): *Build (Release)*, *Build (Debug)*,
 *Web build*; `F5` debugs with CodeLLDB (or the C/C++ extension's lldb). The browser and terminal
 scripts (`build_mac.sh`, `run.sh`, `build_web.sh`) work as before.
 
+## New in v1.0
+
+* **Training Academy: twenty combat operations** (15-20 minutes each) replace the ring,
+  pillar and obstacle courses: Combat Scramble, Helicopter Hunt, Airbase Under Attack, Fighter
+  Interception, Carrier Combat Launch, Enemy Helicopter Assault, C-17 Escort, Military Outpost
+  Strike, Typhoon Engagement, Mountain Air Warfare, Logistics Airlift, Airfield Defense, Naval Air
+  Operations, Armored Convoy Support, Enemy Squadron Interception, Combat Search and Rescue, C-17
+  Emergency Resupply, Combined Air Combat, Large-Scale Airbase Assault and the Final Combat
+  Qualification. Enemy waves come from their bases and from two directions, a wingman flies with
+  you, AWACS calls the picture, and you protect real assets: a C-17 that takes off, airdrops or
+  lands and unloads, convoys on the roads, rescue helicopters, the airbase, the fleet and dug-in
+  troops. Lose the asset and the operation fails. Waypoints replace rings. See
+  [docs/TRAINING.md](docs/TRAINING.md).
+* **Smarter AI** — strike aircraft fire at ground assets, attack helicopters hunt armour,
+  damaged jets break off, squadrons bracket and crank, ground units now move and fire.
+* **New aircraft** — F/A-18E Super Hornet and Eurofighter Typhoon (flyable, also AI
+  aggressors) and the C-17 Globemaster III (Free Flight; four turbofans, animated cargo ramp).
+* **Living airbases** — a C-17 unloading with a forklift shuttling pallets, tugs and a fuel
+  truck at work, a fighter taxiing, pairs departing, a helicopter circuit, rotating radars, a fire
+  station, ammunition bunkers and helicopter shelters; towns get a hospital, warehouses, traffic
+  signals, road signs and roadside bushes.
+* **40 paint schemes** — 16 new: service schemes *inspired by* US Air Force, US Navy, Royal Air
+  Force, Luftwaffe, French, Indian and Brazilian air arms (generic insignia, fin flashes, fin and
+  nose numbers, walkway stencils, all drawn in the shader; not copies of official artwork),
+  digital desert, arctic digital, forest splinter, night stealth, tiger meet, ocean splinter and
+  two original demonstration schemes.
+* Free Flight, the 61-mission campaign and the Dogfight Arena are unchanged.
+
+![Air-force-inspired service schemes with generic markings](docs/screenshots/skins_service.jpg)
+
 ## New in v0.9
 
-* **Twenty-level Training Academy** — a carrier scramble off the catapult, handling and waypoint
+* **Twenty-level Training Academy** (replaced in v1.0 by the combat operations) — a carrier scramble off the catapult, handling and waypoint
   rings, mountains and terrain avoidance, low-altitude tactical flight, helicopter identification
   (own helicopters among the hostiles, IFF) and interception, a helicopter attack at an outpost,
   cannon and missile training with an armed bandit, one-on-one fights against the **F-16, Su-35,
@@ -376,12 +408,15 @@ Read more: [Architecture](docs/ARCHITECTURE.md) · [Physics](docs/PHYSICS.md) ·
 This is a prototype, not a certified simulator and not AAA art. Aircraft performance values are
 public rounded figures plus tuned illustrative aerodynamics; rotational dynamics use a
 documented rate-command approximation rather than a full moment model; terrain is fictional and
-procedural and fictional. Aircraft are original procedural meshes (not licensed models), so they
+procedural (or real elevation data on the real locations). Aircraft are original procedural meshes (not licensed models), so they
 are clean silhouettes rather than photoreal assets. OpenGL is deprecated on macOS; a Metal renderer
 is a roadmap item. The Computer
 Vision Laboratory is planned, not implemented yet. Academy and campaign-location limits (Everest,
-sea for levels 19-20, the missions and combinations the test bots do not complete) are listed in
-[docs/TRAINING.md](docs/TRAINING.md#known-limits).
+sea for the carrier operations 5, 13 and 20, the combinations the test bots do not complete) are
+listed in [docs/TRAINING.md](docs/TRAINING.md#known-limits). The operations' 15-20 minute lengths
+are design estimates checked by a test bot, not by timed human play; v1.0 frame rates on the
+MacBook Air have not been measured yet. Paint markings are generic designs inspired by real air
+arms, not their official insignia.
 
 ## License
 

@@ -10,32 +10,13 @@
 namespace sky {
 
 namespace {
-// v2 records (twenty levels): "done,best,attempts,seconds"
+// v3 records (the twenty combat operations): "done,best,attempts,seconds". The operations are new
+// sorties, so records of the earlier academies (keys academy2_l.. and academy_l..) are not carried
+// over; they stay in the settings file untouched for older builds.
 std::string academyKey(int level, int aircraft) {
     char b[48];
-    std::snprintf(b, sizeof b, "academy2_l%02d_a%d", level, aircraft);
+    std::snprintf(b, sizeof b, "academy3_op%02d_a%d", level, aircraft);
     return b;
-}
-// v1 records (the ten-level academy): "medal,best,attempts,seconds", kept untouched for older builds
-std::string academyKeyV1(int level, int aircraft) {
-    char b[48];
-    std::snprintf(b, sizeof b, "academy_l%02d_a%d", level, aircraft);
-    return b;
-}
-/// The old levels each new level grew out of (scramble 1, control 5, mountains 2, low level 3 and
-/// obstacles 4, high speed 7, terrain following 6, refuelling 8, long distance 9, final 10).
-std::vector<int> oldLevelsFor(int level) {
-    switch (level) {
-        case 1: return {1};
-        case 2: return {5};
-        case 3: return {2};
-        case 4: return {3, 4};
-        case 15: return {7};
-        case 16: return {6};
-        case 18: return {8, 9};
-        case 20: return {10};
-        default: return {};
-    }
 }
 std::string campKey(const std::string& loc) { return "campaign_" + loc; }
 }  // namespace
@@ -48,17 +29,6 @@ AcademyRecord academyRecord(const Settings& s, int level, int aircraft) {
         std::sscanf(it->second.c_str(), "%d,%lf,%d,%lf", &done, &r.best, &r.attempts, &r.seconds);
         r.done = done != 0;
         return r;
-    }
-    // carried over from the ten-level academy
-    for (int old : oldLevelsFor(level)) {
-        auto o = s.extra.find(academyKeyV1(old, aircraft));
-        if (o == s.extra.end()) continue;
-        int medal = 0, attempts = 0;
-        double best = 0, sec = 0;
-        std::sscanf(o->second.c_str(), "%d,%lf,%d,%lf", &medal, &best, &attempts, &sec);
-        r.attempts += attempts;
-        if (best > r.best) { r.best = best; r.seconds = sec; }
-        if (medal > 0 || best > 0) r.done = true;
     }
     return r;
 }

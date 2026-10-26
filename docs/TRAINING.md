@@ -1,105 +1,93 @@
-# Training Academy and the Campaign on Every Location
+# Training Academy: Twenty Combat Operations, and the Campaign on Every Location
 
-The **Training Academy** has twenty courses with a live instructor: flying first, then
-helicopters and weapons, one-on-one air combat against the F-16, Su-35, Su-57 and F-35, mixed
-missions and a carrier finale. The **61-mission campaign** flies over any world location (with
-your choice of aircraft and paint scheme); in the Skyfall Desert it is exactly the original.
+The **Training Academy** is a set of twenty **combat operations** of 15-20 minutes each. The
+ring, pillar and medal-style exercises of earlier versions are gone: every operation is a sortie
+with a job to do (defend a base, escort a C-17, protect a convoy or a rescue, hold a fleet, beat
+an enemy squadron) against enemy waves that come from their own bases, with a wingman on your
+wing and an AWACS controller calling the picture. The **61-mission campaign**, Free Flight and
+the Dogfight Arena are unchanged and fly over any world location.
 
 ## Where to find them
 
-* Title → **TRAINING ACADEMY**: all twenty levels in two columns (all open, a green dot marks a
-  completed level), location, aircraft, handling mode, optional corridor markers, level details,
-  a route preview drawn on the map of the loaded location, your record for the chosen aircraft
-  (completed or not, best score, attempts, best time) and which aircraft have completed the level,
-  then **LAUNCH**.
-* Title → **CAMPAIGN**: the 61-mission grid of earlier releases, with **LOCATION**, **AIRCRAFT**
-  and **PAINT** pickers below it (arrow keys, Enter, or click the left / right half). Completed
-  missions are ticked per location.
+* Title → **TRAINING ACADEMY**: the twenty operations in two columns (all open, a green dot marks
+  a completed one), location, aircraft (the ten fighters; the C-17 is flown in Free Flight),
+  handling mode, the operation's details (about how many minutes, how many waves and waypoints,
+  wingmen, the suggested aircraft), a map of the operation area with the routes of the
+  protected assets, your record for the chosen aircraft, then **LAUNCH**.
+* Title → **CAMPAIGN**: the 61-mission grid with **LOCATION**, **AIRCRAFT** and **PAINT** pickers.
+* Title → **HANGAR**: 11 aircraft and 40 paint schemes.
 
-## The twenty levels
+## The twenty operations
 
-| # | Level | Recommended location | Content |
-|---|---|---|---|
-| 1 | Carrier Scramble & Safe Takeoff | Skyfall Desert | catapult launch from the carrier (a runway cold start on maps without sea), climb-out, navigation circuit, runway landing |
-| 2 | Aircraft Handling & Waypoint Rings | Mount Fuji | level / climbing / descending turns, high G, loop, roll, recovery, then ring gates |
-| 3 | Mountain Navigation & Terrain Avoidance | Matterhorn | valley navigation with speed and altitude discipline |
-| 4 | Low-Altitude Tactical Flight | Guilin | low-level valleys under a ceiling, pillar slalom, arches |
-| 5 | Helicopter Identification & Interception | Geirangerfjord | four helicopters in the valleys: two hostile (red), two of ours (green IFF, never lockable) |
-| 6 | Helicopter Attack at a Military Outpost | Wadi Rum | two armed attack helicopters over a forward outpost, then its armour (ATS missiles) |
-| 7 | Cannon Targeting & Precision Engagement | Erg Chebbi | guns only: three target drones on a racetrack |
-| 8 | Missile Locking & Air-to-Air Combat | Rio de Janeiro | missiles only on four drones, then a fight with an armed bandit |
-| 9 | F-16 Interception | Grand Canyon | one-on-one against an armed F-16 (veteran) |
-| 10 | Su-35 Dogfight Training | Aconcagua | one-on-one against an armed Su-35 (veteran) |
-| 11 | Advanced Su-57 Interception | Torres del Paine | one-on-one against an Su-57 flown by an ace |
-| 12 | F-35 Tactical Engagement | Glen Coe | one-on-one against an F-35 flown by an ace |
-| 13 | Multiple Helicopter Threats | Musandam (at dusk) | six hostile helicopters, two of them armed, with one of ours among them |
-| 14 | Combined Air & Ground Attack | Mount Fuji | two fighters launch in formation from their base to cover an outpost, then its armour and anti-aircraft guns |
-| 15 | High-Speed Mountain Combat | Grand Canyon | high-speed canyon run, then two bandits |
-| 16 | Enemy Formation Interception | Geirangerfjord | terrain following, then a three-ship formation launching from its base (it breaks and turns in at 9 km) |
-| 17 | Advanced Defensive Flying | Rio de Janeiro (at dusk) | survive 90 s with two attackers behind you (flares, breaks), then shoot them down |
-| 18 | Multi-Target Combat & Refuelling | Torres del Paine | low-level route, strike on an outpost with a fighter, attack helicopters and ground targets, then the tanker |
-| 19 | Carrier Strike Mission & Recovery | Rio de Janeiro | catapult launch, sink three armed patrol boats near the fleet, then a carrier trap |
-| 20 | Final Advanced Combat Qualification | Musandam | valleys, pillars and arches, bandits launching from their base, the tanker, a carrier trap |
+| # | Operation | Recommended location | Length | What happens |
+|---|---|---|---|---|
+| 1 | Combat Scramble | Skyfall Desert | about 16 min | Scramble from the airbase with a wingman and intercept the raids crossing into the region: fighters, then helicopters, then a second pair of fighters. |
+| 2 | Helicopter Hunt | Wadi Rum | about 16 min | Hostile helicopters are working around an enemy outpost. Identify ours, hunt theirs, and deal with the fighter escort that comes for you. |
+| 3 | Airbase Under Attack | Glencoe | about 17 min | The airbase is under attack. Scramble and defend the hangars, the parked jets and the fuel farm against helicopters and strike aircraft. |
+| 4 | Fighter Interception | Grand Canyon | about 17 min | Hold the line against fighters approaching allied airspace: a pair of F-16 aggressors, a pair of Su-35s, then a coordinated four-ship from two directions. |
+| 5 | Carrier Combat Launch | Rio de Janeiro | about 17 min | Catapult off the carrier, defend the fleet against fighters and strike aircraft, then trap back aboard. Suggested: F/A-18E Super Hornet. |
+| 6 | Enemy Helicopter Assault | Guilin | about 16 min | Our armour is dug in at a forward position. Stop three waves of attack helicopters from overrunning it. |
+| 7 | C-17 Escort Operation | Erg Chebbi | about 16 min | Join a C-17 carrying critical supplies to the base and protect it all the way to the ground through two waves of fighters. |
+| 8 | Military Outpost Strike | Aconcagua | about 18 min | Ingress low under the radar, destroy an enemy outpost, survive the interceptors they scramble, then hit the second target. |
+| 9 | Typhoon Engagement | Mount Fuji | about 16 min | A demanding air combat against Eurofighter Typhoon aggressor formations: a pair, an ace pair, then a three-ship. |
+| 10 | Mountain Air Warfare | Matterhorn | about 16 min | Fight through the mountains: fighters low in the valleys, helicopters in the passes, then a pair from above. No rings, only the terrain. |
+| 11 | Logistics Airlift | Torres del Paine | about 18 min | Escort a C-17 from the base to a forward position: protect the climb-out, the airdrop and the return to the runway. |
+| 12 | Airfield Defense | Mount Fuji | about 18 min | Waves of fighters and strike aircraft are coming for the airfield. Defend the parked aircraft, hangars and fuel farm. |
+| 13 | Naval Air Operations | Musandam | about 18 min | Carrier operations: catapult launch, defensive patrol over the fleet against helicopters and strike aircraft, and carrier recovery. Best flown in the F/A-18. Suggested: F/A-18E Super Hornet. |
+| 14 | Armored Convoy Support | Skyfall Desert | about 18 min | A supply convoy is driving to the front. Escort it along the road through helicopter and strike attacks. |
+| 15 | Enemy Squadron Interception | Torres del Paine | about 17 min | Coordinated Su-35 and Su-57 formations with squadron tactics: bracketing, high cover and cranking. You have two wingmen. Suggested: F-22 Raptor. |
+| 16 | Combat Search and Rescue | Geirangerfjord | about 17 min | Protect the rescue helicopters flying to a downed pilot, on the pick-up and all the way home. |
+| 17 | C-17 Emergency Resupply | Wadi Rum | about 18 min | The airfield is contested. Clear the attack helicopters, then escort a C-17 into the base under fire and secure its landing. |
+| 18 | Combined Air Combat | Guilin | about 18 min | Support our ground forces in contact: destroy the enemy armour while fighting off their helicopters and fighters. |
+| 19 | Large-Scale Airbase Assault | Erg Chebbi | about 20 min | A multi-stage assault on an enemy air base: suppress the guns, beat the interceptors, destroy the hangars and parked aircraft, refuel and return. |
+| 20 | Final Combat Qualification | Musandam | about 20 min | Everything at once: carrier launch, fighter waves, a protected C-17 resupply, helicopter attacks and an ace pair, then carrier recovery. |
 
-Every level starts with a radio briefing (the captain), then aircraft- and mode-specific advice
-from the instructor; it ends with a debrief card (category scores including COMBAT, total score,
-kills, a new-best flag) and a spoken remark on the score. There are **no medals, rewards or
-locks**. Any level can be flown on any downloaded location except: levels 19 and 20 need open sea
-(Skyfall Desert, Musandam, Rio de Janeiro), and **Everest is not offered in the Academy**.
+Every operation starts with a radio briefing, then the operation's opening calls; it ends with
+a debrief card (category scores including COMBAT, total score, kills, a new-best flag) and a
+spoken remark on the score. There are **no medals, rewards or locks**. Any operation can be
+flown on any downloaded location except Everest; operations 5, 13 and 20 start and end on the
+carrier and need open sea (Skyfall Desert, Musandam, Rio de Janeiro).
 
-### How the combat exercises work
+### How an operation works
 
-* A combat exercise is a COMBAT section (`SectionKind::Engage`, `Engagement` in `Training.hpp`).
-  Bandits are spawned 7.5 km ahead of you when the section begins (in the defensive exercise,
-  2.6 km behind you), at a safe height above the terrain; target drones fly a fixed racetrack.
-  Helicopters fly circles 60-150 m above the ground around the target area (they climb ahead of
-  rising ground), attack helicopters fire their cannon inside 1.5 km; ground targets stand at
-  the area (one of the map's forward operating bases, see the world detail), ships sail circles.
-* Bandits "from a base" (levels 14, 16, 20) take off in echelon from the farthest military site
-  within 16 km and fly at you in formation; they break and engage at 9 km (or as soon as one is
-  hit). Own helicopters (levels 5 and 13) fly among the hostiles: the IFF marks them green on the
-  HUD and minimap and no weapon locks or hits them, so the job is to tell them apart.
-* Levels 1 and 19 start on the carrier's catapult (afterburner, brake off, the shot) on maps with
-  open sea; level 1 falls back to a runway cold start elsewhere.
-* Helicopters are new flying targets (`GroundKind::Helicopter`): the air-to-air missile locks them
-  like an aircraft (the air-to-surface missile and the gun work too); shot down, they fall and
-  spin to the ground.
-* The exercise ends when every target is destroyed (or, defensively, when the time is survived).
-  Weapons are reloaded to a full load at the start; gunnery is guns only, missile employment is
-  missiles only; during a long fight the range slowly resupplies one missile of each kind and a
-  third of a gun belt every 15 s, and after the fight it tops your tanks up to 45 % for the way home.
-* Shot down: the replay, then **R** retries the exercise from its checkpoint with fresh enemies.
-* After a fight the route home is rejoined at the gate that makes the shortest way back (at least
-  3 km away, with room to descend). Anywhere on a route, circling near a gate for 45 s without
-  getting through it moves the route on (counted as a miss), so nobody is trapped at one gate.
-* The instructor coaches the fight: splash calls and targets left, missile and bandit-on-your-six
-  warnings, too low, out of missiles, overshooting a helicopter, the switch to the ATS missile.
+* **Waypoints, not rings.** Transit legs follow terrain-aware waypoints (route through the
+  valleys, heights limited for climbs and dives, the capture radius grows with height, no
+  waypoint behind a ridge from the previous one). They are beacons and HUD diamonds, not rings.
+* **Waves.** Each combat section is a wave (`Engagement` in `Training.hpp`): fighters, strike
+  aircraft, attack and transport helicopters, ground units and ships, at rookie, veteran or ace
+  skill. Waves aimed at a protected asset spawn 8-14 km out on the side away from you, so the
+  intercept has to be flown; "split" waves come from two directions at once; others take off in
+  formation from the nearest enemy base. AWACS calls each wave (bearing, range, type, count).
+* **Protected assets** (`Asset` in `Training.hpp`, flown in `TrainingOps.cpp`):
+  * **Transport** — a C-17 that takes off, climbs, flies its route, airdrops cargo pallets on
+    parachutes or lands, rolls out and opens its ramp. It has a hull figure on the HUD; if it is
+    lost the operation fails.
+  * **Convoy** — trucks and armour driving a real road; **Rescue** — helicopters flying to a
+    downed pilot, holding for the pick-up and flying home; **Base** — hangars, parked jets and
+    the fuel farm on the airfield; **Fleet** — the carrier group; **Troops** — armour dug in at a
+    forward position. Each has a loss limit: lose more than that and the operation fails with a
+    reason on the debrief.
+  * Our ships, armour and AAA fire back at close range, so a defended asset is not helpless, but
+    without you it does not survive the waves.
+* **The enemy AI** (`smartAi` in `Combat.cpp`): strike aircraft fire air-to-surface missiles at
+  the asset, attack helicopters hunt ground units, damaged jets break off and run, squadrons
+  bracket and crank, and the scripted battle moves and fires the ground units.
+* **Wingmen** follow you through the transit legs, fight in the waves and call their kills; in
+  operation 15 you have two.
+* Between waves your health is reset and weapons are topped up; after the last wave the route
+  home is rejoined at the most sensible waypoint, and the operation ends with a runway landing
+  or a carrier trap.
+* **Shot down:** the replay, then **R** retries from the start of the section, with the
+  protected assets restored to where they were at that checkpoint.
 
-## How a course is built (`src/mission/Training.cpp`)
+## How an operation is built (`src/mission/Training.cpp`)
 
-Courses are generated from the location's terrain, deterministically (same location + level =
-same course):
-
-* **Routes** follow the valleys (A* over a cost grid, Chaikin smoothing, a minimum turn radius
-  per route style). A leg starts with a constant-radius (Dubins) turn onto the path; several join
-  points and radii are compared and the one with the least extra distance is used, so legs do not
-  begin with loops.
-* **Gate heights** follow the terrain with climb (9°) and dive (8°) limits; every corner is checked
-  against ~4 g at the slow end of the section's speed band and eased if needed.
-* **Obstacles** are real geometry with collision (pillars, natural arches, a deck bridge, radio
-  masts, a military compound, the railway viaduct). Gates that pass near an obstacle are first
-  moved sideways, then lifted over it. The approach to an obstacle run arrives low.
-* **Formation** (level 9): the lead orbits over the lowest ground in reach, appears on its loop
-  and holds its speed closely; you join right echelon and hold it for 60 s.
-* **Tanker** (levels 8-10): the orbit is placed over the lowest ground (a tighter orbit on a high
-  map); fuel is never reduced artificially, the refuel is guided (UP / DOWN / LEFT / RIGHT / ADD
-  POWER) and needs 25 s in contact.
-* **Landing**: the runway approach is chosen from straight-in, circling (base leg + 90° turn) and
-  steep straight-in, with a two-segment glide path that clears the terrain; a go-around rejoins
-  the inbound route. The runway site on real maps is chosen for flat ground **and** a usable
-  approach. Carrier approaches fly the ball (meatball and line-up cues), with four wires 12 m apart.
-* **Duration**: about 17 minutes by estimate (every course is between 15.5 and 20 minutes;
-  shorter variants are used only when the full course would run long).
+Operations are generated from the location's terrain, deterministically (same location +
+operation = same layout): the home base is the map's runway (or the carrier), the asset routes
+are cleared against the terrain and rounded into flyable curves, the C-17's approach is chosen
+for a usable glide path, convoys use the map's roads, and the enemy bases are the map's own
+military sites. The typical length is 15-20 minutes for a human-paced flight; the menu shows
+the estimate.
 
 ## Instructor, voice and HUD
 
@@ -111,22 +99,22 @@ Every line is fixed text from a finite vocabulary, so all of it is in the neural
 (`assets/voice`, Kokoro-82M); captions are always shown, and the system voice reads any line that
 has no recording. Urgent calls interrupt; chatter only plays into silence.
 
-In flight: the next gates are rings in the world (current gate bright, the next ones dimmer;
-obstacle gates blue, approach rings amber), HUD markers with distance and gate number, the gate
-height window and speed band, optional corridor beads (Academy menu toggle), the section list with
-progress, and approach guidance.
+In flight: waypoint beacons and HUD diamonds with distance, the section list with progress,
+TARGETS k/n during a wave, asset markers (the C-17 with its hull figure, convoys, rescue
+helicopters, the fleet), friendly units within 6 km, and approach guidance. The voice lines
+include AWACS picture calls and the wingman's calls (`trainingOpsLines()`).
 
 ## Scoring, retries, progress (`src/mission/Progress.cpp`)
 
-Categories (0-100, only those the level uses): waypoint accuracy, manoeuvring, altitude / speed
-discipline, terrain clearance, stability / control, refuelling, landing and combat (damage taken
-and time over the estimate). There are no medals and no locks: all twenty levels are open. A crash
+Categories (0-100, only those the operation uses): waypoint accuracy, manoeuvring, altitude /
+speed discipline, terrain clearance, stability / control, refuelling, landing and combat (the
+largest weight: targets destroyed, assets protected, damage taken). There are no medals and no
+locks: all twenty operations are open. A crash
 shows the replay and then **R retries from the last checkpoint** (the start of the section, with
-the aircraft state saved there). History is kept per level and per aircraft: completed (yes / no),
-best score, attempts and best time. Records of the earlier ten-level academy are carried over to
-the level that grew out of each one (old 1 → 1, 5 → 2, 2 → 3, 3 and 4 → 4, 7 → 15, 6 → 16,
-8 and 9 → 18, 10 → 20); the old keys stay in the settings file untouched, so older builds still
-read them.
+the aircraft state and the protected assets saved there). History is kept per operation and per
+aircraft: completed (yes / no), best score, attempts and best time. The operations are new
+sorties, so records of the earlier ring-course academies are not carried over; their keys stay in
+the settings file untouched, so older builds still read them.
 
 ## The campaign on every location (`src/mission/CampaignWorld.cpp`)
 
@@ -157,24 +145,27 @@ maps are 32 x 32 km, so a mission keeps its layout and is fitted to the location
 
 ## Tests (`tests/training_tests.cpp`, `skyfall_training_tests`)
 
-* `courses_are_valid_on_every_location` — all 20 levels × 14 locations (levels 19 and 20 on the
-  three sea locations): builds, 15.5-20 min, on the map, ≥ 30 m above the ground, ≤ 4.5 g corners,
-  glide limits, no gate cut by an obstacle, tanker / formation / carrier present where expected,
-  every combat level has its engagements with targets and an area on the map.
+* `courses_are_valid_on_every_location` — all 20 operations × 14 locations (280 layouts): builds,
+  no ring or obstacle-course sections left, waypoints on the map and at least 30 m above the
+  ground, at least three waves each with targets and an area on the map, the right assets per
+  operation (C-17, base, fleet or base, troops, convoy, rescue), wingmen where expected, the
+  carrier at sea for the carrier operations, the C-17's path long enough with take-off, airdrop
+  and touchdown in order and its ground roll on the runway.
 * `courses_are_deterministic`.
 * `bot_flies_every_level_with_every_aircraft_in_every_mode` — an autopilot bot flies the real
-  flight model (no teleports) through all 20 levels × 8 aircraft × 3 handling modes on the
-  recommended locations: takeoff, gates, manoeuvres, formation, combat (it hunts every target with
-  the permitted weapons against the real AI, retrying from the checkpoint when shot down, as a
-  player would with R), refuelling, runway landing or carrier trap. It must destroy every target
-  and land (or trap) without running the tanks dry. `SKY_LEVELS=a-b` runs a range of levels.
+  flight model (no teleports) through all 20 operations × 10 fighters × 3 handling modes on the
+  recommended locations: takeoff or catapult, waypoints, joining and escorting the asset, every
+  wave against the real AI (hunting the targets that threaten the asset first, retrying from the
+  checkpoint when shot down, as a player would with R), the way home and the landing or trap.
+  It must destroy every target, keep the asset alive and land. `SKY_LEVELS=a-b` runs a range.
 * `every_training_radio_call_is_in_the_voice_vocabulary` — every call heard in 40 real flights is
   in the voice pack's line list.
-* `academy_progress_history_without_medals_or_locks` — all levels open, completion, best score,
-  per-aircraft history, the carry-over of the ten-level records, no medal words in the remarks.
+* `academy_progress_history_without_medals_or_locks` — all operations open, completion, best
+  score, per-aircraft history, earlier academies' records not carried over (and left untouched),
+  no medal words in the remarks.
 * `world_detail_is_populated_on_every_location` — the army compound, forward bases, traffic and
   lights on every map; nothing on water or the runway; no tall prop in the path between any two
-  consecutive Academy gates.
+  consecutive Academy waypoints.
 * `campaign_is_laid_out_on_every_location` — all 61 missions on all 14 locations (812 mission
   layouts): targets on suitable ground / water, waves, start and tanker clear of the terrain and
   on the map, the carrier on open water, the landing on the runway, every objective group
@@ -187,10 +178,13 @@ maps are 32 x 32 km, so a mission keeps its layout and is fitted to the location
 * Debug tools: `course_report`, `course_dump` (`LOC=`, `LV=`, `ALL=1`), `bot_flies_one_course`
   (`LOC LV AC MODE`, `TRACE=<section kind>`, `SECT=1`, `RADIO=1`), `bot_sweep_over_every_location`
   (`SKY_SWEEP=<aircraft>,<mode>`).
-* `skyfall --capture <dir>` with `SKYFALL_SET=flow` drives the real game loop through the Academy,
+* `skyfall --capture <dir>` with `SKYFALL_SET=flow` drives the real game loop through the Academy
+  (operation 7's C-17 flying and the wingman joining, operation 3's airbase installations,
+  operation 2's helicopters, the carrier operations at sea),
   a crash and checkpoint retry, completion and progress, the campaign over Guilin, Musandam
   (carrier) and the Matterhorn (airborne start), and location switches;
-  `SKYFALL_SET=academy` captures the new screens.
+  `SKYFALL_SET=ops` and `SKYFALL_SET=airbase` capture the operations and the living airbase,
+  `SKYFALL_SET=skins` the paint schemes (`SKYFALL_JETS`, `SKYFALL_SKIN_FROM`, `SKYFALL_SKIN_TOP`).
 
 ## Known limits
 

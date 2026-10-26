@@ -624,8 +624,16 @@ void Game::drawLocations() {
 }
 
 bool Game::startModeFromString(const std::string& m) {
-    // "arena", "m01".."m03" or "c04".."c40" (any mission number with either prefix)
+    // "arena", "m01".."m03" or "c04".."c40" (any mission number with either prefix),
+    // "op01".."op20" for the Academy combat operations
     if (m == "arena") { startArena(false); return true; }
+    if (m.size() >= 3 && m.compare(0, 2, "op") == 0) {
+        int n = std::atoi(m.c_str() + 2);
+        if (n < 1 || n > kTrainingLevels) return false;
+        startTraining(n);
+        if (!switchTo_.empty()) frame(0.0, false);   // load the operation's location, then start it
+        return screen_ == Screen::Playing && mode_ == GameMode::Training;
+    }
     if (m.size() >= 2 && (m[0] == 'm' || m[0] == 'c')) {
         int n = std::atoi(m.c_str() + 1);
         if (n >= 1 && n <= kCampaignMissions) { startMission(n); return true; }
