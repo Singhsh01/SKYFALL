@@ -62,6 +62,7 @@ bool slider(MenuNav& nav, int idx, Rectangle r, const std::string& label, double
     DrawCircleV({track.x + track.width * static_cast<float>(t), track.y + track.height / 2}, 8 * s, WHITE);
     char buf[32];
     if (percent) std::snprintf(buf, sizeof buf, "%d%%", static_cast<int>(std::round(t * 100)));
+    else if (hi - lo < 5.0) std::snprintf(buf, sizeof buf, "%.1fx", value);   // multipliers
     else std::snprintf(buf, sizeof buf, "%.0f", value);
     text(buf, r.x + r.width - 14 * s, r.y + r.height / 2 - 9 * s, 17 * s, WHITE, Align::Right);
     bool changed = false;

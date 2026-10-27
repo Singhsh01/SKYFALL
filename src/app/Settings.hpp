@@ -43,6 +43,12 @@ struct Settings {
     bool bloom = true;
     bool autoExposure = true;   // eye adaptation around the time-of-day exposure
     double cameraShake = 0.6;   // 0..1 motion comfort
+    // third-person camera (the default view in flight)
+    int defaultCamera = 1;            // 1 chase (default), 0 cockpit
+    double chaseDistance = 1.0;       // x the aircraft's own chase distance (0.6 .. 2.2)
+    double chaseHeight = 1.0;         // x its height above the flight path (0.2 .. 2.5)
+    double chaseFov = 0.0;            // degrees added to the field of view in chase (-10 .. +15)
+    bool lookRecentre = true;         // free look drifts back behind the aircraft after a moment
     bool gEffects = true;       // blackout / redout vignette
     double uiScale = 1.0;
     double hudPanelScale = 0.55;    // size of the non-critical HUD panels (1.0 = the earlier, larger panels)

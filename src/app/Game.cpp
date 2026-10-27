@@ -733,7 +733,7 @@ void Game::startMission(int n) {
         if (d.carrier) p.fm->resetOnCatapult();
         else p.fm->resetAirborne({d.startX, d.startAlt, d.startZ}, campaignStartHeading(d), d.startSpeed, 0.85);
         mission_ = buildCampaignMission(d);
-        camMode_ = CameraMode::Chase;
+        camMode_ = gameplayCamera();
         if (d.startFuel >= 0) p.fm->mutableState().fuelKg = d.startFuel * p.fm->profile().fuelMassKg;
         director_.begin(d, battle_);           // targets, allies (player must already be placed)
         director_.update(*mission_, battle_);  // waves owned by the first objective
@@ -741,7 +741,7 @@ void Game::startMission(int n) {
         double off = campVariant_.climbOffset;
         p.fm->resetAirborne({rw.center.x + 2000.0, 1250.0 + off, rw.center.z}, 0.0, 200.0, 0.62);
         mission_ = makeMission02(off);
-        camMode_ = CameraMode::Chase;
+        camMode_ = gameplayCamera();
     } else if (n == 3) {
         Mission03Approach ap = mission03Approach(terrain_);
         Vec3 th = landingThreshold(rw, ap.dir);
@@ -750,11 +750,11 @@ void Game::startMission(int n) {
         p.fm->mutableState().q = Quat::fromEuler(hdg, 2.0 * kDeg, 0.0);
         p.fm->mutableState().vel = Quat::fromEuler(hdg, -3.0 * kDeg, 0.0).forward() * 95.0;
         mission_ = makeMission03(ap.dir);
-        camMode_ = CameraMode::Cockpit;
+        camMode_ = gameplayCamera();
     } else {
         p.fm->resetOnRunway(false);
         mission_ = makeMission01();
-        camMode_ = CameraMode::Cockpit;
+        camMode_ = gameplayCamera();
     }
     missionDone_ = false;
     voicedStep_ = 0;
@@ -789,10 +789,10 @@ void Game::queueRadio(Speaker who, const std::string& text, bool front) {
 }
 
 void Game::queueBriefing(int missionNo) {
-    // the pilot is already in the cockpit; operations briefs over the radio, in short calls
+    // the pilot is already strapped in; operations briefs over the radio, in short calls
     Briefing br = makeBriefing(missionNo, missionNo > 0 ? &campVariant_ : nullptr);
     for (auto it = br.parts.rbegin(); it != br.parts.rend(); ++it) queueRadio(Speaker::Captain, *it, true);
-    camMode_ = CameraMode::Cockpit;
+    camMode_ = gameplayCamera();
     chaseInit_ = false;
     radioNextAt_ = time_ + 1.2;   // a moment to settle in before the first call
 }
@@ -1112,7 +1112,11 @@ void Game::updatePlaying(double dt) {
     if (in.pause) { screen_ = Screen::Paused; nav_.focus = 0; audio_.setPaused(true); pauseJustOpened_ = true; return; }
     if (replayActive_) { updateReplay(dt); return; }
     if (in.help) showHelp_ = !showHelp_;
-    if (in.camera) { camMode_ = nextCamera(camMode_); chaseInit_ = false; headYaw_ = headPitch_ = 0; }
+    if (in.camera) {
+        camFromPos_ = cam_.position; camFromTarget_ = cam_.target; camFromUp_ = cam_.up;
+        camBlend_ = 0.0;   // glide into the next view instead of cutting
+        camMode_ = nextCamera(camMode_); chaseInit_ = false; headYaw_ = headPitch_ = 0;
+    }
     if (in.reset) {
         if (mode_ == GameMode::Training) {
             if (trainingDone_) startTraining(trainingLevel_);   // fly the level again
@@ -1370,7 +1374,12 @@ void Game::updateCamera(double dt) {
     }
     switch (camMode_) {
         case CameraMode::Cockpit: {
-            if (in.looking) { headYaw_ += in.lookYaw; headPitch_ += in.lookPitch; }
+            if (in.lookBehind && screen_ == Screen::Playing) {   // over the shoulder, towards the tail
+                double side = headYaw_ < 0 ? -1.0 : 1.0;
+                headYaw_ += (2.55 * side - headYaw_) * (1.0 - std::exp(-dt * 10.0));
+                headPitch_ += (0.15 - headPitch_) * (1.0 - std::exp(-dt * 10.0));
+            } else if (in.lookReset) { headYaw_ = headPitch_ = 0; }
+            else if (in.looking) { headYaw_ += in.lookYaw; headPitch_ += in.lookPitch; }
             else { headYaw_ *= std::exp(-dt * 2.0); headPitch_ *= std::exp(-dt * 2.0); }
             headYaw_ = std::clamp(headYaw_, -2.6, 2.6);
             headPitch_ = std::clamp(headPitch_, -0.6, 1.2);
@@ -1388,31 +1397,43 @@ void Game::updateCamera(double dt) {
             break;
         }
         case CameraMode::Chase: {
-            if (!chaseInit_) { chaseQ_ = s.q; chaseInit_ = true; }
+            if (!chaseInit_) { chaseQ_ = s.q; chaseInit_ = true; chaseRig_.reset(); }
             double k = 1.0 - std::exp(-dt * 7.0);
             chaseQ_ = slerp(chaseQ_, s.q, k);
-            if (in.looking) { orbitYaw_ += in.lookYaw; orbitPitch_ = std::clamp(orbitPitch_ + in.lookPitch, -0.5, 1.0); }
+            // free look around the aircraft (mouse drag, right stick, J/L/I/K), V / right-stick
+            // click looks back, Z / left-stick click snaps behind: none of it touches the controls
+            ChaseLookInput li;
+            li.looking = in.looking; li.yaw = in.lookYaw; li.pitch = in.lookPitch;
+            li.behind = in.lookBehind && screen_ == Screen::Playing;
+            li.reset = in.lookReset;
+            chaseRig_.input(dt, li, settings_.lookRecentre);
             // Battlefield-style: close behind and slightly above, rolling with the jet; the camera
             // drops back as the jet surges forward and closes in when it brakes
-            double dist = prof.chaseDistance * 0.95 * zoom_ * (1.0 + std::clamp(accelSmooth_ / 90.0, -0.12, 0.16) * comfort);
-            double height = dist * 0.2;
+            double dist = prof.chaseDistance * 0.95 * zoom_ * settings_.chaseDistance *
+                          (1.0 + std::clamp(accelSmooth_ / 90.0, -0.12, 0.16) * comfort);
+            double height = dist * 0.2 * settings_.chaseHeight;
             Quat q = chaseQ_;
             if (s.onGround) {
                 Euler e = toEuler(s.q);
                 q = Quat::fromEuler(e.heading, 0, 0);
                 dist *= 1.15; height *= 1.3;
             }
-            Vec3 back = q.forward() * -dist + q.up() * height;
-            Vec3 pos = s.pos + back;
-            double gy = terrain_.surfaceHeight(pos.x, pos.z) + 2.5;
-            if (terrain_.onRunway(pos.x, pos.z, 50)) gy = std::max(gy, terrain_.runway().center.y + 2.5);
-            pos.y = std::max(pos.y, gy);
-            cam_.position = Vector3Add(toRl(pos), Vector3Scale(jitter, 0.12f));
-            cam_.target = toRl(s.pos + q.forward() * 45.0 + q.up() * 4.2);
-            Vec3 up = s.onGround ? Vec3{0, 1, 0} : normalize(Vec3{0, 1, 0} * 0.05 + q.up() * 0.95);
+            const RunwayInfo& rwC = terrain_.runway();
+            auto ground = [&](double x, double z) {
+                double gy = terrain_.surfaceHeight(x, z);
+                if (terrain_.onRunway(x, z, 50)) gy = std::max(gy, rwC.center.y);
+                return gy;
+            };
+            ChaseView v = chaseRig_.solve(dt, s.pos, q, dist, height, ground, 2.5);
+            cam_.position = Vector3Add(toRl(v.pos), Vector3Scale(jitter, static_cast<float>(0.12 * (1.0 - v.lookAmount * 0.7))));
+            Vec3 tgt = v.target;
+            if (v.lookAmount < 1e-3) tgt = s.pos + q.forward() * 45.0 + q.up() * 4.2;   // the classic framing
+            cam_.target = toRl(tgt);
+            Vec3 up = s.onGround ? Vec3{0, 1, 0} : v.up;
             cam_.up = toRl(up);
-            fovTarget = settings_.fovDeg + 4.0 + (speedNorm_ * 11.0 + s.abLevel * 4.0 + lowAlt_ * 5.0 +
-                                                  std::clamp(accelSmooth_ / 70.0, -0.6, 1.0) * 3.0) * comfort;
+            fovTarget = settings_.fovDeg + settings_.chaseFov + 4.0 +
+                        (speedNorm_ * 11.0 + s.abLevel * 4.0 + lowAlt_ * 5.0 + std::clamp(accelSmooth_ / 70.0, -0.6, 1.0) * 3.0) * comfort *
+                            (1.0 - 0.6 * v.lookAmount);
             nearPlane_ = 0.5f;
             break;
         }
@@ -1444,6 +1465,14 @@ void Game::updateCamera(double dt) {
             break;
         }
         default: break;
+    }
+    if (camBlend_ < 1.0) {   // a camera switch glides over ~0.45 s instead of cutting
+        camBlend_ = std::min(1.0, camBlend_ + dt / 0.45);
+        float t = static_cast<float>(smoothstep(0.0, 1.0, camBlend_));
+        cam_.position = Vector3Lerp(camFromPos_, cam_.position, t);
+        cam_.target = Vector3Lerp(camFromTarget_, cam_.target, t);
+        cam_.up = Vector3Normalize(Vector3Lerp(camFromUp_, cam_.up, t));
+        if (t < 0.5f) nearPlane_ = std::min(nearPlane_, 0.5f);
     }
     fovCur_ += (fovTarget - fovCur_) * (1.0 - std::exp(-dt * 3.0));
     cam_.fovy = static_cast<float>(fovCur_);
@@ -1501,7 +1530,8 @@ FrameParams Game::makeFrameParams() {
     f.nearPlane = nearPlane_;
     f.farPlane = farPlane_;
     f.battle = &battle_;
-    f.hideJetId = (camMode_ == CameraMode::Cockpit && (screen_ == Screen::Playing || screen_ == Screen::Paused) && !playerDead_) ? battle_.player().id : -1;
+    f.hideJetId = hidePlayer_ ? battle_.player().id
+                              : ((camMode_ == CameraMode::Cockpit && (screen_ == Screen::Playing || screen_ == Screen::Paused) && !playerDead_) ? battle_.player().id : -1);
     f.L = lighting_;
     f.time = time_;
     f.blackout = blackout_;
@@ -1564,7 +1594,7 @@ void Game::renderFrame() {
     if (screen_ == Screen::Playing && !capturing_ && !replayActive_)
         renderer_.effects().update(GetFrameTime() > 0 ? std::min(GetFrameTime(), 0.1f) : 1.0 / 60.0, battle_, lighting_, cam_.position, models);
 
-    bool cockpitView = f.hideJetId >= 0;
+    bool cockpitView = f.hideJetId >= 0 && !hidePlayer_;
     if (cockpitView) cockpit_.updateDisplays(battle_, battle_.player(), time_, mode_ == GameMode::Mission01);
     renderer_.renderWorld(f);
     Rectangle combiner{0, 0, 0, 0};
@@ -1978,7 +2008,7 @@ void Game::drawSettings() {
     float s = h / 720.0f;
     DrawRectangle(0, 0, static_cast<int>(w), static_cast<int>(h), Color{0, 0, 0, 170});
     ui::title("SETTINGS", 60 * s, 34 * s, 38 * s);
-    nav_.begin(27, in.up, in.down, in.confirm, in.left, in.right);
+    nav_.begin(33, in.up, in.down, in.confirm, in.left, in.right);
     float cw = 420 * s, rh = 36 * s, g = 5 * s;
     float x1 = 60 * s, x2 = 60 * s + cw + 40 * s;
     float y = 110 * s;
@@ -2030,7 +2060,6 @@ void Game::drawSettings() {
         changed |= ui::toggle(nav_, 24, {x1, y + 22 * s + 3 * (rh + g), cw, rh}, "Arcade boost (3-4 s to top speed)", settings_.arcadeBoost);
         changed |= ui::toggle(nav_, 25, {x1, y + 22 * s + 4 * (rh + g), cw, rh}, "Smooth motion (frame interpolation)", settings_.smoothMotion);
         changed |= ui::toggle(nav_, 26, {x1, y + 22 * s + 5 * (rh + g), cw, rh}, "Kill replay window (enemy's view)", settings_.killReplay);
-        changed |= ui::toggle(nav_, 27, {x1, y + 22 * s + 6 * (rh + g), cw, rh}, "Auto exposure (eye adaptation)", settings_.autoExposure);
         if (ui::cycle(nav_, 22, {x1, y + 22 * s + 2 * (rh + g), cw, rh}, "Frame rate limit", fi, cn)) {
             settings_.fpsCap = caps[fi];
             applyFramePacing();
@@ -2041,6 +2070,26 @@ void Game::drawSettings() {
             applyFramePacing();
             changed = true;
         }
+    }
+    {
+        // CAMERA: the third-person chase view is the default in flight
+        float x3 = x2 + cw + 40 * s, cw3 = std::min(cw, w - x3 - 30 * s);
+        float y3 = 110 * s;
+        ui::text("CAMERA", x3, y3 - 26 * s, 15 * s, kAccent);
+        int dc = settings_.defaultCamera;
+        if (ui::cycle(nav_, 28, {x3, y3, cw3, rh}, "Start view", dc, {"COCKPIT", "CHASE"})) { settings_.defaultCamera = dc; changed = true; }
+        y3 += rh + g;
+        changed |= ui::slider(nav_, 29, {x3, y3, cw3, rh}, "Chase distance", settings_.chaseDistance, 0.6, 2.2, false); y3 += rh + g;
+        changed |= ui::slider(nav_, 30, {x3, y3, cw3, rh}, "Chase height", settings_.chaseHeight, 0.2, 2.5, false); y3 += rh + g;
+        changed |= ui::slider(nav_, 31, {x3, y3, cw3, rh}, "Chase FOV", settings_.chaseFov, -10, 15, false); y3 += rh + g;
+        changed |= ui::toggle(nav_, 32, {x3, y3, cw3, rh}, "Free look returns behind", settings_.lookRecentre); y3 += rh + g;
+        const char* hint[] = {"Look around: right mouse, right stick, J L I K", "Look back: V or right-stick click",
+                              "Snap behind: Z or left-stick click.  Camera: C"};
+        for (int i = 0; i < 3; ++i) ui::text(hint[i], x3, y3 + (4 + 15 * i) * s, 12 * s, Color{180, 190, 190, 200}, Align::Left, false);
+        y3 += 58 * s;
+        ui::text("IMAGE", x3, y3 + 14 * s, 15 * s, kAccent);
+        y3 += 40 * s;
+        changed |= ui::toggle(nav_, 27, {x3, y3, cw3, rh}, "Auto exposure", settings_.autoExposure);
     }
     {
         int have = 0, total = 0;
@@ -3233,6 +3282,119 @@ int Game::runCapture() {
         camMode_ = CameraMode::Cockpit;
         scriptedStep(1.5, [&](double) { setInput(0, 0, 0, 0); });
         snap("cockpit_air", 3);
+        return 0;
+    }
+    if (set == "camera") {
+        // the third-person camera: default chase, free look around the aircraft, look back,
+        // and the settings column
+        hideHud_ = false;
+        startArena(false);
+        battle_.clearCombatants();
+        battle_.setAiEnabled(false);
+        Jet& p = battle_.player();
+        p.fm->resetAirborne({-4000, 1400, 1000}, 0.3, 230, 0.8);
+        Jet& e = battle_.debugAddJet(Team::Red, AircraftId::Su35, {-4600, 1500, 1300}, 0.3, 220);
+        settings_.lookRecentre = false;
+        camMode_ = CameraMode::Chase; chaseInit_ = false;
+        scriptedStep(1.0, [&](double) { setInput(0, 0, 0, 0); });
+        snap("camera_01_chase_default", 2);
+        const double looks[][2] = {{1.2, 0.0}, {-1.6, 0.25}, {0.0, 0.9}, {0.4, -0.7}};
+        const char* names[] = {"camera_02_look_right", "camera_03_look_left_up", "camera_04_look_above", "camera_05_look_below"};
+        for (int i = 0; i < 4; ++i) {
+            chaseRig_.input(0.0, ChaseLookInput{0, 0, false, false, true}, false);
+            chaseRig_.input(0.0, ChaseLookInput{looks[i][0], looks[i][1], true, false, false}, false);
+            snap(names[i], 2);
+        }
+        chaseRig_.input(0.0, ChaseLookInput{0, 0, false, false, true}, false);
+        for (int i = 0; i < 40; ++i) chaseRig_.input(0.02, ChaseLookInput{0, 0, false, true, false}, false);
+        e.fm->resetAirborne(p.fm->state().pos - p.fm->state().q.forward() * 600.0 + Vec3{0, 30, 40}, 0.3, 240, 0.8);
+        snap("camera_06_look_back", 2);
+        chaseRig_.input(0.0, ChaseLookInput{0, 0, false, false, true}, false);
+        settings_.chaseDistance = 1.8; settings_.chaseHeight = 1.6;
+        snap("camera_07_far_high", 3);
+        settings_.chaseDistance = 1.0; settings_.chaseHeight = 1.0;
+        settings_.lookRecentre = true;
+        hideHud_ = true;
+        startTitle(); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 29;
+        snap("camera_08_settings", 2);
+        return 0;
+    }
+    if (set == "destruction") {
+        // the damage and destruction effects, one situation at a time, filmed with the sun behind
+        hideHud_ = true;
+        hidePlayer_ = true;   // the camera films the target, not the player's jet
+        double away = 0;   // heading that looks away from the sun
+        auto setup = [&]() {
+            startArena(false);
+            battle_.clearCombatants();
+            battle_.setAiEnabled(false);
+            tod_ = TimeOfDay::Morning; lighting_ = Lighting::preset(tod_);
+            away = std::atan2(-lighting_.sunDir.z, -lighting_.sunDir.x);
+            renderer_.effects().clear();
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            return &battle_.player();
+        };
+        // put the player (and so the chase camera) behind a point, looking at it
+        auto frameOn = [&](Jet* p, Vec3 at, double back, double up) {
+            Vec3 f{std::cos(away), 0, std::sin(away)};
+            p->fm->resetAirborne(at - f * back + Vec3{0, up, 0}, away, 70, 0.3);
+            chaseInit_ = false;
+        };
+        auto step = [&](double t) { scriptedStep(t, [&](double) { setInput(0, 0, 0, 0); }); };
+        // 1. a missile hit that does not kill, engine fire and a leak, a fuselage fire, the break-up
+        {
+            Jet* p = setup();
+            Vec3 at{-4000, 1500, 1000};
+            Jet& e = battle_.debugAddJet(Team::Red, AircraftId::Su35, at, away + 0.35, 120);
+            auto follow = [&](double back) { frameOn(p, e.fm->state().pos, back, 12); };
+            battle_.debugDamageJet(e, 40.0, p->id, "MISSILE");
+            follow(120); step(0.18);
+            follow(120); snap("destruction_01_missile_hit", 1);
+            step(2.0); follow(110); snap("destruction_02_engine_fire_leak", 2);
+            battle_.debugDamageJet(e, 40.0, p->id, "CANNON");
+            step(1.2); follow(110); snap("destruction_03_fuselage_fire", 2);
+            battle_.debugDamageJet(e, 60.0, p->id, "MISSILE");
+            Vec3 boom = e.fm->state().pos;
+            step(0.12); frameOn(p, boom, 260, 30); snap("destruction_04_breakup_flash", 1);
+            step(0.7); frameOn(p, boom, 300, 30); snap("destruction_05_breakup_fireball", 1);
+            step(2.0); frameOn(p, boom + Vec3{0, -40, 0}, 420, 40); snap("destruction_06_falling_wreck", 1);
+        }
+        // 2. an aircraft flying into the ground
+        {
+            Jet* p = setup();
+            Vec3 f{std::cos(away), 0, std::sin(away)};
+            Vec3 gp = Vec3{0, 0, 0} + f * 1500.0;
+            gp.y = terrain_.surfaceHeight(gp.x, gp.z);
+            Quat dive = Quat::fromEuler(away + 1.2, -0.5, 0.5);
+            Jet& e = battle_.debugAddJet(Team::Red, AircraftId::MiG29, gp + Vec3{0, 60, 0} - dive.forward() * 40.0, away + 1.2, 180);
+            e.fm->mutableState().q = dive;
+            e.fm->mutableState().vel = dive.forward() * 180.0;
+            frameOn(p, gp, 600, 120);
+            step(0.95); frameOn(p, gp, 600, 120); snap("destruction_07_ground_impact", 1);
+            step(3.0); frameOn(p, gp, 650, 140); snap("destruction_08_crash_site", 1);
+        }
+        // 3. a helicopter and an armoured vehicle
+        {
+            Jet* p = setup();
+            Vec3 f{std::cos(away), 0, std::sin(away)};
+            Vec3 gp = f * 1800.0;
+            gp.y = terrain_.surfaceHeight(gp.x, gp.z);
+            GroundTarget hg;
+            hg.kind = GroundKind::Helicopter; hg.pos = gp + Vec3{0, 120, 0}; hg.flyAgl = 120; hg.pathCenter = hg.pos; hg.pathRadius = 1; hg.armed = false;
+            int hi = battle_.addGround(hg);
+            GroundTarget tg;
+            Vec3 tp = gp + Vec3{-f.z, 0, f.x} * 90.0;
+            tp.y = terrain_.surfaceHeight(tp.x, tp.z);
+            tg.kind = GroundKind::Tank; tg.pos = tp; tg.armed = false;
+            int ti = battle_.addGround(tg);
+            battle_.debugDamageGround(hi, 1000.0, p->id);
+            step(0.35); frameOn(p, gp + Vec3{0, 100, 0}, 380, 40); snap("destruction_09_helicopter", 1);
+            step(2.4); frameOn(p, gp + Vec3{0, 40, 0}, 420, 80); snap("destruction_10_helicopter_falling", 1);
+            battle_.debugDamageGround(ti, 1000.0, p->id);
+            step(1.6); frameOn(p, tp, 380, 70); snap("destruction_11_vehicle_cookoff", 1);
+            step(4.0); frameOn(p, tp, 420, 90); snap("destruction_12_burning_wrecks", 1);
+        }
+        hidePlayer_ = false;
         return 0;
     }
     if (set == "fx") {

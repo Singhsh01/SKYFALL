@@ -334,7 +334,7 @@ void Game::startTraining(int level) {
     deathWait_ = -1;
     lossCause_ = LossCause::Crash;
     killerName_.clear();
-    camMode_ = CameraMode::Chase;
+    camMode_ = gameplayCamera();
     gateMarkers_.clear();
     corridor_.clear();
     // the briefing over the radio, then the aircraft and handling notes; the instructor

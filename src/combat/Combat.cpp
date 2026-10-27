@@ -621,6 +621,7 @@ void Battle::damageJet(Jet& victim, double dmg, int attacker, const char* weapon
     victim.hitFlash = 0.35;
     if (victim.isPlayer) stats_.damageTaken += static_cast<int>(std::lround(dmg));
     const Jet* att = jetById(attacker);
+    if (dmg > 0) events_.push_back({EventType::JetDamaged, victim.fm->state().pos, dmg, attacker, victim.id, weapon});
     if (victim.isPlayer) events_.push_back({EventType::PlayerHit, victim.fm->state().pos, dmg, attacker, victim.id, ""});
     else if (att && att->isPlayer) events_.push_back({EventType::Hit, victim.fm->state().pos, dmg, attacker, victim.id, ""});
     if (victim.health <= 0) {

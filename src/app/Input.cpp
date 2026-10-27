@@ -92,6 +92,8 @@ void Input::update(double dt, const Settings& s) {
     if (IsKeyDown(KEY_I)) { n.lookPitch += 1.2 * dt; n.looking = true; }
     if (IsKeyDown(KEY_K)) { n.lookPitch -= 1.2 * dt; n.looking = true; }
     n.zoom = GetMouseWheelMove();
+    n.lookBehind = IsKeyDown(KEY_V);
+    n.lookReset = IsKeyPressed(KEY_Z);
 
     // --- gamepad (first connected) ---
     pad_ = -1;
@@ -112,6 +114,8 @@ void Input::update(double dt, const Settings& s) {
         if (IsGamepadButtonDown(pad_, GAMEPAD_BUTTON_LEFT_FACE_LEFT)) n.yaw = -1;
         if (IsGamepadButtonDown(pad_, GAMEPAD_BUTTON_LEFT_FACE_RIGHT)) n.yaw = 1;
         if (std::fabs(rx) > 0.15 || std::fabs(ry) > 0.15) { n.lookYaw += rx * 2.0 * dt; n.lookPitch -= ry * 1.5 * dt; n.looking = true; }
+        n.lookBehind = n.lookBehind || IsGamepadButtonDown(pad_, GAMEPAD_BUTTON_RIGHT_THUMB);
+        n.lookReset = n.lookReset || IsGamepadButtonPressed(pad_, GAMEPAD_BUTTON_LEFT_THUMB);
         n.gun = n.gun || IsGamepadButtonDown(pad_, GAMEPAD_BUTTON_RIGHT_TRIGGER_1);
         n.missile = n.missile || IsGamepadButtonPressed(pad_, GAMEPAD_BUTTON_LEFT_TRIGGER_1);
         n.flares = n.flares || IsGamepadButtonPressed(pad_, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);

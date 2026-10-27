@@ -190,7 +190,8 @@ struct GroundTarget {
 };
 
 enum class EventType { Explosion, SmallExplosion, Hit, JetKilled, GroundKilled, MissileLaunch, FlaresOut,
-                       PlayerHit, PlayerKilled, MissileWarningStart, LockAcquired, Splash, MissileMissed, Flak };
+                       PlayerHit, PlayerKilled, MissileWarningStart, LockAcquired, Splash, MissileMissed, Flak,
+                       JetDamaged };   // any jet damaged (b = victim, size = damage, text = weapon): visual effects
 
 struct CombatEvent {
     EventType type;
@@ -328,6 +329,9 @@ public:
     void dropFlares(Jet& j);
     Missile& debugAddMissile(const Missile& m) { missiles_.push_back(m); return missiles_.back(); }
     Jet& debugAddJet(Team team, AircraftId id, const Vec3& pos, double heading, double speed);
+    /// Capture / test hooks: apply damage as a hit would (events and effects included).
+    void debugDamageJet(Jet& victim, double dmg, int attacker, const char* weapon) { damageJet(victim, dmg, attacker, weapon); }
+    void debugDamageGround(int idx, double dmg, int attacker) { damageGround(idx, dmg, attacker); }
     void setAiEnabled(bool on) { aiEnabled_ = on; }
     void setSmartAi(bool on) { cfg_.smartAi = on; }
     /// A scripted battle (Academy operations): no arena spawns or waves, ground units move and

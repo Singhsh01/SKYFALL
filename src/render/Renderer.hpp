@@ -181,6 +181,7 @@ private:
     Mesh gun_{}, artillery_{}, oilRig_{}, fuelTank_{}, hangar_{}, command_{}, ship_{};
     Mesh powerPlant_{}, refinery_{}, bridgeDeck_{}, bridgePier_{}, commTower_{}, factory_{}, locomotive_{}, wagon_{},
          launcher_{}, ammo_{}, substation_{}, tanker_{}, drogue_{}, carrier_{}, heli_{}, heliAttack_{}, heliRotor_{}, cargo_{}, chute_{};
+    Mesh chunkMesh_{};   // unit box: debris pieces
     void buildCarrier();
     void drawObstacles(const FrameParams& f);
     void drawGates(const FrameParams& f);

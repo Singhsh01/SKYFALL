@@ -3,6 +3,7 @@
 #pragma once
 
 #include "FrameGovernor.hpp"
+#include "ChaseRig.hpp"
 #include <chrono>
 #include <deque>
 
@@ -249,6 +250,12 @@ private:
     Quat chaseQ_;
     bool chaseInit_ = false;
     double headYaw_ = 0, headPitch_ = 0;
+    ChaseRig chaseRig_;                   // third-person spring arm + free look
+    bool hidePlayer_ = false;             // captures: do not draw the player's aircraft
+    double camBlend_ = 1.0;               // 0..1 smooth blend after a camera switch
+    Vector3 camFromPos_{}, camFromTarget_{}, camFromUp_{0, 1, 0};
+    /// The view a flight starts in: the third-person chase view unless the player chose the cockpit.
+    CameraMode gameplayCamera() const { return settings_.defaultCamera == 0 ? CameraMode::Cockpit : CameraMode::Chase; }
     double orbitYaw_ = 2.4, orbitPitch_ = 0.12, zoom_ = 1.0;
     double shake_ = 0;
     // sense of speed (updateCamera): 0..1 speed for this jet, low-altitude factor, smoothed acceleration, surge pulse

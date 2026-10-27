@@ -3,6 +3,7 @@
 #include "app/CameraMode.hpp"
 #include "app/Settings.hpp"
 #include "app/FrameGovernor.hpp"
+#include "app/ChaseRig.hpp"
 #include "combat/Combat.hpp"
 #include "mission/Campaign.hpp"
 #include "mission/Mission.hpp"
@@ -800,6 +801,73 @@ TEST(detail_drop_shortens_view_distances_and_drops_shadows) {
             prev = p.sceneryDist;
         }
     }
+}
+
+TEST(chase_rig_free_look_orbits_the_aircraft_without_touching_it) {
+    ChaseRig rig;
+    const Vec3 pos{1000, 2000, -500};
+    const Quat q = Quat::fromEuler(0.7, 0.1, 0.3);   // heading, pitch, bank
+    auto flat = [](double, double) { return 0.0; };
+    const double dist = 14, height = 3;
+    // zero look: behind the tail and above, looking ahead of the nose
+    ChaseView v = rig.solve(1.0 / 60, pos, q, dist, height, flat);
+    Vec3 rel = q.unrotate(v.pos - pos);
+    CHECK(rel.x < -dist * 0.9 && rel.y > 0.5 * height);
+    CHECK(dot(v.target - v.pos, q.forward()) > 0);
+    CHECK_NEAR(length(v.pos - pos), std::sqrt(dist * dist + height * height), 1e-6);
+    // look 90 degrees right: the camera swings to the left wing side and looks to the right
+    rig.input(0.0, ChaseLookInput{kPi / 2, 0, true, false, false}, false);
+    v = rig.solve(1.0 / 60, pos, q, dist, height, flat);
+    rel = q.unrotate(v.pos - pos);
+    CHECK(rel.z < -dist * 0.9);
+    CHECK(dot(normalize(v.target - v.pos), q.right()) > 0.8);
+    // a full turn of free look is a full circle (yaw wraps), not a clamp
+    for (int i = 0; i < 6; ++i) rig.input(0.0, ChaseLookInput{kPi / 2, 0, true, false, false}, false);
+    CHECK(std::fabs(wrapPi(rig.lookYaw() + kPi / 2)) < 1e-9);   // 7 quarter turns = 3/4 of a circle = -90 degrees
+    rig.input(0.0, ChaseLookInput{0, 0, false, false, true}, false);   // reset: straight behind again, at once
+    CHECK(rig.lookYaw() == 0 && rig.lookPitch() == 0);
+    // look back (held): the camera ends up ahead of the nose, looking back past the tail
+    for (int i = 0; i < 60; ++i) rig.input(1.0 / 60, ChaseLookInput{0, 0, false, true, false}, false);
+    v = rig.solve(1.0 / 60, pos, q, dist, height, flat);
+    rel = q.unrotate(v.pos - pos);
+    CHECK(rel.x > dist * 0.9);
+    CHECK(dot(normalize(v.target - v.pos), q.forward()) < -0.8);
+    // ...and returns behind the tail when released
+    for (int i = 0; i < 60; ++i) rig.input(1.0 / 60, ChaseLookInput{0, 0, false, false, false}, false);
+    CHECK(rig.behindBlend() == 0.0);
+    // pitch is limited (no flipping over the top)
+    rig.input(0.0, ChaseLookInput{0, 5.0, true, false, false}, false);
+    CHECK_NEAR(rig.lookPitch(), ChaseRig::kMaxPitch, 1e-12);
+    // auto re-centre after the idle delay, never before
+    rig.input(0.0, ChaseLookInput{0, 0, false, false, true}, false);
+    rig.input(0.0, ChaseLookInput{1.0, 0.3, true, false, false}, false);
+    for (int i = 0; i < 60; ++i) rig.input(1.0 / 60, ChaseLookInput{}, true);   // 1 s idle: untouched
+    CHECK_NEAR(rig.lookYaw(), 1.0, 1e-12);
+    for (int i = 0; i < 240; ++i) rig.input(1.0 / 60, ChaseLookInput{}, true);  // 5 s idle: back behind
+    CHECK(std::fabs(rig.lookYaw()) < 0.01 && std::fabs(rig.lookPitch()) < 0.01);
+    // with re-centring off the view stays where the player left it
+    rig.input(0.0, ChaseLookInput{0, 0, false, false, true}, false);
+    rig.input(0.0, ChaseLookInput{0.8, 0, true, false, false}, false);
+    for (int i = 0; i < 300; ++i) rig.input(1.0 / 60, ChaseLookInput{}, false);
+    CHECK_NEAR(rig.lookYaw(), 0.8, 1e-12);
+}
+
+TEST(chase_rig_spring_arm_never_goes_into_the_terrain) {
+    ChaseRig rig;
+    const Quat level = Quat::fromEuler(0.0, 0.0, 0.0);
+    // flying 6 m above a hillside that rises steeply behind the aircraft
+    auto hill = [](double x, double) { return x < 0 ? -x * 1.5 : 0.0; };
+    const Vec3 pos{0, 6, 0};
+    ChaseView v = rig.solve(1.0 / 60, pos, level, 20, 4, hill, 2.0);
+    CHECK(v.pos.y >= hill(v.pos.x, v.pos.z) + 2.0 - 1e-9);
+    CHECK(rig.armLength() < std::sqrt(20.0 * 20 + 4 * 4));   // the arm shortened
+    // clear air again: the arm eases back out (not a jump)
+    auto flat = [](double, double) { return -1000.0; };
+    double before = rig.armLength();
+    rig.solve(1.0 / 60, Vec3{0, 500, 0}, level, 20, 4, flat, 2.0);
+    CHECK(rig.armLength() > before && rig.armLength() < std::sqrt(20.0 * 20 + 4 * 4) - 1e-3);
+    for (int i = 0; i < 300; ++i) rig.solve(1.0 / 60, Vec3{0, 500, 0}, level, 20, 4, flat, 2.0);
+    CHECK_NEAR(rig.armLength(), std::sqrt(20.0 * 20 + 4 * 4), 1e-3);
 }
 
 TEST(frame_stats_percentiles) {

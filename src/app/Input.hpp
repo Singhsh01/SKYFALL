@@ -25,6 +25,8 @@ struct InputState {
     bool brake = false, airbrake = false, gun = false;
     double lookYaw = 0, lookPitch = 0, zoom = 0;  // per-frame deltas
     bool looking = false;
+    bool lookBehind = false;   // held: look back past the tail (V, right stick click)
+    bool lookReset = false;    // pressed: snap the view back behind the aircraft (Z, left stick click)
     // edges (pressed this frame)
     bool missile = false, flares = false, cycleTarget = false, gear = false, camera = false, engine = false,
          parkingBrake = false, help = false, reset = false, pause = false, screenshot = false, debug = false,

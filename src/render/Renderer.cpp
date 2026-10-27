@@ -371,7 +371,7 @@ void Renderer::shutdown() {
     UnloadMesh(flame_); UnloadMesh(missile_);
     UnloadMesh(tank_); UnloadMesh(truck_); UnloadMesh(aaa_); UnloadMesh(sam_); UnloadMesh(bunker_); UnloadMesh(radar_);
     for (Mesh* m : {&gun_, &artillery_, &oilRig_, &fuelTank_, &hangar_, &command_, &ship_, &powerPlant_, &refinery_, &bridgeDeck_,
-                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_, &carrier_, &heli_, &heliAttack_, &heliRotor_, &cargo_, &chute_, &forkliftMesh_, &tugMesh_, &fuelTruckMesh_, &radarHeadMesh_})
+                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_, &carrier_, &heli_, &heliAttack_, &heliRotor_, &cargo_, &chute_, &chunkMesh_, &forkliftMesh_, &tugMesh_, &fuelTruckMesh_, &radarHeadMesh_})
         UnloadMesh(*m);
     if (obstacleMeshValid_) UnloadMesh(obstacleMesh_);
     if (ringMesh_.vertexCount) { UnloadMesh(ringMesh_); UnloadMesh(beaconMesh_); }
@@ -397,6 +397,12 @@ void Renderer::buildGroundModels() {
         m.box({0, 1.55f, 0}, {2.2f, 0.6f, 1.9f}, sand);
         for (float x : {-0.9f, 0.0f, 0.9f}) m.box({x, 1.0f, 0}, {0.06f, 1.95f, 2.25f}, dark);
         cargo_ = m.build();
+    }
+    {   // debris piece: a unit box (scaled per piece), slightly bevelled by a second box
+        MeshBuilder m;
+        m.box({0, 0, 0}, {1, 1, 1}, Color{255, 255, 255, 255});
+        m.box({0.1f, 0.35f, -0.05f}, {0.8f, 0.4f, 0.9f}, Color{200, 200, 200, 255});
+        chunkMesh_ = m.build();
     }
     {
         MeshBuilder m;  // round cargo parachute 30 m above the pallet, with rigging lines
@@ -2270,6 +2276,11 @@ void Renderer::renderWorld(const FrameParams& f) {
     drawCalls_ = 0;
     g_tris = 0;
     g_draws = 0;
+    if (!f.isPip) {   // particle budget per preset, smaller when the adaptive detail drop is active
+        static const size_t kBudget[] = {5000, 8000, 12000, 16000, 20000, 9000};
+        size_t n = kBudget[std::clamp(static_cast<int>(f.quality), 0, 5)];
+        effects_.setParticleBudget(n * (4 - std::min(f.detailDrop, 2)) / 4);
+    }
     if (Vector3DotProduct(world_.bakedSun, f.L.sunDir) < 0.99999f) {
         auto tb = std::chrono::steady_clock::now();
         world_.bakeSunShadows(f.L.sunDir);
@@ -2329,6 +2340,36 @@ void Renderer::renderWorld(const FrameParams& f) {
             }
     }
     lit_.setF("uMetal", 0.0f);
+    // destroyed aircraft falling in flames, and broken-off pieces
+    if (!effects_.fallingWrecks().empty()) setAtmosphere(jet_, f);
+    for (const FallingWreck& w : effects_.fallingWrecks()) {
+        if (Vector3Distance(w.pos, f.cam.position) > 25000) continue;
+        Vector3 pb;
+        float camo;
+        const AircraftProfile& ap = profile(w.aircraft);
+        Vector3 pa = paintFor(w.team, w.skin, ap, pb, camo);
+        JetPose pose;
+        pose.damage = 1.0f;
+        pose.id = w.id;
+        drawJetModel(ap.style, bodyMatrix(Vec3{w.pos.x, w.pos.y, w.pos.z}, w.q), pa, pb, camo, pose, f, true);
+    }
+    if (!effects_.chunks().empty()) {
+        setAtmosphere(lit_, f);
+        lit_.setF("uEmissive", 0.0f);
+        lit_.setF("uSpecular", 0.2f);
+        lit_.setF("uMetal", 0.4f);
+        lit_.setF("uFogOn", 1.0f);
+        for (const Chunk& c : effects_.chunks()) {
+            if (Vector3Distance(c.pos, f.cam.position) > 6000) continue;
+            Matrix M = MatrixMultiply(MatrixMultiply(MatrixScale(c.size.x, c.size.y, c.size.z), MatrixRotate(c.axis, c.angle)),
+                                      MatrixTranslate(c.pos.x, c.pos.y, c.pos.z));
+            litMat_.maps[MATERIAL_MAP_DIFFUSE].color = Color{static_cast<unsigned char>(c.color.x * 255), static_cast<unsigned char>(c.color.y * 255),
+                                                             static_cast<unsigned char>(c.color.z * 255), 255};
+            drawMeshC(chunkMesh_, litMat_, M);
+        }
+        litMat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+        lit_.setF("uMetal", 0.0f);
+    }
     if (pm) profMark("aircraft");
     drawShadows(f);
     if (pm) profMark("blob shadows");

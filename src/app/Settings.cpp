@@ -107,6 +107,11 @@ bool Settings::load(const std::string& path) {
             else if (k == "bloom") bloom = toBool(v);
             else if (k == "auto_exposure") autoExposure = toBool(v);
             else if (k == "camera_shake") cameraShake = std::clamp(std::stod(v), 0.0, 1.0);
+            else if (k == "default_camera") defaultCamera = std::clamp(std::stoi(v), 0, 1);
+            else if (k == "chase_distance") chaseDistance = std::clamp(std::stod(v), 0.6, 2.2);
+            else if (k == "chase_height") chaseHeight = std::clamp(std::stod(v), 0.2, 2.5);
+            else if (k == "chase_fov") chaseFov = std::clamp(std::stod(v), -10.0, 15.0);
+            else if (k == "look_recentre") lookRecentre = toBool(v);
             else if (k == "g_effects") gEffects = toBool(v);
             else if (k == "ui_scale") uiScale = std::clamp(std::stod(v), 0.75, 1.5);
             else if (k == "show_fps") showFps = toBool(v);
@@ -151,7 +156,8 @@ bool Settings::save(const std::string& path) const {
     f << "# SKYFALL settings - safe to edit by hand\n[graphics]\n"
       << "quality=" << static_cast<int>(quality) << "\nfps_cap=" << fpsCap << "\nwidth=" << width << "\nheight=" << height
       << "\nfullscreen=" << fullscreen << "\nvsync=" << vsync << "\nfov=" << fovDeg << "\nbloom=" << bloom << "\nauto_exposure=" << autoExposure
-      << "\ncamera_shake=" << cameraShake << "\ng_effects=" << gEffects << "\nui_scale=" << uiScale
+      << "\ncamera_shake=" << cameraShake << "\ndefault_camera=" << defaultCamera << "\nchase_distance=" << chaseDistance
+      << "\nchase_height=" << chaseHeight << "\nchase_fov=" << chaseFov << "\nlook_recentre=" << lookRecentre << "\ng_effects=" << gEffects << "\nui_scale=" << uiScale
       << "\nshow_fps=" << showFps << "\nhud_panel_scale=" << hudPanelScale << "\nhigh_contrast_hud=" << highContrastHud << "\nhud_style=" << hudStyle << "\nmissile_cam=" << missileCam << "\ncrash_replay=" << crashReplay << "\nkill_replay=" << killReplay << "\ndynamic_resolution=" << dynamicResolution << "\nsmooth_motion=" << smoothMotion << "\nsettings_version=" << settingsVersion << "\n[input]\n"
       << "invert_pitch=" << invertPitch << "\nsensitivity=" << sensitivity << "\ndeadzone=" << deadzone
       << "\nhandling=" << handling << "\narcade_boost=" << arcadeBoost << "\naircraft=" << aircraft << "\nskins=" << skins << "\nlocation=" << location << "\n[audio]\n"
