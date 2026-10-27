@@ -190,6 +190,7 @@ void Renderer::freeTarget(RenderTexture2D& rt) {
 bool Renderer::init(const Terrain& t, const WorldLayout& layout, int width, int height) {
     terrain_ = &t;
     auto t0 = std::chrono::steady_clock::now();
+    setUrbanAreas(layout);
     world_.build(t);
     dressing_.build(t, layout, BuildingStyle::Desert, true);
     for (int s = 0; s < kAirframeStyleCount; ++s) {
@@ -318,6 +319,7 @@ void Renderer::applyTerrainInfo() {
 void Renderer::rebuildWorld(const Terrain& t, const WorldLayout& layout) {
     terrain_ = &t;
     world_.unload();
+    setUrbanAreas(layout);
     world_.build(t);
     BuildingStyle style = BuildingStyle::Desert;
     switch (t.info().biome) {
@@ -371,7 +373,7 @@ void Renderer::shutdown() {
     UnloadMesh(flame_); UnloadMesh(missile_);
     UnloadMesh(tank_); UnloadMesh(truck_); UnloadMesh(aaa_); UnloadMesh(sam_); UnloadMesh(bunker_); UnloadMesh(radar_);
     for (Mesh* m : {&gun_, &artillery_, &oilRig_, &fuelTank_, &hangar_, &command_, &ship_, &powerPlant_, &refinery_, &bridgeDeck_,
-                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_, &carrier_, &heli_, &heliAttack_, &heliRotor_, &cargo_, &chute_, &chunkMesh_, &forkliftMesh_, &tugMesh_, &fuelTruckMesh_, &radarHeadMesh_})
+                    &bridgePier_, &commTower_, &factory_, &locomotive_, &wagon_, &launcher_, &ammo_, &substation_, &tanker_, &drogue_, &carrier_, &heli_, &heliAttack_, &heliRotor_, &cargo_, &chute_, &chunkMesh_, &forkliftMesh_, &metroCar_, &civil_, &tugMesh_, &fuelTruckMesh_, &radarHeadMesh_})
         UnloadMesh(*m);
     if (obstacleMeshValid_) UnloadMesh(obstacleMesh_);
     if (ringMesh_.vertexCount) { UnloadMesh(ringMesh_); UnloadMesh(beaconMesh_); }
@@ -653,6 +655,38 @@ void Renderer::buildGroundModels() {
         m.box({0, 4.5f, 0}, {14.0f, 0.3f, 2.6f}, {86, 82, 60, 255});
         for (float x : {-5.5f, 5.5f}) m.box({x, 0.5f, 0}, {3.0f, 1.0f, 2.5f}, {40, 40, 40, 255});
         wagon_ = m.build();
+    }
+    {
+        MeshBuilder m;  // metro car (along +X): stainless body, coloured band, glazing lit at night
+        m.box({0, 0.8f, 0}, {20.4f, 0.7f, 2.7f}, darkSteel);
+        m.box({0, 2.55f, 0}, {20.6f, 2.9f, 2.95f}, {214, 216, 220, 255});
+        m.box({0, 1.55f, 0}, {20.65f, 0.35f, 3.0f}, {196, 40, 46, 255});
+        for (float s : {-1.0f, 1.0f}) {
+            for (int k = -3; k <= 3; ++k)
+                m.box({k * 2.7f, 2.9f, s * 1.49f}, {1.9f, 1.2f, 0.04f}, {40, 52, 64, 253});
+            m.box({-5.0f, 2.4f, s * 1.49f}, {1.3f, 2.0f, 0.05f}, {70, 74, 80, 255});
+            m.box({5.0f, 2.4f, s * 1.49f}, {1.3f, 2.0f, 0.05f}, {70, 74, 80, 255});
+        }
+        m.box({10.31f, 2.9f, 0}, {0.04f, 1.3f, 2.2f}, {40, 52, 64, 253});
+        m.box({-10.31f, 2.9f, 0}, {0.04f, 1.3f, 2.2f}, {40, 52, 64, 253});
+        m.box({0, 4.1f, 0}, {19.0f, 0.25f, 2.4f}, {150, 152, 156, 255});
+        for (float x : {-7.0f, 7.0f}) m.box({x, 0.45f, 0}, {2.6f, 0.7f, 2.3f}, {40, 40, 40, 255});
+        metroCar_ = m.build();
+    }
+    {
+        MeshBuilder m;  // protected civilian building: hospital / school block with a no-strike roof marking
+        m.box({0, 9.0f, 0}, {22.0f, 18.0f, 16.0f}, {226, 222, 212, 255});
+        for (float y = 3.0f; y < 17.0f; y += 3.4f) {
+            m.box({0, y, 0}, {22.15f, 1.2f, 15.4f}, {60, 72, 86, 253});
+            m.box({0, y, 0}, {21.4f, 1.2f, 16.15f}, {60, 72, 86, 253});
+        }
+        m.box({0, 18.2f, 0}, {22.2f, 0.4f, 16.2f}, {200, 200, 196, 255});
+        m.box({0, 18.45f, 0}, {12.0f, 0.1f, 12.0f}, {245, 245, 245, 255});
+        // a blue diamond on white: the protected-site marking, visible from the air
+        Matrix rot = MatrixRotateY(PI / 4);
+        m.box({0, 18.52f, 0}, {6.5f, 0.1f, 6.5f}, {40, 90, 200, 255}, rot);
+        m.box({11.6f, 2.0f, 0}, {1.2f, 4.0f, 5.0f}, {150, 150, 150, 255});   // entrance canopy
+        civil_ = m.build();
     }
     {
         MeshBuilder m;  // mobile missile launcher: 8x8 truck with raised missile
@@ -1311,6 +1345,7 @@ void Renderer::drawGroundTargets(const FrameParams& f) {
             case GroundKind::Launcher: m = &launcher_; break;
             case GroundKind::Ammo: m = &ammo_; break;
             case GroundKind::Substation: m = &substation_; break;
+            case GroundKind::Civilian: m = &civil_; break;
             case GroundKind::Bridge: m = &bridgeDeck_; break;
             default: break;
         }
@@ -1389,6 +1424,45 @@ void Renderer::drawGroundTargets(const FrameParams& f) {
     litMat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
 }
 
+/// Power-line conductors: one-pixel lines, darkened against the sky, hazed with distance and
+/// faded out before they would shimmer.
+void Renderer::drawWires(const FrameParams& f) {
+    if (dressing_.wireSpans.empty()) return;
+    const float fadeEnd = f.isPip ? 900.0f : 2600.0f, fadeStart = fadeEnd * 0.5f;
+    Vector3 cp = f.cam.position;
+    bool begun = false;
+    for (const Dressing::WireSpan& sp : dressing_.wireSpans) {
+        float d = Vector3Distance(sp.center, cp) - sp.radius;
+        if (d > fadeEnd || !sphereVisible(f, sp.center, sp.radius)) continue;
+        if (!begun) {
+            rlDrawRenderBatchActive();
+            BeginBlendMode(BLEND_ALPHA);
+            rlBegin(RL_LINES);
+            begun = true;
+        }
+        float a = 1.0f - std::clamp((std::max(d, 0.0f) - fadeStart) / (fadeEnd - fadeStart), 0.0f, 1.0f);
+        float fog = f.L.fogAmount(cp, sp.center);
+        Vector3 fc = f.L.fogColor(cp, sp.center);
+        float lit = 0.06f + 0.05f * (1.0f - f.L.night);
+        Vector3 c = Vector3Lerp(Vector3{lit, lit * 1.03f, lit * 1.08f}, Vector3Scale(fc, 0.8f), fog);
+        rlColor4ub(static_cast<unsigned char>(std::clamp(c.x, 0.0f, 1.0f) * 255), static_cast<unsigned char>(std::clamp(c.y, 0.0f, 1.0f) * 255),
+                   static_cast<unsigned char>(std::clamp(c.z, 0.0f, 1.0f) * 255), static_cast<unsigned char>(a * 235));
+        for (int s = 0; s < Dressing::kWireStrands; ++s) {
+            const Vector3* q = &dressing_.wirePts[static_cast<size_t>(sp.first + s * Dressing::kWirePoints)];
+            for (int k = 0; k + 1 < Dressing::kWirePoints; ++k) {
+                rlVertex3f(q[k].x, q[k].y, q[k].z);
+                rlVertex3f(q[k + 1].x, q[k + 1].y, q[k + 1].z);
+            }
+        }
+    }
+    if (begun) {
+        rlEnd();
+        rlDrawRenderBatchActive();
+        EndBlendMode();
+        ++drawCalls_;
+    }
+}
+
 void Renderer::drawDressing(const FrameParams& f) {
     Vector3 cp = f.cam.position;
     Vector3 fwd = Vector3Normalize(Vector3Subtract(f.cam.target, f.cam.position));
@@ -1396,7 +1470,7 @@ void Renderer::drawDressing(const FrameParams& f) {
     for (const Dressing::Piece& p : dressing_.statics) {
         Vector3 d = Vector3Subtract(p.center, cp);
         float dist = Vector3Length(d);
-        if (dist - p.radius > maxDist) continue;
+        if (dist - p.radius > maxDist * p.distScale) continue;
         if (dist > p.radius && Vector3DotProduct(d, fwd) < -p.radius) continue;
         if (!sphereVisible(f, p.center, p.radius)) continue;   // outside the view frustum
         drawMeshC(p.mesh, litMat_, MatrixIdentity());
@@ -1404,6 +1478,7 @@ void Renderer::drawDressing(const FrameParams& f) {
     }
     const WorldLayout* L = dressing_.layout;
     if (!L) return;
+    drawWires(f);
     if (!f.isPip) profMark("scenery");
     drawTraffic(f);
     if (!f.isPip) profMark("traffic");
@@ -1427,6 +1502,17 @@ void Renderer::drawDressing(const FrameParams& f) {
             Matrix M = MatrixMultiply(MatrixMultiply(MatrixRotateX(static_cast<float>(f.time * 1.3 + i * 0.7)), MatrixRotateY(-dressing_.rotorYaw[i])),
                                       MatrixTranslate(h.x, h.y, h.z));
             drawMeshC(dressing_.rotor, litMat_, M);
+            ++drawCalls_;
+        }
+    // metro trains on the viaduct
+    for (int tr = 0; tr < L->metroTrains(); ++tr)
+        for (int c = 0; c < WorldLayout::kMetroCars; ++c) {
+            Vec3 fw;
+            Vec3 p = L->metroCarAt(tr, c, f.time, &fw);
+            if (Vector3Distance(toRl(p), cp) > maxDist * 0.5f || !sphereVisible(f, toRl(p), 14.0f)) continue;
+            float yaw = static_cast<float>(std::atan2(fw.z, fw.x));
+            Matrix M = MatrixMultiply(MatrixRotateY(-yaw), MatrixTranslate(static_cast<float>(p.x), static_cast<float>(p.y + 0.3), static_cast<float>(p.z)));
+            drawMeshC(metroCar_, litMat_, M);
             ++drawCalls_;
         }
     // ambient freight train (only when no mission train is on the line)

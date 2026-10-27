@@ -9,6 +9,7 @@
 #include "mission/Mission.hpp"
 #include "mission/Voice.hpp"
 #include "sim/Locations.hpp"
+#include "sim/WorldLayout.hpp"
 #include "sim/Atmosphere.hpp"
 #include "sim/FlightModel.hpp"
 #include "telemetry/Replay.hpp"
@@ -18,6 +19,7 @@
 #include "CampaignPlaythrough.hpp"
 
 #include <chrono>
+#include <map>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -40,6 +42,16 @@ std::string g_current;
         }                                                                                       \
     } while (0)
 #define CHECK_NEAR(a, b, tol) CHECK(std::fabs((a) - (b)) <= (tol))
+#define CHECK_MSG(cond, ...)                                                                    \
+    do {                                                                                        \
+        ++g_checks;                                                                             \
+        if (!(cond)) {                                                                          \
+            ++g_failed;                                                                         \
+            std::printf("    FAIL %s:%d  %s  -- ", __FILE__, __LINE__, #cond);                  \
+            std::printf(__VA_ARGS__);                                                           \
+            std::printf("\n");                                                                  \
+        }                                                                                       \
+    } while (0)
 
 struct TestCase { const char* name; std::function<void()> fn; };
 std::vector<TestCase>& registry() { static std::vector<TestCase> r; return r; }
@@ -922,6 +934,111 @@ TEST(rivers_follow_the_valleys_and_lakes_fill_basins_below_their_level) {
     CHECK(m.inlandWater().empty());
 }
 
+namespace {
+Heightmap synthMap(const std::function<double(double, double)>& f) {
+    Heightmap hm;
+    hm.n = 513;
+    hm.extent = 32000.0;
+    hm.h.resize(static_cast<size_t>(hm.n) * hm.n);
+    for (int j = 0; j < hm.n; ++j)
+        for (int i = 0; i < hm.n; ++i) {
+            double x = (i / double(hm.n - 1) - 0.5) * 32000.0, z = (j / double(hm.n - 1) - 0.5) * 32000.0;
+            hm.h[static_cast<size_t>(j) * hm.n + i] = static_cast<float>(f(x, z));
+        }
+    return hm;
+}
+}  // namespace
+
+TEST(metropolis_maps_get_towers_a_metro_flyovers_and_a_power_grid) {
+    // a coastal plain: gentle swells, the sea beyond x = 11 km
+    Heightmap hm = synthMap([](double x, double z) {
+        return 25.0 + 6.0 * std::sin(x / 1700.0) * std::cos(z / 2300.0) - std::max(0.0, x - 11000.0) * 0.05;
+    });
+    Terrain t(hm, terrainInfoFor(*findLocation("mumbai")));
+    WorldLayout L = WorldLayout::build(t);
+    CHECK(!L.towns.empty() && L.towns[0].kind == TownKind::City && L.towns[0].radius > 1200);   // a metropolis
+    // the elevated metro: long, clear of the ground all the way, with trains on it
+    CHECK(L.metro.length() > 2500);
+    for (const Vec3& p : L.metro.pts) CHECK(p.y > t.surfaceHeight(p.x, p.z) + 8.0);
+    CHECK(L.metroTrains() >= 2);
+    for (double time : {0.0, 37.0, 400.0}) {
+        Vec3 a = L.metroCarAt(0, 0, time), b = L.metroCarAt(0, 1, time);
+        CHECK_NEAR(std::hypot(a.x - b.x, a.z - b.z), WorldLayout::kMetroCarLength, 2.5);   // the cars stay coupled
+    }
+    // flyovers are roads (cars use them) that rise off the ground and come back down at the ends
+    CHECK(!L.flyovers.empty());
+    for (int fi : L.flyovers) {
+        CHECK(fi >= 0 && fi < static_cast<int>(L.roads.size()));
+        const Polyline& f = L.roads[static_cast<size_t>(fi)];
+        Vec3 mid = f.at(f.length() * 0.5), end = f.pts.back();
+        CHECK(mid.y > t.surfaceHeight(mid.x, mid.z) + 6.0);
+        CHECK(end.y < t.surfaceHeight(end.x, end.z) + 1.5);
+    }
+    // the power grid: lines with pylons on dry ground, never in the runway funnels
+    CHECK(L.powerLines.size() >= 2);
+    int subs = 0;
+    for (const Facility& f : L.facilities) subs += f.kind == FacilityKind::Substation;
+    CHECK(subs >= 2);
+    const RunwayInfo& rw = t.runway();
+    for (const PowerLine& pl : L.powerLines) {
+        CHECK(pl.pylons.size() >= 2);
+        for (size_t i = 0; i < pl.pylons.size(); ++i) {
+            const Vec3& p = pl.pylons[i];
+            CHECK(!t.isWater(p.x, p.z) && t.height(p.x, p.z) > 0.0);
+            double dx = p.x - rw.center.x, dz = p.z - rw.center.z;
+            double u = dx * std::cos(rw.heading) + dz * std::sin(rw.heading), v = -dx * std::sin(rw.heading) + dz * std::cos(rw.heading);
+            CHECK(!(std::fabs(u) < rw.length * 0.5 + 3000 && std::fabs(v) < 600));
+            if (i > 0) {
+                // spans of a few hundred metres; longer only across water
+                const Vec3& q = pl.pylons[i - 1];
+                bool water = false;
+                for (double f = 0.1; f < 0.95; f += 0.1) water = water || t.isWater(q.x + (p.x - q.x) * f, q.z + (p.z - q.z) * f);
+                CHECK(std::hypot(p.x - q.x, p.z - q.z) < (water ? 1100.0 : 900.0));
+                // and no span hangs over a town
+                for (const Town& tw : L.towns) {
+                    Vec3 m = (p + q) * 0.5;
+                    CHECK(std::hypot(m.x - tw.center.x, m.z - tw.center.z) > tw.radius * 0.8);
+                }
+            }
+        }
+    }
+    // the same terrain as an ordinary map: no metro, no flyovers, the old town sizes
+    TerrainInfo plain = terrainInfoFor(*findLocation("mumbai"));
+    plain.urban = 1;
+    Terrain t1(hm, plain);
+    WorldLayout L1 = WorldLayout::build(t1);
+    CHECK(L1.metro.pts.empty() && L1.flyovers.empty());
+    CHECK(L1.towns.empty() || L1.towns[0].radius == 750.0);
+}
+
+TEST(a_mountain_river_gets_a_dam_in_its_narrowest_gorge_and_roads_bridge_rivers) {
+    // a steep-sided valley descending east
+    Heightmap hm = synthMap([](double x, double z) {
+        return 1400.0 - x * 0.025 + std::fabs(z) * 0.33 + 80.0 * std::fabs(std::sin(x / 2100.0)) * std::min(1.0, std::fabs(z) / 2500.0);
+    });
+    Terrain t(hm, terrainInfoFor(*findLocation("himachal")));
+    WorldLayout L = WorldLayout::build(t);
+    CHECK(L.dams.size() == 1);
+    if (!L.dams.empty()) {
+        const Dam& d = L.dams[0];
+        CHECK(d.a.y > d.bed + 40.0);                                   // a real wall above the river
+        CHECK(std::hypot(d.b.x - d.a.x, d.b.z - d.a.z) < 900.0);
+        Vec3 mid = (d.a + d.b) * 0.5;
+        CHECK(t.isWater(mid.x, mid.z) || std::fabs(mid.z) < 400.0);  // it stands across the river
+        for (const Vec3& e : {d.a, d.b}) CHECK(t.height(e.x, e.z) >= d.bed + 30.0);   // keyed into the valley sides
+        bool powerhouse = false;
+        for (const Facility& f : L.facilities) powerhouse = powerhouse || f.kind == FacilityKind::Powerhouse;
+        CHECK(powerhouse);
+    }
+    // wherever a road crosses the river it is on a bridge above the water
+    for (const Polyline& r : L.roads)
+        for (const Vec3& p : r.pts)
+            if (t.isWater(p.x, p.z)) CHECK(p.y >= t.surfaceHeight(p.x, p.z) + 4.0);
+    // the desert map (no rivers) gets no dam
+    Terrain desert;
+    CHECK(WorldLayout::build(desert).dams.empty());
+}
+
 TEST(indian_locations_are_listed_with_their_climates) {
     const char* ids[] = {"ladakh", "nubra", "kashmir", "gangotri", "himachal", "uttarakhand", "tawang", "sikkim",
                          "assam", "kochi", "chennai", "bengaluru", "vizag", "western_ghats", "mumbai"};
@@ -1125,10 +1242,10 @@ TEST(c17_flies_like_a_heavy_transport) {
 // ------------------------------------------------------------------------------------------
 // Campaign 04-40
 // ------------------------------------------------------------------------------------------
-TEST(campaign_has_sixty_one_playable_missions) {
+TEST(campaign_has_one_hundred_playable_missions) {
     const auto& cat = campaignCatalogue();
     CHECK(cat.size() == static_cast<size_t>(kCampaignMissions));
-    CHECK(kCampaignMissions == 61);
+    CHECK(kCampaignMissions == 100 && kClassicCampaignMissions == 61);
     for (size_t i = 0; i < cat.size(); ++i) {
         CHECK(cat[i].number == static_cast<int>(i) + 1);
         CHECK(cat[i].playable);
@@ -1141,15 +1258,42 @@ TEST(campaign_has_sixty_one_playable_missions) {
     }
     CHECK(campaignMission(3) == nullptr);
     CHECK(campaignMission(kCampaignMissions + 1) == nullptr);
+    CHECK(campaignMission(100)->title == "SKYFALL - Final Air Superiority");
+    // the India theatres: every mission has its Indian home map, in the right theatre
+    auto in = [](const std::string& id, std::initializer_list<const char*> ids) {
+        for (const char* x : ids) if (id == x) return true;
+        return false;
+    };
+    for (int n = 62; n <= 100; ++n) {
+        const CampaignMissionDef* d = campaignMission(n);
+        const LocationDef* home = findLocation(d->homeLocation);
+        CHECK_MSG(home != nullptr && home->lon > 68.0 && home->lon < 98.0, "mission %d home %s", n, d->homeLocation.c_str());
+        if (n <= 75) CHECK_MSG(in(d->homeLocation, {"mumbai", "chennai", "bengaluru", "kochi", "vizag", "assam"}), "mission %d urban", n);
+        else if (n <= 85) CHECK_MSG(in(d->homeLocation, {"ladakh", "nubra", "kashmir", "himachal", "uttarakhand", "gangotri", "tawang", "sikkim"}), "mission %d himalaya", n);
+        else if (n <= 95) CHECK_MSG(in(d->homeLocation, {"mumbai", "chennai", "vizag", "kochi"}), "mission %d coastal", n);
+    }
+    // the classic campaign is unchanged: no home location, no protected civilians
+    for (int n = 4; n <= kClassicCampaignMissions; ++n) CHECK(campaignMission(n)->homeLocation.empty() && campaignMission(n)->civilianGroup == 0);
 }
+
+namespace {
+/// A campaign definition as flown over the Skyfall Desert (city / dam anchors resolved), cached.
+const CampaignMissionDef& desertDef(const CampaignMissionDef& d) {
+    static std::map<int, CampaignMissionDef> cache;
+    auto it = cache.find(d.number);
+    if (it == cache.end()) it = cache.emplace(d.number, adaptCampaignMission(d, terrain(), layout())).first;
+    return it->second;
+}
+}  // namespace
 
 TEST(campaign_layouts_are_valid) {
     const Terrain& t = terrain();
     int bad = 0;
     auto fail = [&](const CampaignMissionDef& m, const std::string& what) {
-        if (bad++ < 25) std::printf("    mission %02d: %s\n", m.number, what.c_str());
+        if (bad++ < 60) std::printf("    mission %02d: %s\n", m.number, what.c_str());
     };
-    for (const CampaignMissionDef& m : campaignMissions()) {
+    for (const CampaignMissionDef& m0 : campaignMissions()) {
+        const CampaignMissionDef& m = desertDef(m0);
         if (std::fabs(m.startX) > 14500 || std::fabs(m.startZ) > 14500) fail(m, "start outside the map");
         if (!m.carrier && m.startAlt < t.surfaceHeight(m.startX, m.startZ) + 300) fail(m, "start too close to the ground");
         for (const TargetDef& g : m.targets) {
@@ -1176,6 +1320,10 @@ TEST(campaign_layouts_are_valid) {
                     if (t.onRunway(x, z, 60.0)) fail(m, g.label + " on the runway");
                 }
             };
+            if (g.flyAgl > 0) {   // a helicopter in the air: anywhere over the map
+                if (std::fabs(g.x) > 14000 || std::fabs(g.z) > 14000) fail(m, g.label + " outside the map");
+                continue;
+            }
             if (g.pathRadius > 0)
                 for (int k = 0; k < 36; ++k) checkPoint(g.x + std::cos(k * kPi / 18) * g.pathRadius, g.z + std::sin(k * kPi / 18) * g.pathRadius);
             else checkPoint(g.x, g.z);
@@ -1185,8 +1333,13 @@ TEST(campaign_layouts_are_valid) {
             for (size_t b = a + 1; b < m.targets.size(); ++b) {
                 const TargetDef &A = m.targets[a], &B = m.targets[b];
                 if (A.pathRadius > 0 || B.pathRadius > 0) continue;
-                if (A.anchor != TargetDef::Anchor::None || B.anchor != TargetDef::Anchor::None) continue;
+                bool placed = [](const TargetDef& q) { return q.anchor == TargetDef::Anchor::None || q.anchor == TargetDef::Anchor::City || q.anchor == TargetDef::Anchor::Dam; }(A) &&
+                              [](const TargetDef& q) { return q.anchor == TargetDef::Anchor::None || q.anchor == TargetDef::Anchor::City || q.anchor == TargetDef::Anchor::Dam; }(B);
+                if (!placed) continue;
                 if (std::hypot(A.x - B.x, A.z - B.z) < 25.0) fail(m, A.label + " overlaps " + B.label);
+                // a protected site is never inside the blast radius of a target
+                bool civA = A.kind == GroundKind::Civilian, civB = B.kind == GroundKind::Civilian;
+                if (civA != civB && (civA ? B : A).group > 0 && std::hypot(A.x - B.x, A.z - B.z) < 70.0) fail(m, A.label + " is within 70 m of " + B.label);
             }
         for (const ObjectiveDef& o : m.objectives) {
             if (o.kind == ObjectiveKind::DestroyGroup) {
@@ -1197,10 +1350,13 @@ TEST(campaign_layouts_are_valid) {
             if (o.kind == ObjectiveKind::Waypoint && (std::fabs(o.x) > 15000 || std::fabs(o.z) > 15000)) fail(m, "waypoint outside the map");
             for (int w : o.wavesOnStart) if (w < 0 || w >= static_cast<int>(m.waves.size())) fail(m, "bad wave index");
         }
-        // every wave is released by some objective
+        // every wave is released by some objective (at its start, or as reinforcements)
         for (size_t w = 0; w < m.waves.size(); ++w) {
             bool used = false;
-            for (const ObjectiveDef& o : m.objectives) for (int i : o.wavesOnStart) if (i == static_cast<int>(w)) used = true;
+            for (const ObjectiveDef& o : m.objectives) {
+                for (int i : o.wavesOnStart) if (i == static_cast<int>(w)) used = true;
+                for (const auto& lw : o.wavesLate) if (lw.first == static_cast<int>(w)) used = true;
+            }
             if (!used) fail(m, "wave " + std::to_string(w) + " is never spawned");
         }
         if (m.protectGroup > 0) {
@@ -1208,6 +1364,20 @@ TEST(campaign_layouts_are_valid) {
             for (const TargetDef& g : m.targets) if (g.group == m.protectGroup && g.team == Team::Blue) ++n;
             if (n == 0) fail(m, "protect group has no friendly assets");
         }
+        if (m.civilianGroup > 0) {
+            int n = 0;
+            for (const TargetDef& g : m.targets) {
+                if (g.group != m.civilianGroup) continue;
+                if (g.team != Team::Blue || g.kind != GroundKind::Civilian || g.armed) fail(m, g.label + ": a protected site must be a friendly, unarmed civilian site");
+                ++n;
+            }
+            if (n == 0) fail(m, "civilian group has no protected sites");
+            for (const ObjectiveDef& o : m.objectives) if (o.kind == ObjectiveKind::DestroyGroup && o.group == m.civilianGroup) fail(m, "an objective destroys protected sites");
+        }
+        // destruction objectives are military: no objective targets a civilian site
+        for (const ObjectiveDef& o : m.objectives)
+            if (o.kind == ObjectiveKind::DestroyGroup)
+                for (const TargetDef& g : m.targets) if (g.group == o.group && (g.kind == GroundKind::Civilian || g.team == Team::Blue)) fail(m, "objective '" + o.title + "' includes " + g.label);
     }
     CHECK(bad == 0);
 }
@@ -1215,14 +1385,16 @@ TEST(campaign_layouts_are_valid) {
 namespace {
 /// Plays a campaign mission with an objective-aware "cheat" pilot: teleports to waypoints, destroys
 /// targets and bandits through the test hooks, but flies the manoeuvre objectives for real.
+/// The definition is the one the game flies over the desert (city anchors resolved).
 struct DesertPlaythrough : sky::CampaignPlaythrough {
     explicit DesertPlaythrough(const CampaignMissionDef& d)
-        : sky::CampaignPlaythrough(d, d.carrier ? static_cast<const Terrain&>(carrierTerrain()) : terrain(), &layout()) {}
+        : sky::CampaignPlaythrough(desertDef(d), d.carrier ? static_cast<const Terrain&>(carrierTerrain()) : terrain(), &layout()) {}
 };
 }  // namespace
 
 TEST(campaign_missions_do_not_complete_without_action) {
-    for (const CampaignMissionDef& d : campaignMissions()) {
+    for (const CampaignMissionDef& d0 : campaignMissions()) {
+        const CampaignMissionDef& d = desertDef(d0);
         DesertPlaythrough pt(d);
         ControlInputs in;
         for (int i = 0; i < 240; ++i) pt.step(in);   // 2 s of straight flight
@@ -1234,7 +1406,8 @@ TEST(campaign_missions_do_not_complete_without_action) {
 }
 
 TEST(campaign_missions_complete_when_objectives_are_met) {
-    for (const CampaignMissionDef& d : campaignMissions()) {
+    for (const CampaignMissionDef& d0 : campaignMissions()) {
+        const CampaignMissionDef& d = desertDef(d0);
         DesertPlaythrough pt(d);
         bool ok = pt.run(240.0);
         if (!ok)
@@ -1242,10 +1415,10 @@ TEST(campaign_missions_complete_when_objectives_are_met) {
                         pt.mission.stepCount(), pt.mission.current() ? pt.mission.current()->title.c_str() : "-",
                         static_cast<int>(pt.mission.status()), pt.mission.failure().c_str());
         CHECK(ok);
-        // every scripted wave was released
-        int waves = 0;
-        for (const ObjectiveDef& o : d.objectives) waves += static_cast<int>(o.wavesOnStart.size());
-        CHECK(pt.battle.wave() == waves);
+        // every scripted wave was released (reinforcements only if an objective dragged on)
+        int waves = 0, late = 0;
+        for (const ObjectiveDef& o : d.objectives) { waves += static_cast<int>(o.wavesOnStart.size()); late += static_cast<int>(o.wavesLate.size()); }
+        CHECK(pt.battle.wave() >= waves && pt.battle.wave() <= waves + late);
     }
 }
 
@@ -1697,7 +1870,7 @@ TEST(hands_off_catapult_launch_climbs_away_safely_in_every_aircraft_and_mode) {
 namespace {
 struct DesertCombatBot : sky::CombatBot {
     DesertCombatBot(const CampaignMissionDef& d, HandlingMode mode, int tacticsOverride = -1, unsigned seed = 0)
-        : sky::CombatBot(d, mode, d.carrier ? static_cast<const Terrain&>(carrierTerrain()) : terrain(), &layout(), tacticsOverride, seed) {}
+        : sky::CombatBot(desertDef(d), mode, d.carrier ? static_cast<const Terrain&>(carrierTerrain()) : terrain(), &layout(), tacticsOverride, seed) {}
 };
 }  // namespace
 
@@ -1709,7 +1882,7 @@ TEST(hard_campaign_missions_are_winnable_by_a_real_pilot_in_every_handling_mode)
     const unsigned kSeeds = std::getenv("SKYFALL_SEEDS") ? static_cast<unsigned>(std::atoi(std::getenv("SKYFALL_SEEDS"))) : 5u;
     const char* tacEnv = std::getenv("SKYFALL_TAC");
     const bool verbose = std::getenv("SKYFALL_VERBOSE") != nullptr;
-    for (int n = 47; n <= kCampaignMissions; ++n) {
+    for (int n = 47; n <= kClassicCampaignMissions; ++n) {
         const CampaignMissionDef* d = campaignMission(n);
         if (!d) { CHECK(false); continue; }
         std::printf("    mission %02d %-22s", n, d->title.c_str());
@@ -1740,6 +1913,111 @@ TEST(hard_campaign_missions_are_winnable_by_a_real_pilot_in_every_handling_mode)
         std::printf("\n");
         CHECK(total * 5 >= kSeeds * 3 * 3);   // and won in at least 60 % of all attempts
     }
+}
+
+TEST(india_campaign_missions_are_winnable_by_a_real_pilot) {
+    // Missions 62-100 flown by CombatBot against the full enemy AI (assisted handling, up to
+    // four seeds each): every one must be won, and protected sites must survive a won run.
+    const unsigned kSeeds = std::getenv("SKYFALL_SEEDS") ? static_cast<unsigned>(std::atoi(std::getenv("SKYFALL_SEEDS"))) : 4u;
+    const bool verbose = std::getenv("SKYFALL_VERBOSE") != nullptr;
+    int from = 62, to = kCampaignMissions;
+    if (const char* only = std::getenv("SKYFALL_MISSION")) from = to = std::atoi(only);
+    for (int n = from; n <= to; ++n) {
+        const CampaignMissionDef* d = campaignMission(n);
+        if (!d) { CHECK(false); continue; }
+        std::printf("    mission %02d %-32s", n, d->title.c_str());
+        unsigned wins = 0, tries = 0;
+        int civLost = 0;
+        double secs = 0, hull = 0;
+        for (unsigned seed = 0; seed < kSeeds && wins < 2; ++seed) {
+            ++tries;
+            DesertCombatBot bot(*d, HandlingMode::Assisted, -1, seed);
+            bool ok = bot.run(900.0);
+            const Jet& p = bot.battle.player();
+            if (ok) {
+                ++wins; secs += bot.time; hull += p.health;
+                if (d->civilianGroup > 0) civLost += bot.battle.groundTotal(d->civilianGroup) - bot.battle.groundAlive(d->civilianGroup);
+            }
+            if (verbose || !ok)
+                std::printf("\n      seed %u %s t=%4.0f s hull %3.0f at %s %s", seed, ok ? "WON " : "LOST", bot.time, p.health,
+                            ok ? "end" : (bot.mission.current() ? bot.mission.current()->title.c_str() : "-"), bot.mission.failure().c_str());
+        }
+        std::printf("  %u/%u", wins, tries);
+        if (wins) std::printf(" (%3.0f s, hull %3.0f)", secs / wins, hull / wins);
+        std::printf("\n");
+        CHECK_MSG(wins >= 1, "mission %d never won", n);
+        if (d->civilianLimit == 0) CHECK_MSG(civLost == 0, "mission %d won with protected sites lost", n);
+    }
+}
+
+TEST(protected_sites_cost_score_and_fail_the_urban_missions) {
+    // a city mission fails as soon as a protected site is destroyed
+    const CampaignMissionDef* d = campaignMission(62);
+    CHECK(d && d->civilianGroup > 0 && d->civilianLimit == 0);
+    {
+        DesertPlaythrough pt(*d);
+        int civ = -1;
+        for (int gi = 0; gi < static_cast<int>(pt.battle.ground().size()); ++gi)
+            if (pt.battle.ground()[gi].kind == GroundKind::Civilian) { civ = gi; break; }
+        CHECK(civ >= 0);
+        CHECK(pt.battle.ground()[civ].team == Team::Blue);
+        pt.battle.debugDestroyGround(civ);
+        pt.step(ControlInputs{});
+        CHECK(pt.mission.status() == MissionStatus::Failed);
+        CHECK(pt.mission.failure().find("protected") != std::string::npos);
+    }
+    // the city targets sit inside the city, on its streets, away from the protected sites
+    const CampaignMissionDef& r = desertDef(*d);
+    const Town& city = layout().towns[0];
+    for (const TargetDef& g : r.targets) {
+        CHECK(std::hypot(g.x - city.center.x, g.z - city.center.z) < city.radius * 1.2);
+        double sx = std::fmod(std::fabs(g.x - city.center.x) + 75.0, 150.0) - 75.0, sz = std::fmod(std::fabs(g.z - city.center.z) + 75.0, 150.0) - 75.0;
+        CHECK(std::min(std::fabs(sx), std::fabs(sz)) < 1.0);   // on a street of the desert town (every 150 m)
+    }
+    // a penalty-only mission (72) keeps going after a loss, the score pays for it
+    const CampaignMissionDef* p72 = campaignMission(72);
+    CHECK(p72 && p72->civilianLimit < 0);
+    {
+        DesertPlaythrough pt(*p72);
+        for (int gi = 0; gi < static_cast<int>(pt.battle.ground().size()); ++gi)
+            if (pt.battle.ground()[gi].kind == GroundKind::Civilian) pt.battle.debugDestroyGround(gi);
+        pt.step(ControlInputs{});
+        CHECK(pt.mission.status() == MissionStatus::Running);
+    }
+    CampaignOutcome clean, costly;
+    clean.success = costly.success = true;
+    clean.groundKills = costly.groundKills = 4;
+    clean.missilesFired = costly.missilesFired = 5;
+    clean.missileHits = costly.missileHits = 4;
+    clean.civiliansTotal = costly.civiliansTotal = 2;
+    costly.civiliansLost = 1;
+    CHECK(costly.score() + 150 <= clean.score());
+    CHECK(std::string(clean.grade()) <= std::string(costly.grade()));   // 'A' < 'B': the clean run grades higher
+    CampaignOutcome failed;
+    CHECK(std::string(failed.grade()) == "-");
+    // the outcome picks the debrief
+    const CampaignMissionDef* f = campaignMission(100);
+    CHECK(campaignDebrief(*f, clean) == f->debriefClean);
+    CHECK(campaignDebrief(*f, costly) == f->debriefCostly);
+}
+
+TEST(reinforcements_arrive_when_an_objective_drags_on) {
+    const CampaignMissionDef* d = campaignMission(64);
+    CHECK(d != nullptr);
+    if (!d) return;
+    DesertPlaythrough pt(*d);
+    // finish the first objective at once: the trucks objective then has reinforcements after 90 s
+    for (int gi = 0; gi < static_cast<int>(pt.battle.ground().size()); ++gi)
+        if (pt.battle.ground()[gi].group == 1) pt.battle.debugDestroyGround(gi);
+    pt.step(ControlInputs{});
+    CHECK(pt.mission.stepIndex() == 1);
+    int before = pt.battle.wave();
+    ControlInputs in;
+    for (int i = 0; i < 80 * 120; ++i) pt.step(in);
+    CHECK(pt.battle.wave() == before);              // not yet
+    for (int i = 0; i < 12 * 120; ++i) pt.step(in);
+    CHECK(pt.battle.wave() == before + 1);          // reinforcements after 90 s
+    CHECK(pt.director.lateReleased() == 1);
 }
 
 int main(int argc, char** argv) {

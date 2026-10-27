@@ -379,6 +379,8 @@ std::string Game::voiceDir() {
 
 bool Game::locationAvailable(const std::string& id) {
     if (id == "desert") return true;
+    if (const char* px = std::getenv("SKYFALL_TERRAIN_PROXY"))   // development preview (see loadLocation)
+        if (std::string(px).find(id + "=") != std::string::npos) return true;
     return maps_.installed(id) || FileExists(bundledMapPath(id).c_str());
 }
 
@@ -716,7 +718,7 @@ void Game::startMission(int n) {
     terrain_.clearObstacles();
     gateMarkers_.clear();
     corridor_.clear();
-    const std::string loc = campaignLocation();
+    const std::string loc = missionLocation(n);
     if (n <= kCampaignMissions && terrain_.info().id != loc) {
         // the campaign is flown over the location chosen on the campaign screen: switch first
         // (next frame), then start
@@ -729,6 +731,10 @@ void Game::startMission(int n) {
     screen_ = Screen::Playing;
     mode_ = GameMode::Mission01;   // "guided mission" mode
     missionNo_ = n;
+    flightPath_.clear();
+    pathTimer_ = 0;
+    lateSeen_ = 0;
+    outcome_ = CampaignOutcome{};
     campaignDef_ = nullptr;
     campVariant_ = campaignVariantFor(terrain_, layout_);
     if (n >= 4 && campaignMission(n)) {
@@ -1205,11 +1211,19 @@ void Game::updatePlaying(double dt) {
             }
             voicedStep_ = idx;
         }
+        if (campaignDef_ && director_.lateReleased() > lateSeen_ && mission_->status() == MissionStatus::Running) {
+            lateSeen_ = director_.lateReleased();
+            radio(Speaker::Awacs, lines::kReinforcements, 5);
+            hud_.popup("ENEMY REINFORCEMENTS INBOUND", Color{255, 170, 90, 255});
+        }
+        recordFlightPath(dt);
+        if ((mission_->status() == MissionStatus::Complete && !missionDone_) || (mission_->status() == MissionStatus::Failed && !playerDead_))
+            outcome_ = campaignOutcome();
         if (mission_->status() == MissionStatus::Complete && !missionDone_) {
             missionDone_ = true;
             markCampaignCompletedAt(settings_, terrain_.info().id, missionNo_);
             saveSettings();
-            if (campaignDef_) radio(Speaker::Awacs, campaignDef_->debrief, 9);
+            if (campaignDef_) radio(Speaker::Awacs, campaignDebrief(*campaignDef_, outcome_), 9);
             else if (missionNo_ == 1) radio(Speaker::Tower, lines::kTowerDone1, 9);
             else if (missionNo_ == 2) radio(Speaker::Instructor, lines::kInstructorDone2, 8);
             else radio(Speaker::Tower, lines::kTowerDone3, 8);
@@ -1220,7 +1234,7 @@ void Game::updatePlaying(double dt) {
         if (mission_->status() == MissionStatus::Failed && !playerDead_ && p.alive && !fm.state().crashed) {
             playerDead_ = true;
             deathReason_ = "MISSION FAILED: " + mission_->failure();
-            if (!capturing_) speech_.say(Speaker::Awacs, lines::kLost, true);
+            if (!capturing_) speech_.say(Speaker::Awacs, mission_->failure().find("rotected") != std::string::npos ? lines::kCivilianFail : lines::kLost, true);
             deathCamPos_ = cam_.position;
             deathTarget_ = toRl(fm.state().pos);
         }
@@ -1280,8 +1294,9 @@ void Game::processEvents() {
         float dist = Vector3Distance(ep, cam_.position);
         float att = 1.0f / (1.0f + dist / 600.0f);
         float pan = panFor(cam_, ep);
+        const float delay = dist / 343.0f;   // the flash is seen at once, the blast heard later
         switch (e.type) {
-            case EventType::Explosion: audio_.play(Sfx::Explosion, 0.4f + 1.4f * att, pan); break;
+            case EventType::Explosion: audio_.play(Sfx::Explosion, 0.4f + 1.4f * att, pan, delay, dist); break;
             case EventType::JetKilled:
                 audio_.play(Sfx::BigExplosion, 0.5f + 1.5f * att, pan);
                 if (e.a == p.id) { lastKillTime_ = time_; lastKillPos_ = e.pos; }
@@ -1293,7 +1308,13 @@ void Game::processEvents() {
                 }
                 break;
             case EventType::GroundKilled:
-                audio_.play(Sfx::Explosion, 0.6f + 1.2f * att, pan);
+                audio_.play(e.size > 2.5 ? Sfx::BigExplosion : Sfx::Explosion, 0.6f + 1.2f * att, pan, delay, dist);
+                if (e.b >= 0 && e.b < static_cast<int>(battle_.ground().size()) && battle_.ground()[e.b].kind == GroundKind::Civilian) {
+                    const GroundTarget& g = battle_.ground()[e.b];
+                    hud_.popup("-180   PROTECTED SITE DESTROYED: " + (g.label.empty() ? std::string("CIVILIAN") : g.label), Color{255, 90, 80, 255});
+                    if (!capturing_) radio(Speaker::Awacs, lines::kCivilianHit, 5);
+                    break;
+                }
                 if (e.a == p.id) { lastKillTime_ = time_; lastKillPos_ = e.pos; }
                 if (e.a == p.id) {
                     std::string what = "GROUND TARGET";
@@ -1308,7 +1329,7 @@ void Game::processEvents() {
                 }
                 break;
             case EventType::SmallExplosion: if (dist < 1500) audio_.play(Sfx::Impact, 0.6f * att, pan); break;
-            case EventType::Splash: audio_.play(Sfx::Explosion, 0.5f * att, pan); break;
+            case EventType::Splash: audio_.play(Sfx::Explosion, 0.5f * att, pan, delay, dist); break;
             case EventType::MissileLaunch:
                 audio_.play(Sfx::MissileLaunch, e.a == p.id ? 1.0f : 0.25f + att, pan);
                 if (e.a == p.id && e.c >= 0) {
@@ -1426,9 +1447,10 @@ void Game::updateCamera(double dt) {
             li.behind = in.lookBehind && screen_ == Screen::Playing;
             li.reset = in.lookReset;
             chaseRig_.input(dt, li, settings_.lookRecentre);
-            // Battlefield-style: close behind and slightly above, rolling with the jet; the camera
-            // drops back as the jet surges forward and closes in when it brakes
-            double dist = prof.chaseDistance * 0.95 * zoom_ * settings_.chaseDistance *
+            // behind and slightly above, rolling with the jet, far enough back that the aircraft
+            // sits small in the lower middle of the view and the world ahead fills the screen;
+            // the camera drops back as the jet surges forward and closes in when it brakes
+            double dist = prof.chaseDistance * 2.0 * zoom_ * settings_.chaseDistance *
                           (1.0 + std::clamp(accelSmooth_ / 90.0, -0.12, 0.16) * comfort);
             double height = dist * 0.2 * settings_.chaseHeight;
             Quat q = chaseQ_;
@@ -1446,7 +1468,7 @@ void Game::updateCamera(double dt) {
             ChaseView v = chaseRig_.solve(dt, s.pos, q, dist, height, ground, 2.5);
             cam_.position = Vector3Add(toRl(v.pos), Vector3Scale(jitter, static_cast<float>(0.12 * (1.0 - v.lookAmount * 0.7))));
             Vec3 tgt = v.target;
-            if (v.lookAmount < 1e-3) tgt = s.pos + q.forward() * 45.0 + q.up() * 4.2;   // the classic framing
+            if (v.lookAmount < 1e-3) tgt = s.pos + q.forward() * 90.0 + q.up() * 6.5;   // aim past the jet: it sits low in the frame
             cam_.target = toRl(tgt);
             Vec3 up = s.onGround ? Vec3{0, 1, 0} : v.up;
             cam_.up = toRl(up);
@@ -1514,12 +1536,40 @@ void Game::updateAudio() {
     audio_.setMissileWarning(playing && battle_.playerMissileWarning());
     audio_.setStallWarning(playing && s.stalled);
     audio_.setSpeedFeel(playing ? static_cast<float>(lowAlt_) : 0.0f);
-    if (!playing || !p.alive) return;
+    audio_.setWeather(playing && rain_ ? 1.0f : 0.0f, tod_ == TimeOfDay::Storm ? 1.0f : 0.35f);
+    if (!playing || !p.alive) { audio_.setNearbyJet(-1, 0, 0, 0); audio_.setNearbyMissile(-1, 0, 0); return; }
     // the surge into high speed gets its whoosh (same trigger as the visual rush)
     if (rush_ > 0.97 && !rushSounded_) { audio_.play(Sfx::Rush, 0.7f); rushSounded_ = true; }
     if (rush_ < 0.5) rushSounded_ = false;
     // flybys: another jet passes within ~200 m at high closing speed
     Vector3 camRight = Vector3Normalize(Vector3CrossProduct(Vector3Subtract(cam_.target, cam_.position), cam_.up));
+    // the nearest other jet and missile keep sounding, Doppler-shifted by their closing speed
+    {
+        double bestJ = 1e18, bestM = 1e18;
+        float jClose = 0, jPan = 0, jThr = 0, mClose = 0, mPan = 0;
+        for (const auto& jp : battle_.jets()) {
+            const Jet& j = *jp;
+            if (&j == &p || !j.alive) continue;
+            const FlightState& o = j.fm->state();
+            Vec3 d = o.pos - s.pos;
+            double dist = length(d);
+            if (dist >= bestJ) continue;
+            bestJ = dist;
+            jClose = static_cast<float>(-dot(o.vel - s.vel, d) / std::max(dist, 1.0));
+            jPan = static_cast<float>(std::clamp(Vector3DotProduct(Vector3Normalize(toRl(d)), camRight), -1.0f, 1.0f));
+            jThr = static_cast<float>(o.throttle);
+        }
+        for (const Missile& m : battle_.missiles()) {
+            Vec3 d = m.pos - s.pos;
+            double dist = length(d);
+            if (dist >= bestM || m.motor <= 0) continue;
+            bestM = dist;
+            mClose = static_cast<float>(-dot(m.vel - s.vel, d) / std::max(dist, 1.0));
+            mPan = static_cast<float>(std::clamp(Vector3DotProduct(Vector3Normalize(toRl(d)), camRight), -1.0f, 1.0f));
+        }
+        audio_.setNearbyJet(bestJ < 1e17 ? static_cast<float>(bestJ) : -1.0f, jClose, jPan, jThr);
+        audio_.setNearbyMissile(bestM < 1e17 ? static_cast<float>(bestM) : -1.0f, mClose, mPan);
+    }
     for (const auto& jp : battle_.jets()) {
         const Jet& j = *jp;
         if (&j == &p || !j.alive) continue;
@@ -1697,6 +1747,8 @@ void Game::renderFrame() {
         hc.deathReason = deathReason_;
         hc.respawnTimer = respawnTimer_;
         hc.missionDone = missionDone_;
+        hc.outcome = campaignDef_ ? &outcome_ : nullptr;
+        hc.flightPath = &flightPath_;
         if (missionNo_ < kCampaignMissions) {
             const auto& cat = campaignCatalogue();
             std::string nextTitle = cat[missionNo_].title;
@@ -1795,7 +1847,7 @@ void Game::drawTitle() {
     ui::logo(70 * s, 70 * s, s, titleTime_);
     nav_.begin(7, in.up, in.down, in.confirm, in.left, in.right);
     float x = 70 * s, y = 222 * s, bw = 430 * s, bh = 48 * s, gap = 8 * s;
-    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "61 missions over any world location, your aircraft and paint")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; locStatus_.clear(); nav_.focus = 0; return; }
+    if (ui::button(nav_, 0, {x, y, bw, bh}, "CAMPAIGN", "100 missions: the classic campaign anywhere, then the India theatres")) { audio_.play(Sfx::Click); screen_ = Screen::Campaign; locStatus_.clear(); nav_.focus = 0; return; }
     y += bh + gap;
     if (ui::button(nav_, 1, {x, y, bw, bh}, "TRAINING ACADEMY", "20 courses: carrier, flying, helicopters, air combat")) { audio_.play(Sfx::Click); openAcademy(); return; }
     y += bh + gap;
@@ -1818,6 +1870,45 @@ std::string upperStr(std::string v) {
     return v;
 }
 }  // namespace
+
+void Game::recordFlightPath(double dt) {
+    // the track for the debrief map: one point a second while the mission runs
+    if (!mission_ || mode_ != GameMode::Mission01 || battle_.jets().empty()) return;
+    pathTimer_ -= dt;
+    if (pathTimer_ <= 0 && mission_->status() == MissionStatus::Running && battle_.player().alive && flightPath_.size() < 7200) {
+        flightPath_.push_back(battle_.player().fm->state().pos);
+        pathTimer_ = 1.0;
+    }
+}
+
+CampaignOutcome Game::campaignOutcome() const {
+    CampaignOutcome o;
+    if (!mission_ || battle_.jets().empty()) return o;
+    const Jet& p = battle_.player();
+    const Battle::PlayerStats& ps = battle_.playerStats();
+    o.success = mission_->status() == MissionStatus::Complete;
+    o.seconds = mission_->elapsed();
+    o.airKills = p.kills;
+    o.groundKills = battle_.groundKilledByPlayer();
+    o.missilesFired = ps.missilesFired;
+    o.missileHits = ps.missileHits;
+    o.damageTaken = std::max(0.0, 100.0 - p.health);
+    if (campaignDef_ && campaignDef_->civilianGroup > 0) {
+        o.civiliansTotal = battle_.groundTotal(campaignDef_->civilianGroup);
+        o.civiliansLost = o.civiliansTotal - battle_.groundAlive(campaignDef_->civilianGroup);
+    }
+    if (campaignDef_ && campaignDef_->protectGroup > 0)
+        o.friendliesLost = battle_.groundTotal(campaignDef_->protectGroup) - battle_.groundAlive(campaignDef_->protectGroup);
+    return o;
+}
+
+std::string Game::missionLocation(int n) {
+    if (n > kClassicCampaignMissions) {
+        const CampaignMissionDef* d = campaignMission(n);
+        if (d && !d->homeLocation.empty() && locationAvailable(d->homeLocation)) return d->homeLocation;
+    }
+    return campaignLocation();
+}
 
 std::string Game::campaignLocation() const {
     auto it = settings_.extra.find("campaign_location");
@@ -1845,9 +1936,10 @@ void Game::drawCampaign() {
     // missions 0..n-1, then location, aircraft, paint, back
     const int kLoc = n, kAc = n + 1, kSkin = n + 2, kBack = n + 3;
     nav_.begin(n + 4, in.up, in.down, in.confirm, in.left, in.right);
-    // six chapters: 1-10, 11-20, 21-30, 31-40, 41-51, 52-61 (carrier)
-    static const int starts[] = {0, 10, 20, 30, 40, 51, 61};
-    const int nc = 6;
+    // eleven chapters on two pages: the classic campaign (1-61) and the India theatres (62-100)
+    static const int starts[] = {0, 10, 20, 30, 40, 51, 61, 68, 75, 85, 95, 100};
+    const int nc = 11;
+    static const int pageFirst[] = {0, 6, 11};
     auto colOf = [&](int i) { int c = 0; while (c + 1 < nc && i >= starts[c + 1]) ++c; return c; };
     auto rowOf = [&](int i) { return i - starts[colOf(i)]; };
     if ((in.left || in.right) && nav_.focus < n) {
@@ -1855,14 +1947,21 @@ void Game::drawCampaign() {
         int rows = std::min(starts[c + 1], n) - starts[c];
         nav_.focus = std::min(starts[c] + std::min(rowOf(nav_.focus), rows - 1), n - 1);
     }
-    const float colW = (w - 100 * s) / static_cast<float>(nc) - 8 * s;
+    if (nav_.focus < n) campPage_ = colOf(nav_.focus) >= pageFirst[1] ? 1 : 0;
+    const int page = campPage_;
+    const float colW = (w - 100 * s) / 6.0f - 8 * s;
     const float rowH = 37 * s;
-    static const char* chapters[] = {"TRAINING", "OPERATIONS", "OFFENSIVE", "ENDGAME", "CRITICAL STRIKE", "CARRIER OPS"};
-    for (int c = 0; c < nc; ++c)
-        ui::text(chapters[c], 50 * s + c * (colW + 8 * s), 78 * s, 12 * s, Color{255, 176, 60, 220});
+    static const char* chapters[] = {"TRAINING", "OPERATIONS", "OFFENSIVE", "ENDGAME", "CRITICAL STRIKE", "CARRIER OPS",
+                                     "URBAN I", "URBAN II", "HIMALAYA", "COASTAL & NAVAL", "FINAL CAMPAIGN"};
+    for (int c = pageFirst[page]; c < pageFirst[page + 1]; ++c)
+        ui::text(chapters[c], 50 * s + (c - pageFirst[page]) * (colW + 8 * s), 78 * s, 12 * s, Color{255, 176, 60, 220});
+    ui::text(page == 0 ? "PAGE 1 / 2   CLASSIC CAMPAIGN   >>" : "<<   PAGE 2 / 2   INDIA THEATRES", w - 50 * s, 62 * s, 12 * s,
+             Color{200, 210, 215, 200}, Align::Right);
     for (int i = 0; i < n; ++i) {
         const MissionInfo& m = cat[i];
-        float col = static_cast<float>(colOf(i)), row = static_cast<float>(rowOf(i));
+        int ch = colOf(i);
+        if (ch < pageFirst[page] || ch >= pageFirst[page + 1]) continue;
+        float col = static_cast<float>(ch - pageFirst[page]), row = static_cast<float>(rowOf(i));
         Rectangle r = {50 * s + col * (colW + 8 * s), 96 * s + row * (rowH + 3 * s), colW, rowH};
         char label[96];
         std::snprintf(label, sizeof label, "%02d  %s", m.number, m.title.c_str());
@@ -1877,7 +1976,8 @@ void Game::drawCampaign() {
             startMissionBriefed(m.number);
             return;
         }
-        if (campaignCompletedAt(settings_, loc, m.number))
+        const CampaignMissionDef* md = m.number > kClassicCampaignMissions ? campaignMission(m.number) : nullptr;
+        if (campaignCompletedAt(settings_, loc, m.number) || (md && campaignCompletedAt(settings_, md->homeLocation, m.number)))
             ui::text("+", r.x + r.width - 10 * s, r.y + r.height / 2 - 9 * s, 18 * s, Color{120, 240, 160, 255}, Align::Right);
     }
     // ---- where, in what, and how it is painted ----
@@ -1926,11 +2026,19 @@ void Game::drawCampaign() {
         char head[96];
         std::snprintf(head, sizeof head, "MISSION %02d", m.number);
         ui::text(head, b.x + 14 * s, b.y + 9 * s, 12 * s, Color{255, 176, 60, 230});
+        if (const CampaignMissionDef* md = m.number > kClassicCampaignMissions ? campaignMission(m.number) : nullptr) {
+            const LocationDef* home = findLocation(md->homeLocation);
+            if (home) {
+                bool here = locationAvailable(md->homeLocation);
+                std::string where = upperStr(home->name) + (here ? "" : "   (NOT DOWNLOADED: FLOWN OVER " + upperStr(locName) + ")");
+                ui::text(where, b.x + b.width - 14 * s, b.y + 9 * s, 12 * s, here ? Color{150, 255, 205, 230} : Color{255, 170, 120, 230}, Align::Right);
+            }
+        }
         ui::text(m.summary, b.x + 14 * s, b.y + 29 * s, 17 * s, WHITE, Align::Left, false);
     } else {
         Rectangle b = {50 * s, h - 118 * s, w - 100 * s - 230 * s, 64 * s};
         ui::panel(b, Color{0, 0, 0, 150}, Color{255, 255, 255, 40});
-        std::string txt = locStatus_.empty() ? std::string("The 61 missions are laid out on the terrain of the chosen location. Progress is kept per location.") : locStatus_;
+        std::string txt = locStatus_.empty() ? std::string("Missions 1-61 are laid out on the chosen location; 62-100 fly over their own Indian map when it is downloaded. Progress is kept per location.") : locStatus_;
         ui::text(locDef ? upperStr(locDef->region) : "PROCEDURAL", b.x + 14 * s, b.y + 9 * s, 12 * s, Color{255, 176, 60, 230});
         ui::text(txt, b.x + 14 * s, b.y + 29 * s, 15 * s, locStatus_.empty() ? WHITE : Color{255, 170, 120, 240}, Align::Left, false);
     }
@@ -2184,6 +2292,7 @@ void Game::scriptedStep(double seconds, const std::function<void(double)>& pilot
             }
         }
         time_ += chunk;
+        recordFlightPath(chunk);
         if (mode_ == GameMode::Training) updateTrainingFrame(chunk);
         damagePulse_ = std::max(0.0, damagePulse_ - chunk * 1.8);
         processEvents();
@@ -3362,6 +3471,144 @@ int Game::runCapture() {
             battle_.player().fm->resetAirborne({rw.center.x + 3000, rw.center.y + 1800, rw.center.z - 6000}, 2.4, 200, 0.8);
             scriptedStep(0.5, [&](double) { setInput(0, 0, 0, 0); });
             snap("india_" + id + "_2", 3);
+        }
+        return 0;
+    }
+    if (set == "grid") {
+        // the infrastructure of a location: the city skyline, the metro, a power line, a substation,
+        // the hydro dam and the water works (SKYFALL_INDIA=mumbai,uttarakhand picks the maps)
+        hideHud_ = true;
+        hidePlayer_ = true;
+        std::vector<std::string> ids = {"mumbai", "uttarakhand"};
+        if (const char* only = std::getenv("SKYFALL_INDIA")) {
+            ids.clear();
+            std::string o = only;
+            for (size_t a = 0; a <= o.size();) { size_t b = o.find(',', a); if (b == std::string::npos) b = o.size(); ids.push_back(o.substr(a, b - a)); a = b + 1; }
+        }
+        for (const std::string& id : ids) {
+            if (!loadLocation(id, false)) { std::printf("grid: %s not available\n", id.c_str()); continue; }
+            startArena(false);
+            battle_.clearCombatants();
+            battle_.setAiEnabled(false);
+            tod_ = TimeOfDay::Morning; lighting_ = Lighting::preset(tod_);
+            camMode_ = CameraMode::Chase;
+            std::printf("grid %s: %zu towns, %zu power lines, %zu dams, %zu facilities, metro %.0f m, %zu flyovers\n", id.c_str(),
+                        layout_.towns.size(), layout_.powerLines.size(), layout_.dams.size(), layout_.facilities.size(),
+                        layout_.metro.length(), layout_.flyovers.size());
+            {
+                long verts = 0;
+                for (const Dressing::Piece& pc : renderer_.dressing().statics) verts += pc.mesh.vertexCount;
+                std::printf("  scenery: %zu pieces, %.2f M vertices\n", renderer_.dressing().statics.size(), verts / 1e6);
+            }
+            // look at `at` from `back` metres away on heading `hdg`, `up` metres above it
+            auto look = [&](Vec3 at, double hdg, double back, double up, const std::string& name) {
+                Vec3 f{std::cos(hdg), 0, std::sin(hdg)};
+                Vec3 p = at - f * back + Vec3{0, up, 0};
+                p.y = std::max(p.y, terrain_.height(p.x, p.z) + 40.0);
+                battle_.player().fm->resetAirborne(p, hdg, 90, 0.3);
+                chaseInit_ = false;
+                scriptedStep(0.4, [&](double) { setInput(0, 0, 0, 0); });
+                snap("infra_" + id + "_" + name, 2);
+            };
+            if (!layout_.towns.empty()) look(layout_.towns[0].center, 0.7, layout_.towns[0].radius * 2.2, 420, "city");
+            if (layout_.metro.length() > 0) {
+                Vec3 tan;
+                Vec3 m = layout_.metro.at(layout_.metro.length() * 0.35, &tan);
+                look(m, std::atan2(tan.z, tan.x) + 0.5, 260, 60, "metro");
+                if (layout_.metroTrains() > 0) {
+                    m = layout_.metroCarAt(0, 1, time_ + 0.4, &tan);
+                    look(m, std::atan2(tan.z, tan.x) + 2.3, 110, 18, "metro_train");
+                }
+            }
+            if (!layout_.flyovers.empty()) {
+                const Polyline& fl = layout_.roads[static_cast<size_t>(layout_.flyovers[0])];
+                Vec3 tan;
+                Vec3 m = fl.at(fl.length() * 0.3, &tan);
+                look(m, std::atan2(tan.z, tan.x) - 0.6, 240, 50, "flyover");
+            }
+            if (!layout_.powerLines.empty() && layout_.powerLines[0].pylons.size() > 3) {
+                const auto& py = layout_.powerLines[0].pylons;
+                Vec3 a = py[py.size() / 2], b = py[py.size() / 2 + 1];
+                look(a, std::atan2(b.z - a.z, b.x - a.x) + 0.9, 220, 30, "pylons");
+            }
+            for (const Facility& fc : layout_.facilities)
+                if (fc.kind == FacilityKind::Substation) { look(fc.pos, 0.8, 160, 70, "substation"); break; }
+            for (const Facility& fc : layout_.facilities)
+                if (fc.kind == FacilityKind::WaterWorks) { look(fc.pos, 2.2, 200, 90, "waterworks"); break; }
+            if (!layout_.dams.empty()) {
+                const Dam& d = layout_.dams[0];
+                Vec3 mid = (d.a + d.b) * 0.5;
+                look(Vec3{mid.x, d.bed + 20, mid.z}, std::atan2(-d.downstream.z, -d.downstream.x), 420, 40, "dam");
+            }
+        }
+        return 0;
+    }
+    if (set == "campaign100") {
+        // the India theatres: the campaign page, missions in the city / mountains / at sea,
+        // a protected site being hit, and the debrief card with score and flight path
+        // (SKYFALL_MISSIONS=62,82,100 picks them; needs the maps or SKYFALL_TERRAIN_PROXY)
+        hideHud_ = false;
+        startTitle(); screen_ = Screen::Campaign; nav_.focus = 61; campPage_ = 1;
+        snap("c100_00_campaign_page2", 2);
+        std::vector<int> list = {62, 64, 79, 82, 88, 100};
+        if (const char* only = std::getenv("SKYFALL_MISSIONS")) {
+            list.clear();
+            for (const char* q = only; *q;) { list.push_back(std::atoi(q)); while (*q && *q != ',') ++q; if (*q) ++q; }
+        }
+        for (int n : list) {
+            startMission(n);
+            for (int k = 0; k < 3 && !switchTo_.empty(); ++k) frame(0.0, false);
+            if (screen_ != Screen::Playing || !campaignDef_) { std::printf("campaign100: mission %d did not start (%s)\n", n, locStatus_.c_str()); continue; }
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            // fly towards the first objective for a while, looking at it
+            Vec3 tgt;
+            const ObjectiveDef* first = nullptr;
+            for (const ObjectiveDef& o : campaignDef_->objectives) if (o.kind == ObjectiveKind::DestroyGroup) { first = &o; break; }
+            if (first && objectivePoint(*campaignDef_, *first, &battle_, tgt)) {
+                Vec3 from = battle_.player().fm->state().pos;
+                Vec3 dir = normalize(Vec3{tgt.x - from.x, 0, tgt.z - from.z});
+                Vec3 p = tgt - dir * 1800.0;
+                p.y = std::max(terrain_.height(p.x, p.z), terrain_.height(tgt.x, tgt.z)) + 380.0;
+                battle_.player().fm->resetAirborne(p, std::atan2(dir.z, dir.x), 210, 0.8);
+            }
+            scriptedStep(2.0, [&](double) { setInput(0, 0, 0, 0); });
+            char name[64];
+            std::snprintf(name, sizeof name, "c100_%03d_run_in", n);
+            snap(name, 3);
+            if (n == 62 && campaignDef_->civilianGroup > 0) {
+                // what a miss costs: a protected site goes down (the mission fails on it)
+                for (int gi = 0; gi < static_cast<int>(battle_.ground().size()); ++gi)
+                    if (battle_.ground()[gi].kind == GroundKind::Civilian) { battle_.debugDestroyGround(gi); break; }
+                frame(1.0 / 60.0, true);
+                scriptedStep(0.6, [&](double) { setInput(0, 0, 0, 0); });
+                snap("c100_062_protected_site_hit", 2);
+                startMission(n);
+                for (int k = 0; k < 3 && !switchTo_.empty(); ++k) frame(0.0, false);
+            }
+            // complete the objectives through the test hooks, then let the game run the debrief
+            for (int guard = 0; guard < 40 && mission_ && mission_->status() == MissionStatus::Running; ++guard) {
+                const ObjectiveDef* o = mission_->stepIndex() < campaignDef_->objectives.size() ? &campaignDef_->objectives[mission_->stepIndex()] : nullptr;
+                if (o && o->kind == ObjectiveKind::DestroyGroup)
+                    for (int gi = 0; gi < static_cast<int>(battle_.ground().size()); ++gi)
+                        if (battle_.ground()[gi].alive && battle_.ground()[gi].group == o->group) battle_.debugDestroyGround(gi);
+                if (o && o->kind == ObjectiveKind::DestroyAir) {
+                    scriptedStep(0.5, [&](double) {});
+                    for (const auto& j : battle_.jets()) if (j->alive && j->team == Team::Red) battle_.debugKillJet(j->id);
+                }
+                if (o && o->kind == ObjectiveKind::Waypoint) {
+                    double h = terrain_.surfaceHeight(o->x, o->z);
+                    battle_.player().fm->resetAirborne({o->x, h + std::max(150.0, o->maxAgl > 0 ? o->maxAgl * 0.5 : 400.0), o->z}, 0.0, 210, 0.8);
+                }
+                if (o && (o->kind == ObjectiveKind::FullPower || o->kind == ObjectiveKind::Launch || o->kind == ObjectiveKind::GearUp || o->kind == ObjectiveKind::Climb)) {
+                    Vec3 here = battle_.player().fm->state().pos;
+                    battle_.player().fm->resetAirborne({here.x + 800, std::max(1500.0, o->value + 200.0), here.z}, 0.0, 220, 0.8);
+                }
+                scriptedStep(6.0, [&](double) { setInput(0.05, 0.25, 0, 0); });
+                for (int k = 0; k < 30; ++k) frame(1.0 / 60.0, false);
+            }
+            for (int k = 0; k < 20; ++k) frame(1.0 / 60.0, false);
+            std::snprintf(name, sizeof name, "c100_%03d_debrief", n);
+            snap(name, 2);
         }
         return 0;
     }

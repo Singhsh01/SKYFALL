@@ -446,26 +446,7 @@ void Terrain::buildInlandWater() {
         for (int i = 0; i < N; ++i)
             H[static_cast<size_t>(j) * N + i] = static_cast<float>(height(-kHalfSize + (i + 0.5) * kWaterCell, -kHalfSize + (j + 0.5) * kWaterCell));
     });
-    auto idx = [N](int i, int j) { return static_cast<size_t>(j) * N + i; };
-    // separable running min / max over a square window
-    auto filter = [&](const std::vector<float>& in, int r, bool takeMin) {
-        std::vector<float> tmp(in.size()), out(in.size());
-        parallelRows(N, [&](int j) {
-            for (int i = 0; i < N; ++i) {
-                float v = in[idx(i, j)];
-                for (int k = std::max(0, i - r); k <= std::min(N - 1, i + r); ++k) v = takeMin ? std::min(v, in[idx(k, j)]) : std::max(v, in[idx(k, j)]);
-                tmp[idx(i, j)] = v;
-            }
-        });
-        parallelRows(N, [&](int j) {
-            for (int i = 0; i < N; ++i) {
-                float v = tmp[idx(i, j)];
-                for (int k = std::max(0, j - r); k <= std::min(N - 1, j + r); ++k) v = takeMin ? std::min(v, tmp[idx(i, k)]) : std::max(v, tmp[idx(i, k)]);
-                out[idx(i, j)] = v;
-            }
-        });
-        return out;
-    };
+    auto idx = [](int i, int j) { return static_cast<size_t>(j) * kWaterN + i; };
     std::vector<float> level(H.size(), -1e9f);
     if (river) {
         // rivers follow the drainage: fill the pits (priority flood), route every cell to its

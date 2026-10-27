@@ -89,7 +89,8 @@ struct MissionInfo {
     bool playable;
 };
 const std::vector<MissionInfo>& campaignCatalogue();
-constexpr int kCampaignMissions = 61;
+constexpr int kCampaignMissions = 100;
+constexpr int kClassicCampaignMissions = 61;   // the original campaign (any location); 62-100 are the v1.1 India theatres
 
 /// Compass heading in degrees (0 = north = world -Z, 90 = east = world +X).
 double compassHeadingDeg(const Quat& q);

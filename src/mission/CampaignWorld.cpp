@@ -214,7 +214,7 @@ CampaignMissionDef retitleCampaignMission(const CampaignMissionDef& src, const C
 }
 
 CampaignMissionDef adaptCampaignMission(const CampaignMissionDef& src, const Terrain& t, const WorldLayout& L) {
-    if (!t.info().real && t.info().id == "desert") return src;
+    if (!t.info().real && t.info().id == "desert") return resolveCampaignAnchors(src, t, L);
     const CampaignVariant v = campaignVariantFor(t, L);
     CampaignMissionDef d = retitleCampaignMission(src, v);
     d.location = t.info().id;
@@ -239,7 +239,7 @@ CampaignMissionDef adaptCampaignMission(const CampaignMissionDef& src, const Ter
             sc += t.height(x, z) < -18.0 ? 6.0 : 0.0;
         }
         for (const ObjectiveDef& o : d.objectives) {
-            if (o.kind != ObjectiveKind::Waypoint || o.title == "APPROACH GATE" || o.title == "RETURN TO THE CARRIER" || o.title == "RETURN TO BASE") continue;
+            if (o.kind != ObjectiveKind::Waypoint || o.cityAnchor || o.title == "APPROACH GATE" || o.title == "RETURN TO THE CARRIER" || o.title == "RETURN TO BASE") continue;
             double x = o.x, z = o.z;
             s.apply(x, z);
             sc += t.surfaceHeight(x, z) < w.groundCap ? 0.5 : 0.0;
@@ -271,7 +271,7 @@ CampaignMissionDef adaptCampaignMission(const CampaignMissionDef& src, const Ter
         wv.z = clampIn(wv.z, 2500.0);
     }
     for (ObjectiveDef& o : d.objectives) {
-        if (o.kind != ObjectiveKind::Waypoint) continue;
+        if (o.kind != ObjectiveKind::Waypoint || o.cityAnchor) continue;   // city waypoints follow the city
         sym.apply(o.x, o.z);
         o.x = clampIn(o.x, 2000.0);
         o.z = clampIn(o.z, 2000.0);
@@ -438,7 +438,7 @@ CampaignMissionDef adaptCampaignMission(const CampaignMissionDef& src, const Ter
             if (o.kind == ObjectiveKind::Touchdown)
                 o.instruction = std::string("Gear down (G), fly the glide path and touch down on runway ") + (dir > 0 ? "09." : "27.");
     }
-    return d;
+    return resolveCampaignAnchors(d, t, L);
 }
 
 }  // namespace sky

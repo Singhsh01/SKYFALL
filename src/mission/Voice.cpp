@@ -103,6 +103,9 @@ Briefing makeBriefing(int missionNo, const CampaignVariant* v) {
             if (def->carrier) tip = "Hold the brakes, run the engine up to full afterburner, and the catapult will throw you off the deck. Climb straight ahead before you turn.";
             else if (ground) tip = "For ground targets, select ATS with key two, keep the target near your nose until the lock tone, then fire. The cannon will also walk onto targets close to the nose.";
             else if (airObj) tip = "Select ATA with key one, lock, and fire. Flares on X when they shoot back.";
+            if (def->civilianGroup > 0)
+                tip = "Protected sites are marked blue on your display. Do not hit them: a missile damages everything within forty-five metres, so line up along the street." +
+                      std::string(def->civilianLimit == 0 ? " Losing one ends the mission." : "");
         }
     }
     b.display = story + (tip.empty() ? "" : " " + tip) + " Good luck, Captain.";
@@ -145,6 +148,9 @@ const char* const kKills[4] = {"Splash one! Good kill.", "Bandit down!", "Nice s
 const char* const kLost = "Skyfall One is down. Mission failed.";
 const char* const kCarrierCat = "Skyfall One, you're hooked up on catapult one. Full afterburner, then release the brakes.";
 const char* const kCarrierAirborne = "Good shot, Skyfall One. Climb straight ahead, gear up.";
+const char* const kCivilianHit = "Check fire, check fire! A protected site has been hit. Watch your aim, Skyfall One.";
+const char* const kCivilianFail = "Abort, abort. Protected sites destroyed. Skyfall One, return to base.";
+const char* const kReinforcements = "Skyfall One, more bandits inbound. They've sent reinforcements: finish it quickly.";
 }  // namespace lines
 
 std::string nextObjectiveLine(const std::string& stepTitle) { return "Good work. Next: " + spokenCaps(stepTitle) + "."; }
@@ -178,6 +184,8 @@ std::vector<VoiceLine> allVoiceLines() {
             if (!orig) continue;
             CampaignMissionDef def = retitleCampaignMission(*orig, cv);
             add(Speaker::Awacs, def.debrief);
+            add(Speaker::Awacs, def.debriefClean);
+            add(Speaker::Awacs, def.debriefCostly);
             Mission m = buildCampaignMission(def);
             for (size_t i = 1; i < m.steps().size(); ++i)
                 if (!(def.carrier && m.steps()[i].title == "GEAR UP")) add(Speaker::Awacs, nextObjectiveLine(m.steps()[i].title));
@@ -186,7 +194,7 @@ std::vector<VoiceLine> allVoiceLines() {
     using namespace lines;
     for (const char* t : {kTowerStartup, kTowerLanding, kTowerLanding27, kTowerEngine, kTowerTakeoff, kTowerClimb, kTowerDone1, kTowerDone3}) add(Speaker::Tower, t);
     for (const char* t : {kInstructorStart, kInstructorDone2}) add(Speaker::Instructor, t);
-    for (const char* t : {kArenaStart, kRespawn, kSamLaunch, kLost}) add(Speaker::Awacs, t);
+    for (const char* t : {kArenaStart, kRespawn, kSamLaunch, kLost, kCivilianHit, kCivilianFail, kReinforcements}) add(Speaker::Awacs, t);
     for (const char* t : {kCarrierCat, kCarrierAirborne}) add(Speaker::Tower, t);
     add(Speaker::Wingman, kMissileSix);
     for (const char* t : kKills) add(Speaker::Wingman, t);

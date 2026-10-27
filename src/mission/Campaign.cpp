@@ -1,5 +1,7 @@
 #include "Campaign.hpp"
 
+#include "../sim/WorldLayout.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -135,6 +137,8 @@ void recoverOverCarrier(CampaignMissionDef& m) {
     m.objectives.push_back(waypoint("RETURN TO THE CARRIER", d.center.x, d.center.z, 900, 700,
                                     "Head back to the carrier and make a low pass overhead, below 700 m."));
 }
+
+#include "CampaignIndia.inl"
 
 std::vector<CampaignMissionDef> buildAll() {
     std::vector<CampaignMissionDef> v;
@@ -832,10 +836,15 @@ std::vector<CampaignMissionDef> buildAll() {
         carrierStart(m);
         recoverOverCarrier(m);
     }
+    addIndiaMissions(v);
     for (auto& m : v) if (m.atsReload <= 0) m.atsReload = 10.0;
-    // difficulty: 1-46 classic, 47-51 tactical, 52-60 squadron tactics, 61 the final battle
+    // difficulty: 1-46 classic, 47-51 tactical, 52-60 squadron tactics, 61 the final battle;
+    // the India theatres climb again from tactical (62) to the full tactics of the finale
     for (auto& m : v)
-        if (m.tactics < 0) m.tactics = m.number >= 61 ? 3 : (m.number >= 52 ? 2 : (m.number >= 47 ? 1 : 0));
+        if (m.tactics < 0) {
+            if (m.number <= kClassicCampaignMissions) m.tactics = m.number >= 61 ? 3 : (m.number >= 52 ? 2 : (m.number >= 47 ? 1 : 0));
+            else m.tactics = m.number >= 96 ? 3 : (m.number >= 76 ? 2 : 1);
+        }
     return v;
 }
 
@@ -1034,6 +1043,14 @@ Mission buildCampaignMission(const CampaignMissionDef& def) {
             return "";
         });
     }
+    if (def.civilianGroup > 0 && def.civilianLimit >= 0) {
+        int g = def.civilianGroup, limit = def.civilianLimit;
+        m.addFailCondition([g, limit](const MissionContext& c) -> std::string {
+            if (c.battle && c.battle->groundTotal(g) - c.battle->groundAlive(g) > limit)
+                return limit == 0 ? "A protected civilian site was destroyed" : "Too many protected sites destroyed";
+            return "";
+        });
+    }
     if (def.timeLimit > 0) {
         // evaluated with the mission's own clock through a shared counter
         auto t = std::make_shared<double>(0.0);
@@ -1049,6 +1066,9 @@ Mission buildCampaignMission(const CampaignMissionDef& def) {
 void CampaignDirector::begin(const CampaignMissionDef& def, Battle& battle, unsigned seedSalt) {
     def_ = &def;
     lastStep_ = static_cast<size_t>(-1);
+    stepStart_ = 0;
+    lateSpawned_.clear();
+    lateReleased_ = 0;
     BattleConfig cfg;
     cfg.enemyJets = 0;
     cfg.allyJets = def.allies;
@@ -1084,6 +1104,7 @@ void CampaignDirector::begin(const CampaignMissionDef& def, Battle& battle, unsi
             if (!L || t.index >= static_cast<int>(L->factories.size())) continue;
             t.x = L->factories[t.index].x; t.z = L->factories[t.index].z;
         }
+        // Anchor::City: x / z are world coordinates once resolveCampaignAnchors has run
         g.kind = t.kind;
         if (t.anchor != TargetDef::Anchor::Bridge) g.pos = {t.x, 0, t.z};
         g.heading = t.heading;
@@ -1094,6 +1115,7 @@ void CampaignDirector::begin(const CampaignMissionDef& def, Battle& battle, unsi
         g.pathRadius = t.pathRadius;
         g.pathAngle = t.pathAngle;
         g.pathCenter = {t.x, 0, t.z};
+        g.flyAgl = t.flyAgl;
         if (t.pathRadius > 0) g.pos = {t.x + std::cos(t.pathAngle) * t.pathRadius, 0, t.z + std::sin(t.pathAngle) * t.pathRadius};
         battle.addGround(g);
     }
@@ -1111,11 +1133,117 @@ void CampaignDirector::spawnFor(size_t objective, Battle& battle) {
 void CampaignDirector::update(const Mission& mission, Battle& battle) {
     if (!def_) return;
     size_t idx = mission.stepIndex();
-    if (idx == lastStep_) return;
+    if (idx == lastStep_) {
+        // reinforcements for an objective that is taking too long
+        if (idx < def_->objectives.size() && mission.status() == MissionStatus::Running) {
+            const auto& late = def_->objectives[idx].wavesLate;
+            if (lateSpawned_.size() < late.size()) lateSpawned_.resize(late.size(), 0);
+            for (size_t k = 0; k < late.size(); ++k) {
+                if (lateSpawned_[k] || battle.clock() - stepStart_ < late[k].second) continue;
+                lateSpawned_[k] = 1;
+                ++lateReleased_;
+                int wi = late[k].first;
+                if (wi < 0 || wi >= static_cast<int>(def_->waves.size())) continue;
+                const WaveDef& w = def_->waves[wi];
+                battle.spawnEnemies(w.count, w.skill, {w.x, 0, w.z}, w.radius, w.altitude, w.unarmed, w.callsign);
+            }
+        }
+        return;
+    }
+    stepStart_ = battle.clock();
+    lateSpawned_.clear();
     // objectives may complete several at once: spawn the waves of every objective that has begun
     size_t from = lastStep_ == static_cast<size_t>(-1) ? 0 : lastStep_ + 1;
     for (size_t i = from; i <= idx && i < def_->objectives.size(); ++i) spawnFor(i, battle);
     lastStep_ = idx;
+}
+
+// ---- city anchors, outcome ----
+CampaignMissionDef resolveCampaignAnchors(const CampaignMissionDef& def, const Terrain& t, const WorldLayout& L) {
+    CampaignMissionDef d = def;
+    bool any = false;
+    for (TargetDef& g : d.targets) {
+        any = any || g.anchor == TargetDef::Anchor::City;
+        if (g.anchor != TargetDef::Anchor::Dam) continue;
+        if (!L.dams.empty()) {
+            const Dam& dm = L.dams[0];
+            Vec3 mid = (dm.a + dm.b) * 0.5, dn = dm.downstream, along{-dn.z, 0, dn.x};
+            Vec3 p = mid + dn * g.x + along * g.z;
+            g.x = p.x; g.z = p.z;
+        } else {
+            g.anchor = TargetDef::Anchor::City;   // no dam on this map: the city instead
+            g.x = g.x / 2000.0 - 0.6; g.z = g.z / 2000.0 + 0.6;
+            any = true;
+        }
+    }
+    for (const ObjectiveDef& o : d.objectives) any = any || o.cityAnchor;
+    if (!any) return d;
+    Vec3 c = t.townCenter();
+    double r = 750.0;
+    if (!L.towns.empty()) { c = L.towns[0].center; r = L.towns[0].radius; }
+    // the street grid: the generated cities keep every fourth 24 m cell free, the desert's
+    // hand-built town has a road every 150 m
+    const double street = t.info().real ? 96.0 : 150.0;
+    std::vector<Vec3> used;
+    auto good = [&](double x, double z) {
+        if (t.isWater(x, z) || t.height(x, z) < Terrain::kSeaLevel + 3.0 || t.onRunway(x, z, 60.0)) return false;
+        if (t.normal(x, z, 8.0).y < 0.9) return false;
+        for (const Vec3& u : used) if (std::hypot(u.x - x, u.z - z) < 30.0) return false;
+        return true;
+    };
+    auto place = [&](double ox, double oz, bool corner) {
+        double x = c.x + ox * r, z = c.z + oz * r;
+        double sx = c.x + std::round((x - c.x) / street) * street, sz = c.z + std::round((z - c.z) / street) * street;
+        bool alongZ = std::fabs(x - sx) <= std::fabs(z - sz);   // nearer a north-south street: snap x
+        if (corner) { x = sx; z = sz; }
+        else if (alongZ) x = sx;
+        else z = sz;
+        // slide along the street (or from corner to corner) to dry, level, unused ground
+        for (int k = 0; k <= 24; ++k) {
+            double step = (k + 1) / 2 * (corner ? street : 36.0) * (k % 2 ? 1.0 : -1.0);
+            double px = x, pz = z;
+            if (corner) { if (k % 4 < 2) px += step; else pz += step; }
+            else if (alongZ) pz += step;
+            else px += step;
+            if (good(px, pz)) { used.push_back({px, 0, pz}); return Vec3{px, 0, pz}; }
+        }
+        used.push_back({x, 0, z});
+        return Vec3{x, 0, z};
+    };
+    for (TargetDef& g : d.targets) {
+        if (g.anchor != TargetDef::Anchor::City) continue;
+        Vec3 p = place(g.x, g.z, g.kind == GroundKind::Civilian || g.kind == GroundKind::SAM || g.kind == GroundKind::Command);
+        g.x = p.x; g.z = p.z;
+    }
+    for (ObjectiveDef& o : d.objectives) {
+        if (!o.cityAnchor) continue;
+        o.x = c.x + o.x * r;
+        o.z = c.z + o.z * r;
+        o.x = clampd(o.x, -14500.0, 14500.0);
+        o.z = clampd(o.z, -14500.0, 14500.0);
+        o.cityAnchor = false;
+    }
+    if (d.startHeading > 1e8 && !d.carrier) d.startHeading = campaignStartHeading(d);
+    return d;
+}
+
+int CampaignOutcome::score() const {
+    double acc = missilesFired > 0 ? static_cast<double>(missileHits) / missilesFired : 0.0;
+    double sc = (success ? 520.0 : 0.0) + std::min(220.0, (airKills + groundKills) * 18.0) + acc * 140.0 +
+                std::max(0.0, 120.0 - damageTaken * 1.2) - civiliansLost * 180.0 - friendliesLost * 120.0;
+    return static_cast<int>(std::clamp(sc, 0.0, 1000.0));
+}
+
+const char* CampaignOutcome::grade() const {
+    int s = score();
+    if (!success) return "-";
+    return s >= 900 ? "S" : s >= 760 ? "A" : s >= 620 ? "B" : s >= 480 ? "C" : "D";
+}
+
+const std::string& campaignDebrief(const CampaignMissionDef& def, const CampaignOutcome& o) {
+    if (o.civiliansLost > 0 && !def.debriefCostly.empty()) return def.debriefCostly;
+    if (o.civiliansLost == 0 && o.damageTaken < 25 && !def.debriefClean.empty()) return def.debriefClean;
+    return def.debrief;
 }
 
 }  // namespace sky

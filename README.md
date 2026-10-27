@@ -12,6 +12,11 @@ Prefer the native app (higher frame rate, full window)? [Download for macOS](htt
 — Apple Silicon and Intel, macOS 12+. Unzip, then right-click **Play-SKYFALL.command → Open**
 (the build is not notarised, so macOS asks once).
 
+**New in v1.1** — 15 Indian world locations (Ladakh to Kochi, Mumbai to Tawang), generated
+power grids, dams, metros, flyovers and skyscraper cities, a 100-mission campaign with the India
+theatres (62-100) and protected civilian sites, a pulled-back chase camera, layered destruction and
+Doppler audio: see **[docs/V1_1.md](docs/V1_1.md)** (including what is not done yet).
+
 A native **C++20 / raylib** combat flight game and simulation sandbox built for macOS first
 (Apple Clang, CMake, 8 GB MacBook Air class hardware), portable to Linux and Windows.
 
@@ -34,7 +39,8 @@ copyrighted models, textures, sounds or code from commercial games.
 | ![Refuelling](docs/screenshots/refuelling.jpg) | ![Dogfight arena](docs/screenshots/arena_chase.jpg) |
 | ![Town and railway](docs/screenshots/scenery_town.jpg) | ![Modern paint schemes](docs/screenshots/skins_modern.jpg) |
 | ![Carrier deck in the rain](docs/screenshots/carrier_deck.jpg) | ![On the catapult in full afterburner](docs/screenshots/catapult_afterburner.jpg) |
-| ![Afterburner climb-out in a storm](docs/screenshots/afterburner_rain.jpg) | ![Campaign: 61 missions](docs/screenshots/campaign_menu.jpg) |
+| ![Afterburner climb-out in a storm](docs/screenshots/afterburner_rain.jpg) | ![Campaign: missions 1-61](docs/screenshots/campaign_menu.jpg) |
+| ![Campaign page 2: the India theatres, missions 62-100](docs/screenshots/campaign_india_theatres.jpg) | ![Metropolis with the elevated metro](docs/screenshots/india_metropolis_metro.jpg) |
 | ![Everest, real elevation data](docs/screenshots/real_everest.jpg) | ![Geirangerfjord, real elevation data](docs/screenshots/real_geiranger.jpg) |
 | ![High-G wing condensation](docs/screenshots/wing_vapour.jpg) | ![Gear, wheels and landing light](docs/screenshots/gear_lights.jpg) |
 | ![Forested valleys and fields, Glen Coe](docs/screenshots/landscape_glencoe.jpg) | ![Patchwork farmland below Mount Fuji](docs/screenshots/landscape_farmland.jpg) |
@@ -92,7 +98,7 @@ scripts (`build_mac.sh`, `run.sh`, `build_web.sh`) work as before.
   tricolour roundels and fin flash, the others carry no national markings),
   digital desert, arctic digital, forest splinter, night stealth, tiger meet, ocean splinter and
   two original demonstration schemes.
-* Free Flight, the 61-mission campaign and the Dogfight Arena are unchanged.
+* Free Flight, the campaign and the Dogfight Arena are unchanged.
 
 ![Air-force-inspired service schemes: the Indian-inspired one with roundels, the others stencils only](docs/screenshots/skins_service.jpg)
 
@@ -161,7 +167,7 @@ scripts (`build_mac.sh`, `run.sh`, `build_web.sh`) work as before.
   real collision, the approach has glide-path and line-up guidance, refuelling is guided.
   Category scores, checkpoint retries after a crash (`R`), history per aircraft. The menu shows
   each level's route on the map and your record. Details: [docs/TRAINING.md](docs/TRAINING.md).
-* **The 61-mission campaign over any world location** (title → CAMPAIGN) — the campaign screen
+* **The campaign over any world location** (missions 1-61; 62-100 are the India theatres, see docs/V1_1.md) (title → CAMPAIGN) — the campaign screen
   of earlier releases, with three pickers under the mission grid: **location** (the Skyfall Desert
   or any of the 13 real-terrain maps), **aircraft** and **paint scheme**. In the desert the
   missions are exactly the originals. Elsewhere each mission keeps its layout and is fitted to the

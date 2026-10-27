@@ -137,6 +137,7 @@ enum class GroundKind { Tank, Truck, AAA, SAM, Bunker, Radar,
                         Substation, // electrical transformer yard
                         Helicopter, // flying: transport or (armed) attack helicopter, targetable by ATA and ATS
                         Cargo,      // supply pallet (airdropped under a parachute, or unloaded from a transport)
+                        Civilian,   // protected civilian site (hospital, school, homes): never a target
                         Count };
 
 /// Display name, missile aim height above the base, hit radius and default health per kind.
@@ -280,6 +281,7 @@ public:
     int groundKilledByPlayer() const { return groundKills_; }
     struct PlayerStats { int missilesFired = 0, missileHits = 0, roundsFired = 0, roundHits = 0, damageTaken = 0; };
     const PlayerStats& playerStats() const { return stats_; }
+    double clock() const { return time_; }   // battle time (s)
     // ---- infrastructure / refuelling ----
     void setLayout(const WorldLayout* layout) { layout_ = layout; }
     const WorldLayout* layout() const { return layout_; }

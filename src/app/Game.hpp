@@ -176,6 +176,16 @@ private:
     CampaignMissionDef campDef_;      // the running mission, laid out on the loaded location
     CampaignVariant campVariant_;     // what the loaded location offers (sea, carrier, railway)
     std::string campaignLocation() const;          // chosen on the campaign screen ("desert" by default)
+    /// Where mission n is flown: missions 62-100 over their Indian location when it is
+    /// downloaded, everything else (and those, without the map) over the campaign location.
+    std::string missionLocation(int n);
+    std::vector<Vec3> flightPath_;                 // the player's track in this mission (one point a second)
+    double pathTimer_ = 0;
+    int lateSeen_ = 0;
+    int campPage_ = 0;                             // campaign screen page (0 classic, 1 India theatres)                             // reinforcement waves already called on the radio
+    CampaignOutcome outcome_;                      // the debrief of the last campaign mission
+    CampaignOutcome campaignOutcome() const;
+    void recordFlightPath(double dt);
     void setCampaignLocation(const std::string& id);
     // ---- Training Academy (Academy.cpp) ----
     TrainingSession training_;

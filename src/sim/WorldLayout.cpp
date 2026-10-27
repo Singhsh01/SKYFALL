@@ -40,6 +40,7 @@ constexpr double kCellM = 2.0 * kHalf / kN;
 
 struct Grid {
     std::vector<float> h;
+    std::vector<unsigned char> wet;   // a river or lake crosses the cell (passable: a bridge)
     const Terrain* t = nullptr;
     float at(int i, int j) const { return h[static_cast<size_t>(j) * kN + i]; }
     static Vec3 world(int i, int j) { return {-kHalf + (i + 0.5) * kCellM, 0, -kHalf + (j + 0.5) * kCellM}; }
@@ -90,6 +91,7 @@ std::vector<Vec3> route(const Grid& g, const Terrain& t, Vec3 from, Vec3 to, con
             double dh = std::fabs(static_cast<double>(g.at(ni, nj)) - g.at(ci, cj));
             double grade = dh / len;
             double c = len * (1.0 + rc.gradeW * grade * grade) + rc.climbW * dh;
+            if (!g.wet.empty() && g.wet[static_cast<size_t>(nid)]) c += len * 6.0;   // bridges are expensive: cross narrow
             if (dist[cur] + c < dist[nid]) {
                 dist[nid] = dist[cur] + c;
                 prev[nid] = cur;
@@ -141,6 +143,23 @@ Polyline engineer(const Terrain& t, std::vector<Vec3> pts, double step, double w
         for (int i = 1; i < n; ++i) y[i] = clampd(y[i], y[i - 1] - maxGrade * ds, y[i - 1] + maxGrade * ds);
         for (int i = n - 2; i >= 0; --i) y[i] = clampd(y[i], y[i + 1] - maxGrade * ds, y[i + 1] + maxGrade * ds);
     }
+    // rivers and lakes crossed (not followed): the deck clears the water on a bridge, with short
+    // ramps either side; a route running along a river bed keeps its profile
+    std::vector<double> lift(n, -1e9);
+    for (int i = 0; i < n;) {
+        if (!t.isWater(p.pts[i].x, p.pts[i].z) || t.height(p.pts[i].x, p.pts[i].z) < Terrain::kSeaLevel - 0.5) { ++i; continue; }
+        int a = i;
+        while (i < n && t.isWater(p.pts[i].x, p.pts[i].z)) ++i;
+        if ((i - a) * ds > 450.0) continue;
+        double top = 0;
+        for (int k = a; k < i; ++k) top = std::max(top, t.surfaceHeight(p.pts[k].x, p.pts[k].z) + 9.0);
+        for (int k = a; k < i; ++k) lift[k] = top;
+    }
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int i = 1; i < n; ++i) lift[i] = std::max(lift[i], lift[i - 1] - 0.22 * ds);
+        for (int i = n - 2; i >= 0; --i) lift[i] = std::max(lift[i], lift[i + 1] - 0.22 * ds);
+    }
+    for (int i = 0; i < n; ++i) y[i] = std::max(y[i], lift[i]);
     for (int i = 0; i < n; ++i) p.pts[i].y = y[i];
     p.finalize();
     return p;
@@ -174,6 +193,10 @@ void findBridges(const Terrain& t, const Polyline& p, bool rail, std::vector<Bri
 
 }  // namespace
 
+Polyline engineerRoute(const Terrain& t, std::vector<Vec3> pts, double step, double window, double maxGrade, double minY) {
+    return engineer(t, std::move(pts), step, window, maxGrade, minY);
+}
+
 int WorldLayout::largestBridge(bool railOnly) const {
     int best = -1;
     double bl = 0;
@@ -197,12 +220,25 @@ WorldLayout WorldLayout::build(const Terrain& t) {
     g.h.resize(kN * kN);
     for (int j = 0; j < kN; ++j)
         for (int i = 0; i < kN; ++i) { Vec3 w = Grid::world(i, j); g.h[static_cast<size_t>(j) * kN + i] = static_cast<float>(t.height(w.x, w.z)); }
+    if (!t.inlandWater().empty()) {
+        g.wet.assign(kN * kN, 0);
+        for (int j = 0; j < kN; ++j)
+            for (int i = 0; i < kN; ++i) {
+                Vec3 w = Grid::world(i, j);
+                bool wt = false;
+                for (int k = 0; k < 9 && !wt; ++k) wt = t.isWater(w.x + (k % 3 - 1) * kCellM * 0.4, w.z + (k / 3 - 1) * kCellM * 0.4);
+                g.wet[static_cast<size_t>(j) * kN + i] = wt && g.at(i, j) >= 2.0f;
+            }
+    }
+    const int urban = std::clamp(t.info().urban, 0, 3);
     const RunwayInfo& rw = t.runway();
 
     // ---- towns: the flattest dry spots, spread out, away from the runway ----
     static const char* names[] = {"SANDHAVEN", "REDROCK", "OASIS POINT", "KESTREL", "DUNE RIDGE", "HIGHMESA", "SALTWATER", "IRONWOOD", "CEDAR FALLS", "MARROW"};
     Vec3 tc = t.townCenter();
-    if (t.height(tc.x, tc.z) > 2.0) L.towns.push_back({Vec3{tc.x, t.height(tc.x, tc.z), tc.z}, 750, TownKind::City, "AL-MADINA"});
+    // the hub city grows with the map's density: a metropolis on the urban maps (Mumbai, Chennai, Bengaluru)
+    static const double kCityR[4] = {650, 750, 1150, 1650};
+    if (t.height(tc.x, tc.z) > 2.0) L.towns.push_back({Vec3{tc.x, t.height(tc.x, tc.z), tc.z}, kCityR[urban], TownKind::City, "AL-MADINA"});
     struct Cand { Vec3 p; double score; };
     std::vector<Cand> cands;
     for (double z = -13500; z <= 13500; z += 750)
@@ -216,28 +252,32 @@ WorldLayout WorldLayout::build(const Terrain& t) {
                 double a = k * kPi / 6;
                 for (double r : {250.0, 500.0}) {
                     double hk = t.height(x + std::cos(a) * r, z + std::sin(a) * r);
-                    if (hk < 2.0) wet = true;
+                    if (hk < 2.0 || t.isWater(x + std::cos(a) * r, z + std::sin(a) * r)) wet = true;
                     rough = std::max(rough, std::fabs(hk - h));
                 }
             }
-            if (wet || rough > 35.0) continue;
+            if (wet || rough > 35.0 || t.isWater(x, z)) continue;
             cands.push_back({Vec3{x, h, z}, rough + h * 0.004});
         }
     std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) { return a.score < b.score; });
     for (const Cand& c : cands) {
-        if (L.towns.size() >= 8) break;
+        static const size_t kMaxTowns[4] = {6, 8, 9, 10};
+        if (L.towns.size() >= kMaxTowns[urban]) break;
         bool ok = true;
-        for (const Town& tw : L.towns) if (std::hypot(tw.center.x - c.p.x, tw.center.z - c.p.z) < 5000) ok = false;
+        for (const Town& tw : L.towns) if (std::hypot(tw.center.x - c.p.x, tw.center.z - c.p.z) < (urban >= 2 ? 4200 : 5000) + tw.radius - 600) ok = false;
         if (!ok) continue;
         Town tw;
         tw.center = c.p;
-        tw.radius = L.towns.size() < 3 ? 600 : 420;
-        tw.kind = L.towns.size() < 3 ? TownKind::Town : TownKind::Village;
+        size_t k = L.towns.size();
+        if (urban >= 2 && k < 3) { tw.radius = urban == 3 ? 950 : 800; tw.kind = TownKind::City; }   // satellite cities
+        else if (urban == 0) { tw.radius = k < 2 ? 520 : 380; tw.kind = k < 2 ? TownKind::Town : TownKind::Village; }
+        else { tw.radius = k < 3 ? 600 : 420; tw.kind = k < 3 ? TownKind::Town : TownKind::Village; }
         tw.name = names[L.towns.size() % 10];
         L.towns.push_back(tw);
     }
 
     // ---- railway: west edge -> the city (or a central town) -> towards the east ----
+    Polyline railPlan;   // a line too steep to build still decides where industry grew
     RouteCost railCost{900.0, 12.0, true};
     if (!L.towns.empty()) {
         Vec3 mid = L.towns[0].center;
@@ -269,6 +309,11 @@ WorldLayout WorldLayout::build(const Terrain& t) {
         if (!a.empty() && !b.empty()) {
             a.insert(a.end(), b.begin() + 1, b.end());
             L.railway = engineer(t, a, 40.0, 1400.0, 0.025, Terrain::kSeaLevel + 6.0);
+            // a grade-limited line through high mountains would need viaducts hundreds of metres
+            // tall (real lines tunnel; tunnels are not modelled): no railway there
+            double worst = 0;
+            for (const Vec3& q : L.railway.pts) worst = std::max(worst, q.y - t.surfaceHeight(q.x, q.z));
+            if (worst > 95.0) { railPlan = L.railway; L.railway = Polyline{}; }
         }
     }
 
@@ -289,7 +334,17 @@ WorldLayout WorldLayout::build(const Terrain& t) {
         if (bb < 0) break;
         in[bb] = true;
         std::vector<Vec3> r = route(g, t, nodes[ba], nodes[bb], roadCost);
-        if (r.size() >= 2) L.roads.push_back(engineer(t, r, 25.0, 220.0, 0.09, Terrain::kSeaLevel + 3.0));
+        if (r.size() >= 2) {
+            Polyline road = engineer(t, r, 25.0, 220.0, 0.09, Terrain::kSeaLevel + 3.0);
+            auto worst = [&](const Polyline& p) {
+                double w = 0;
+                for (const Vec3& q : p.pts) w = std::max(w, q.y - t.surfaceHeight(q.x, q.z));
+                return w;
+            };
+            // mountain roads: hairpin grades rather than towering viaducts
+            if (worst(road) > 60.0) road = engineer(t, r, 25.0, 100.0, 0.16, Terrain::kSeaLevel + 3.0);
+            L.roads.push_back(std::move(road));
+        }
     }
 
     // ---- bridges / viaducts wherever an engineered profile leaves the ground ----
@@ -297,12 +352,13 @@ WorldLayout WorldLayout::build(const Terrain& t) {
     for (const Polyline& r : L.roads) findBridges(t, r, false, L.bridges);
 
     // ---- industrial zone: the town closest to the railway (not the city) ----
-    if (!L.railway.pts.empty() && L.towns.size() > 1) {
+    const Polyline& industryRail = L.railway.pts.empty() ? railPlan : L.railway;
+    if (!industryRail.pts.empty() && L.towns.size() > 1) {
         int bestT = -1;
         double bd = 1e18;
         for (size_t i = 1; i < L.towns.size(); ++i)
-            for (size_t k = 0; k < L.railway.pts.size(); k += 10) {
-                double d = std::hypot(L.towns[i].center.x - L.railway.pts[k].x, L.towns[i].center.z - L.railway.pts[k].z);
+            for (size_t k = 0; k < industryRail.pts.size(); k += 10) {
+                double d = std::hypot(L.towns[i].center.x - industryRail.pts[k].x, L.towns[i].center.z - industryRail.pts[k].z);
                 if (d < bd) { bd = d; bestT = static_cast<int>(i); }
             }
         if (bestT > 0) {
@@ -340,6 +396,7 @@ WorldLayout WorldLayout::build(const Terrain& t) {
         for (const Town& tw : L.towns) if (std::hypot(tw.center.x - hl.p.x, tw.center.z - hl.p.z) < tw.radius + 300) ok = false;
         if (ok) L.turbines.push_back({hl.p, 0.6});
     }
+    buildInfrastructure(t, L);
     populateWorldDetail(t, L);
     return L;
 }

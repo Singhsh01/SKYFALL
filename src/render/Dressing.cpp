@@ -179,18 +179,58 @@ void windows(MeshBuilder& m, Matrix xf, float w, float d, float y0, float y1, bo
     }
 }
 
-void town(const Terrain& t, const WorldLayout& L, const Town& tw, BuildingStyle style, std::vector<Dressing::Piece>& out) {
+/// A downtown tower: podium, up to three set-back tiers of glass or concrete, a crown and on the
+/// tallest a mast with an obstruction light.
+void skyscraper(MeshBuilder& m, Matrix xf, float w, float d, float base, float ground, float H, unsigned h, std::vector<Vector3>& beacons) {
+    static const Color glass[5] = {{92, 118, 140, 255}, {74, 104, 112, 255}, {140, 128, 108, 255}, {170, 176, 182, 255}, {104, 112, 128, 255}};
+    static const Color concrete[3] = {{196, 192, 184, 255}, {178, 172, 162, 255}, {214, 210, 200, 255}};
+    bool isGlass = (h >> 4) % 4 != 0;
+    Color wall = isGlass ? glass[(h >> 6) % 5] : concrete[(h >> 6) % 3];
+    int tiers = H > 150 ? 3 : (H > 80 ? 2 : 1);
+    static const float kTop[3][3] = {{1.0f, 0, 0}, {0.62f, 1.0f, 0}, {0.48f, 0.8f, 1.0f}};
+    static const float kScale[3] = {1.0f, 0.78f, 0.58f};
+    // podium
+    float podium = std::min(14.0f, H * 0.12f);
+    m.box({0, base + (ground - base + podium) * 0.5f, 0}, {w * 1.25f, ground - base + podium, d * 1.25f}, Color{150, 146, 140, 255}, xf);
+    float y0 = ground + podium;
+    for (int k = 0; k < tiers; ++k) {
+        float y1 = ground + H * kTop[tiers - 1][k];
+        float sw = w * kScale[k], sd = d * kScale[k];
+        m.box({0, (y0 + y1) * 0.5f, 0}, {sw, y1 - y0, sd}, wall, xf);
+        windows(m, xf, sw, sd, y0, y1, true, false, h + static_cast<unsigned>(k) * 7919u);
+        m.box({0, y1 + 0.6f, 0}, {sw * 0.96f, 1.2f, sd * 0.96f}, Color{90, 92, 96, 255}, xf);   // roof slab / setback terrace
+        y0 = y1 + 1.2f;
+    }
+    float top = y0;
+    if (H > 120) {
+        m.box({0, top + 3.0f, 0}, {w * 0.3f, 6.0f, d * 0.3f}, Color{110, 112, 118, 255}, xf);   // plant room
+        float mast = 12.0f + (h >> 20) % 18;
+        m.cylinder(Vector3Transform({0, top + 6.0f, 0}, xf), 0.5f, mast, 6, Color{200, 200, 204, 255}, MatrixIdentity(), 0.15f);
+        beacons.push_back(Vector3Transform({0, top + 6.0f + mast, 0}, xf));
+    } else if (H > 60) {
+        beacons.push_back(Vector3Transform({0, top + 0.5f, 0}, xf));
+    }
+}
+
+void town(const Terrain& t, const WorldLayout& L, const Town& tw, BuildingStyle style, std::vector<Dressing::Piece>& out, std::vector<Vector3>& beacons) {
     Palette pal = paletteFor(style);
     Piecer pc{&out};
+    const int urban = std::clamp(t.info().urban, 0, 3);
+    const bool metropolis = tw.kind == TownKind::City && urban >= 2;
+    const double downtown = metropolis ? (urban == 3 ? 0.46 : 0.36) : 0.32;
     // road points near the town (buildings keep clear of them)
     std::vector<Vec3> nearRoad;
     for (const Polyline& r : L.roads)
         for (const Vec3& p : r.pts) if (std::hypot(p.x - tw.center.x, p.z - tw.center.z) < tw.radius + 40) nearRoad.push_back(p);
     for (const Vec3& p : L.railway.pts) if (std::hypot(p.x - tw.center.x, p.z - tw.center.z) < tw.radius + 40) nearRoad.push_back(p);
+    for (const Vec3& p : L.metro.pts) if (std::hypot(p.x - tw.center.x, p.z - tw.center.z) < tw.radius + 40) nearRoad.push_back(p);
     const double cell = tw.kind == TownKind::City ? 24.0 : 28.0;
     int n = static_cast<int>(tw.radius / cell);
-    for (int j = -n; j <= n; ++j)
-        for (int i = -n; i <= n; ++i) {
+    // 16 x 16-cell tiles, each merged on its own, so distant parts of a big city cull separately
+    for (int bj = -n; bj <= n; bj += 16) {
+    for (int bi = -n; bi <= n; bi += 16) {
+    for (int j = bj; j <= std::min(n, bj + 15); ++j) {
+        for (int i = bi; i <= std::min(n, bi + 15); ++i) {
             unsigned h = hash2(i + static_cast<int>(tw.center.x), j + static_cast<int>(tw.center.z));
             double r01 = (h & 1023) / 1023.0, r02 = ((h >> 10) & 1023) / 1023.0, r03 = ((h >> 20) & 1023) / 1023.0;
             double x = tw.center.x + i * cell + (r01 - 0.5) * 5.0, z = tw.center.z + j * cell + (r02 - 0.5) * 5.0;
@@ -201,15 +241,36 @@ void town(const Terrain& t, const WorldLayout& L, const Town& tw, BuildingStyle 
             double dc = std::hypot(x - tw.center.x, z - tw.center.z) / (tw.radius * edge);
             if (dc > 1.0) continue;
             if (r03 < dc * dc * 0.7) continue;
+            if (t.isWater(x, z)) continue;
+            // metropolis downtown: one tower per block (the block's centre cell), the rest is plaza
+            bool tower = metropolis && dc < downtown;
+            if (tower && ((i % 4 + 4) % 4 != 2 || (j % 4 + 4) % 4 != 2)) continue;
             bool clear = true;
-            for (const Vec3& p : nearRoad) if (std::hypot(p.x - x, p.z - z) < 13.0) { clear = false; break; }
+            double clearR = tower ? 30.0 : 13.0;
+            for (const Vec3& p : nearRoad) if (std::hypot(p.x - x, p.z - z) < clearR) { clear = false; break; }
             if (!clear) continue;
+            if (tower) {
+                double w = 22.0 + r01 * 22.0, d = 22.0 + r02 * 22.0;
+                double h0 = t.height(x - w / 2, z - d / 2), h1 = t.height(x + w / 2, z - d / 2), h2 = t.height(x - w / 2, z + d / 2), h3 = t.height(x + w / 2, z + d / 2);
+                double lo = std::min(std::min(h0, h1), std::min(h2, h3)), hiH = std::max(std::max(h0, h1), std::max(h2, h3));
+                if (hiH - lo > 8.0 || lo < 1.5) continue;
+                double core = 1.0 - dc / downtown;   // 1 at the centre .. 0 at the downtown edge
+                double H = urban == 3 ? 45.0 + std::pow(r03, 1.4) * (60.0 + 190.0 * core) : 30.0 + std::pow(r03, 1.2) * (40.0 + 100.0 * core);
+                float yaw = static_cast<float>((r02 - 0.5) * 0.12);
+                Matrix xf = MatrixMultiply(MatrixRotateY(yaw), MatrixTranslate(static_cast<float>(x), 0, static_cast<float>(z)));
+                skyscraper(pc.mb, xf, static_cast<float>(w), static_cast<float>(d), static_cast<float>(lo - 1.0), static_cast<float>(hiH), static_cast<float>(H), h, beacons);
+                pc.grow(Vector3{static_cast<float>(x), static_cast<float>(hiH + H + 30), static_cast<float>(z)});
+                pc.grow(Vector3{static_cast<float>(x), static_cast<float>(lo), static_cast<float>(z)});
+                continue;
+            }
             double w = 9.0 + r01 * 9.0, d = 8.0 + r02 * 9.0;
             double h0 = t.height(x - w / 2, z - d / 2), h1 = t.height(x + w / 2, z - d / 2), h2 = t.height(x - w / 2, z + d / 2), h3 = t.height(x + w / 2, z + d / 2);
             double lo = std::min(std::min(h0, h1), std::min(h2, h3)), hiH = std::max(std::max(h0, h1), std::max(h2, h3));
             if (hiH - lo > 5.0 || lo < 1.5) continue;
             double hgt;
             if (tw.kind == TownKind::City && dc < 0.32) hgt = 18.0 + r03 * 42.0;          // downtown towers
+            else if (metropolis && dc < downtown + 0.25) hgt = 12.0 + r03 * (urban == 3 ? 34.0 : 22.0);   // mid-rise apartment blocks
+            else if (metropolis) hgt = 6.0 + r03 * 12.0;
             else if (tw.kind == TownKind::Village) hgt = 3.5 + r03 * 3.5;
             else hgt = 5.0 + r03 * 9.0;
             if (tw.kind == TownKind::Industrial) { w *= 1.6; d *= 1.3; hgt = 6.0 + r03 * 5.0; }
@@ -252,6 +313,10 @@ void town(const Terrain& t, const WorldLayout& L, const Town& tw, BuildingStyle 
             }
             if (pc.mb.vertexCount() > 60000) pc.flush();
         }
+    }
+        if (pc.mb.vertexCount() > 20000) pc.flush();
+    }
+    }
     pc.flush();
 }
 
@@ -264,8 +329,9 @@ void Dressing::build(const Terrain& t, const WorldLayout& L, BuildingStyle style
     if (!L.railway.pts.empty()) corridor(t, L.railway, true, statics);
     for (size_t i = 0; i < L.towns.size(); ++i) {
         if (i == 0 && skipFirstTown) continue;   // the hand-built desert town already stands there
-        town(t, L, L.towns[i], style, statics);
+        town(t, L, L.towns[i], style, statics, beacons);
     }
+    buildInfrastructureMeshes(t, L, *this);
     // industrial yard extras: warehouses and storage tanks around the factory slots
     if (!L.factories.empty()) {
         Piecer pc{&statics};
@@ -328,6 +394,8 @@ void Dressing::unload() {
     rotorYaw.clear();
     chimneyTops.clear();
     beacons.clear();
+    wirePts.clear();
+    wireSpans.clear();
 }
 
 }  // namespace sky

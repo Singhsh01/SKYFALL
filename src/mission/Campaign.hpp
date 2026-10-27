@@ -21,7 +21,12 @@ struct TargetDef {
     double pathAngle = 0;
     Team team = Team::Red;    // Team::Blue = friendly asset to protect
     // Anchoring to generated infrastructure (the layout differs per terrain):
-    enum class Anchor { None, Railway, Bridge, Industrial } anchor = Anchor::None;
+    // City: x / z are offsets from the centre of the map's main city in units of its radius,
+    // snapped onto the street grid (resolveCampaignAnchors turns them into world coordinates).
+    // Dam: x / z are metres from the middle of the layout's hydro dam (x downstream, z along the
+    // crest); without a dam they fall back to the city.
+    enum class Anchor { None, Railway, Bridge, Industrial, City, Dam } anchor = Anchor::None;
+    double flyAgl = 0;        // helicopters: > 0 flies the path circle at this height above the ground
     double railFraction = 0;  // Railway: position along the line (0..1); x/z ignored
     double railSpeed = 0;     // Railway: m/s (trains move; wagons follow the locomotive)
     int index = 0;            // Industrial: which factory slot
@@ -64,6 +69,9 @@ struct ObjectiveDef {
     int group = 0;
     double value = 0, hold = 0;
     std::vector<int> wavesOnStart;   // indices into CampaignMissionDef::waves spawned when this objective begins
+    // reinforcements: waves that arrive if this objective is still running `seconds` after it began
+    std::vector<std::pair<int, double>> wavesLate;
+    bool cityAnchor = false;         // Waypoint: x / z are offsets from the main city (see TargetDef::Anchor::City)
 };
 
 struct CampaignMissionDef {
@@ -91,7 +99,31 @@ struct CampaignMissionDef {
     DeckInfo deck;               // the aircraft carrier (carrier missions)
     double homeX = -10500, homeZ = 3000;   // the runway threshold the landing objectives point at
     std::string location = "desert";       // world location the definition is laid out for
+    // v1.1 theatres: the Indian location the mission is written for (flown there when it is
+    // downloaded, otherwise over the campaign location like the rest)
+    std::string homeLocation;
+    // protected civilian sites (GroundKind::Civilian, Team::Blue): every loss costs score; more
+    // than `civilianLimit` losses fail the mission (-1: never fails, the penalty only)
+    int civilianGroup = 0;
+    int civilianLimit = 0;
+    // outcome-dependent debriefs: a clean run (no civilian loss, little damage) and a costly one
+    std::string debriefClean, debriefCostly;
 };
+
+/// How a campaign mission went, for the debrief card and the outcome-dependent radio call.
+struct CampaignOutcome {
+    bool success = false;
+    double seconds = 0;
+    int airKills = 0, groundKills = 0;
+    int missilesFired = 0, missileHits = 0;
+    int civiliansLost = 0, civiliansTotal = 0;
+    int friendliesLost = 0;
+    double damageTaken = 0;
+    int score() const;            // 0..1000
+    const char* grade() const;    // S A B C D
+};
+/// The debrief radio call for an outcome (clean / costly variants when the mission has them).
+const std::string& campaignDebrief(const CampaignMissionDef& def, const CampaignOutcome& o);
 
 /// What a world location offers the campaign: open sea (boats, oil rigs), room for the carrier,
 /// a railway, and how much higher the airfield's training heights are (mission 2).
@@ -114,7 +146,11 @@ CampaignMissionDef adaptCampaignMission(const CampaignMissionDef& def, const Ter
 /// The aircraft carrier used by the carrier missions: off the east coast, bow to the north.
 DeckInfo campaignCarrierDeck();
 
-/// Definitions for missions 4..40 (nullptr outside that range).
+/// City-anchored targets and waypoints in world coordinates for this layout (the main city's
+/// street grid); everything else is unchanged. adaptCampaignMission does this itself.
+CampaignMissionDef resolveCampaignAnchors(const CampaignMissionDef& def, const Terrain& t, const WorldLayout& L);
+
+/// Definitions for missions 4..100 (nullptr outside that range).
 const CampaignMissionDef* campaignMission(int number);
 const std::vector<CampaignMissionDef>& campaignMissions();
 /// Builds the objective FSM for a definition.
@@ -133,11 +169,16 @@ public:
     /// Call after every Mission::update; spawns waves for newly started objectives.
     void update(const Mission& mission, Battle& battle);
     const CampaignMissionDef* def() const { return def_; }
+    /// Late reinforcement waves released so far (the game calls them on the radio).
+    int lateReleased() const { return lateReleased_; }
 
 private:
     void spawnFor(size_t objective, Battle& battle);
     const CampaignMissionDef* def_ = nullptr;
     size_t lastStep_ = static_cast<size_t>(-1);
+    double stepStart_ = 0;                 // battle clock when the current objective began
+    std::vector<char> lateSpawned_;        // per objective late wave: already released
+    int lateReleased_ = 0;
 };
 
 }  // namespace sky

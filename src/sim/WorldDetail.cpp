@@ -613,16 +613,21 @@ void populateWorldDetail(const Terrain& t, WorldLayout& L) {
     static const char* names[] = {"FOB VIPER", "FOB TALON", "FOB GRANITE"};
     int fobs = 0;
     unsigned s = seed;
-    for (int tries = 0; tries < 400 && fobs < 2; ++tries) {
+    for (int tries = 0; tries < 2000 && fobs < 2; ++tries) {
+        // dense or rugged maps leave little open country: after 400 tries a base may sit
+        // closer to a town's edge, after 800 anywhere it fits
+        const double margin = tries < 400 ? 1200.0 : 450.0;
+        if ((tries == 400 || tries == 800) && fobs > 0) break;
+        const bool anywhere = tries >= 800;
         double x = (rnd(s) * 2 - 1) * 12500, z = (rnd(s) * 2 - 1) * 12500;
         if (std::hypot(x - P.rw.center.x, z - P.rw.center.z) < 4500) continue;
         bool nearTown = false, inside = false;
         for (const Town& tw : L.towns) {
             double d = std::hypot(x - tw.center.x, z - tw.center.z);
-            if (d < tw.radius + 1200) inside = true;
+            if (d < tw.radius + margin) inside = true;
             if (d < 9000) nearTown = true;
         }
-        if (inside || (!nearTown && !L.towns.empty())) continue;
+        if (inside || (!nearTown && !L.towns.empty() && !anywhere)) continue;
         bool farFromOther = true;
         for (const MilitarySite& m : L.sites) if (!m.airbase && std::hypot(m.center.x - x, m.center.z - z) < 6000) farFromOther = false;
         if (!farFromOther) continue;

@@ -36,6 +36,13 @@ struct Bridge {
 
 struct WindTurbine { Vec3 pos; double heading = 0; };
 
+/// A high-voltage line: lattice pylons (y = ground) joined by sagging conductors.
+struct PowerLine { std::vector<Vec3> pylons; bool trunk = false; };
+/// A concrete gravity dam across a river gorge (a..b along the crest, y = crest height).
+struct Dam { Vec3 a, b; double bed = 0; Vec3 downstream; };
+enum class FacilityKind : unsigned char { Substation, WaterWorks, Powerhouse };
+struct Facility { Vec3 pos; double yaw = 0; FacilityKind kind = FacilityKind::Substation; };
+
 // ---- world detail: scenery props, night lights and road traffic (see WorldDetail.cpp) ----
 enum class PropKind : unsigned char {
     Helicopter, AttackHelicopter, Tank, Apc, Truck, FuelTruck, Jeep,
@@ -77,6 +84,12 @@ struct WorldLayout {
     std::vector<Bridge> bridges;
     std::vector<WindTurbine> turbines;
     std::vector<Vec3> factories;   // factory halls in the industrial zone (heading in y unused)
+    // infrastructure (cities of the denser maps, the power grid, water)
+    std::vector<PowerLine> powerLines;
+    std::vector<Dam> dams;
+    std::vector<Facility> facilities;
+    Polyline metro;                // elevated metro viaduct through the city (urban maps), y = rail head
+    std::vector<int> flyovers;     // indices into roads of the elevated city expressways
     // detail (filled by populateWorldDetail at the end of build)
     std::vector<SceneProp> props;
     std::vector<LightPoint> lights;
@@ -90,9 +103,21 @@ struct WorldLayout {
     const Town* industrialTown() const;
     /// Where a car is at `time` (ping-pongs along its lane, driving on the right).
     Vec3 carAt(const Car& c, double time, Vec3* forward = nullptr) const;
+    /// Metro trains running back and forth along the viaduct (a pure function of time).
+    int metroTrains() const;
+    /// Position of car `car` (0 = leading) of metro train `train` at `time`.
+    Vec3 metroCarAt(int train, int car, double time, Vec3* forward = nullptr) const;
+    static constexpr double kMetroCarLength = 21.0;
+    static constexpr int kMetroCars = 4;
     /// Distance (horizontal) from p to the nearest prop footprint centre, or a large number.
     double nearestProp(const Vec3& p) const;
 };
+
+/// Adds the power grid (pylons, substations, a hydro dam on mountain rivers), water works, and
+/// on the denser maps an elevated metro and city expressways (deterministic; see Infrastructure.cpp).
+void buildInfrastructure(const Terrain& t, WorldLayout& L);
+/// Engineered profile along a polyline (shared by roads, railway, metro): see WorldLayout.cpp.
+Polyline engineerRoute(const Terrain& t, std::vector<Vec3> pts, double step, double window, double maxGrade, double minY);
 
 /// Adds scenery props, night lights, military sites and traffic to a layout (deterministic).
 void populateWorldDetail(const Terrain& t, WorldLayout& L);

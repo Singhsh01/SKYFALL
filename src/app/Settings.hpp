@@ -89,7 +89,7 @@ struct Settings {
     bool captions = true;
     bool voiceBriefings = true;   // spoken mission briefings (system text-to-speech)
     // Progress: one character per campaign mission ('1' = completed)
-    std::string campaignDone = std::string(61, '0');
+    std::string campaignDone = std::string(100, '0');   // older saves (61 missions) load into the first 61
     bool missionCompleted(int n) const { return n >= 1 && n <= static_cast<int>(campaignDone.size()) && campaignDone[n - 1] == '1'; }
     void markCompleted(int n) { if (n >= 1 && n <= static_cast<int>(campaignDone.size())) campaignDone[n - 1] = '1'; }
 

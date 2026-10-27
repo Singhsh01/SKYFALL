@@ -161,6 +161,7 @@ Color surfaceTint(const Terrain& t, double x, double z, double h, double forest,
 }
 
 const TerrainInfo* g_info = nullptr;   // terrain being built (biome, tree line)
+std::vector<Vec3> g_urban;             // real maps: urban areas from the scenery generator (x, radius, z)
 const std::vector<unsigned char>* g_cover = nullptr;   // land-cover map being built (RGBA, kCoverN^2)
 constexpr int kCoverN = 1024;
 
@@ -184,6 +185,7 @@ Vector4 coverAt(double x, double z) {
 /// meadows and patchwork farmland on flat low valley floors, alpine grass above the trees, bare rock
 /// on cliffs. Desert: golden grassland on the flats, scattered junipers on the foothills, red rock
 /// on every steep face.
+double townMask(const Terrain& t, double x, double z);
 void computeLandCover(const Terrain& t, std::vector<unsigned char>& out) {
     const int N = kCoverN;
     const double cell = 2.0 * Terrain::kHalfSize / N;
@@ -237,6 +239,10 @@ void computeLandCover(const Terrain& t, std::vector<unsigned char>& out) {
                 gr = (1.0 - rk) * (1.0 - snowy) * (1.0 - fr) * (1.0 - fa) * (h < info.treeLine + 500 ? 1.0 : 0.6);
                 if (h < 3.0) { fr *= 0.3; fa = 0; }   // beaches and shore
             }
+            if (!g_urban.empty()) {
+                double tm = townMask(t, x, z);
+                fr *= 1.0 - tm; fa *= 1.0 - tm;
+            }
             size_t o = (static_cast<size_t>(j) * N + i) * 4;
             out[o + 0] = u8(fr);
             out[o + 1] = u8(gr);
@@ -271,7 +277,15 @@ double wadiMask(double x, double z) {
     return (1.0 - smoothstep(30.0, 200.0, std::fabs(z - wadiZ))) * smoothstep(-6000.0, -2000.0, x) * (1.0 - smoothstep(7500.0, 8500.0, x));
 }
 double townMask(const Terrain& t, double x, double z) {
-    if (t.info().real) return 0.0;   // real maps get their towns from the scenery generator
+    if (t.info().real) {
+        // real maps: paved ground under the generated towns and cities (no fields or forest there)
+        double m = 0;
+        for (const Vec3& u : g_urban) {
+            double d = std::hypot(x - u.x, z - u.z);
+            if (d < u.y * 1.2) m = std::max(m, 1.0 - smoothstep(u.y * 0.8, u.y * 1.15, d));
+        }
+        return m;
+    }
     Vec3 c = t.townCenter();
     double d = std::sqrt((x - c.x) * (x - c.x) + (z - c.z) * (z - c.z));
     return 1.0 - smoothstep(850.0, 1250.0, d);
@@ -408,6 +422,12 @@ void addTree(MeshBuilder& mb, Vector3 p, float height, float radius, Color c, in
 
 }  // namespace
 
+void setUrbanAreas(const WorldLayout& L) {
+    g_urban.clear();
+    for (const Town& tw : L.towns)
+        if (tw.kind != TownKind::Village) g_urban.push_back({tw.center.x, tw.radius, tw.center.z});
+}
+
 void WorldMeshes::build(const Terrain& t) {
     terrain = &t;
     g_info = &t.info();
@@ -478,8 +498,22 @@ void WorldMeshes::build(const Terrain& t) {
                     Vec3 n = t.normal(px, pz, 8.0);
                     if (n.y < (green ? 0.80 : 0.85)) continue;
                     if (green) {
-                        // conifers (alpine / temperate) or broadleaf canopy (tropical)
+                        // conifers (alpine / temperate) or broadleaf canopy (tropical); the Indian
+                        // maps add their own: coconut palms along the Konkan, Malabar and
+                        // Coromandel coasts, chinar and walnut on the Kashmir valley floor,
+                        // orchards and broadleaf below the deodar in the lower Himalaya
+                        const std::string& lid = t.info().id;
                         bool tropical = t.info().biome == Biome::Tropical;
+                        const bool coconutCoast = lid == "kochi" || lid == "mumbai" || lid == "chennai" || lid == "vizag";
+                        double broadleafBelow = lid == "kashmir" ? 1750.0 : lid == "sikkim" ? 1900.0 : lid == "tawang" ? 2300.0
+                                              : lid == "uttarakhand" ? 1300.0 : lid == "himachal" ? 1500.0 : lid == "assam" ? 1e9 : -1e9;
+                        if (coconutCoast && h < 45.0 && rng.uniform() < 0.75) {
+                            float ph = static_cast<float>(rng.range(11, 19));
+                            double v = rng.uniform();
+                            addTree(tb, V3(px, h - 0.6, pz), ph, ph * 0.40f, Color{u8(0.10 + 0.04 * v), u8(0.20 + 0.06 * v), u8(0.07 + 0.03 * v), 255}, 2);
+                            continue;
+                        }
+                        if (!tropical && broadleafBelow > -1e8 && h < broadleafBelow + rng.range(-120.0, 120.0)) tropical = true;   // broadleaf belt below the conifers
                         float hgt = static_cast<float>(tropical ? rng.range(9, 17) : rng.range(8, 19));
                         double v = rng.uniform();
                         Color col = tropical ? Color{u8(0.07 + 0.04 * v), u8(0.15 + 0.06 * v), u8(0.05 + 0.02 * v), 255}

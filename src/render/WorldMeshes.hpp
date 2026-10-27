@@ -3,11 +3,15 @@
 #pragma once
 
 #include "../sim/Terrain.hpp"
+#include "../sim/WorldLayout.hpp"
 #include "raylib.h"
 
 #include <vector>
 
 namespace sky {
+
+/// Real maps: the towns and cities of the layout get paved ground (call before WorldMeshes::build).
+void setUrbanAreas(const WorldLayout& L);
 
 struct TerrainChunk {
     Mesh l0{};            // 129^2 (15.6 m) — built lazily near the camera, LRU cached

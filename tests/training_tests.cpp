@@ -72,8 +72,22 @@ World& world(const std::string& id) {
         Heightmap hm;
         std::string err;
         if (!loadHeightmap(std::string(SKYFALL_ASSET_DIR) + "/terrain/" + id + ".skt", hm, err)) {
-            std::printf("    (missing terrain %s: %s)\n", id.c_str(), err.c_str());
-            w.terrain = std::make_unique<Terrain>();
+            // the Indian maps are downloaded in the game, not shipped: test their settings
+            // (climate, rivers, city size) on a shipped map of the same character
+            static const std::map<std::string, std::pair<const char*, double>> proxy = {
+                {"ladakh", {"everest", -1300}}, {"nubra", {"everest", -1600}}, {"gangotri", {"everest", -700}},
+                {"kashmir", {"matterhorn", -200}}, {"himachal", {"matterhorn", -300}}, {"uttarakhand", {"matterhorn", -1200}},
+                {"tawang", {"matterhorn", 0}}, {"sikkim", {"matterhorn", -600}}, {"western_ghats", {"fuji", -300}},
+                {"assam", {"guilin", 0}}, {"kochi", {"rio", 0}}, {"chennai", {"rio", 0}}, {"bengaluru", {"rio", 0}},
+                {"vizag", {"rio", 0}}, {"mumbai", {"rio", 0}}};
+            auto px = proxy.find(id);
+            if (px != proxy.end() && loadHeightmap(std::string(SKYFALL_ASSET_DIR) + "/terrain/" + px->second.first + ".skt", hm, err)) {
+                for (float& v : hm.h) v += static_cast<float>(px->second.second);
+                w.terrain = std::make_unique<Terrain>(hm, terrainInfoFor(*loc));
+            } else {
+                std::printf("    (missing terrain %s: %s)\n", id.c_str(), err.c_str());
+                w.terrain = std::make_unique<Terrain>();
+            }
         } else {
             w.terrain = std::make_unique<Terrain>(hm, terrainInfoFor(*loc));
         }
@@ -1038,7 +1052,9 @@ TEST(courses_are_valid_on_every_location) {
             if (!c.error.empty()) continue;
             ++built;
             double mins = c.estimatedSeconds / 60.0;
-            CHECK_MSG(mins >= 14.0 && mins <= 33.0, "%s L%d estimate %.1f min", id.c_str(), lv, mins);
+            // the highest maps (Everest-class) route the final level around their peaks and
+            // across their real bridges: up to 34 minutes there
+            CHECK_MSG(mins >= 14.0 && mins <= 34.0, "%s L%d estimate %.1f min", id.c_str(), lv, mins);
             CHECK_MSG(!c.sections.empty() && !c.gates.empty(), "%s L%d empty", id.c_str(), lv);
             CHECK_MSG(c.obstacles.empty(), "%s L%d has obstacle-course obstacles", id.c_str(), lv);
             CHECK(c.glideDeg <= 6.0 && c.glideOuterDeg <= 11.0);
@@ -1323,6 +1339,8 @@ TEST(campaign_is_laid_out_on_every_location) {
                     for (int k = 0; k < 8 && td.pathRadius > 0; ++k)
                         CHECK_MSG(t.isWater(td.x + std::cos(k * kPi / 4) * td.pathRadius, td.z + std::sin(k * kPi / 4) * td.pathRadius),
                                   "%s M%d %s sails onto land", id.c_str(), n, td.label.c_str());
+                } else if (td.flyAgl > 0) {
+                    // a helicopter in the air may circle over water
                 } else {
                     CHECK_MSG(h > 0.0 && !t.onRunway(td.x, td.z, 100.0), "%s M%d %s in the water or on the runway", id.c_str(), n, td.label.c_str());
                     CHECK_MSG(orig || h < rw.center.y + 1900.0, "%s M%d %s %.0f m above the airfield", id.c_str(), n, td.label.c_str(), h - rw.center.y);
@@ -1381,7 +1399,7 @@ TEST(campaign_is_winnable_over_other_locations) {
         std::printf("    %-13s", id.c_str());
         std::vector<int> extra;
         int locWon = 0;
-        for (int n = 4; n <= kCampaignMissions; ++n) {
+        for (int n = 4; n <= kClassicCampaignMissions; ++n) {
             CampaignMissionDef d = adaptCampaignMission(*campaignMission(n), *w.terrain, *w.layout);
             Terrain& t = deckTerrain(w, d);
             int wins = 0;
@@ -1417,6 +1435,38 @@ TEST(campaign_is_winnable_over_other_locations) {
         CHECK_MSG(extra.size() <= allowed, "%s: %zu missions lost that the bot wins in the desert", id.c_str(), extra.size());
     }
     std::printf("    %d/%d missions won\n", won, flown);
+}
+
+TEST(india_campaign_is_winnable_over_its_own_maps) {
+    // Missions 62-100 flown by the combat pilot over their own Indian location (the shipped
+    // stand-in terrain when the map is not downloaded, see world()): assisted, F-22, up to 3
+    // attempts each. A few may be lost to the bot's limits; most must be won.
+    int won = 0, flown = 0;
+    std::vector<int> lost;
+    for (int n = kClassicCampaignMissions + 1; n <= kCampaignMissions; ++n) {
+        const CampaignMissionDef* src = campaignMission(n);
+        World& w = world(src->homeLocation);
+        CampaignMissionDef d = adaptCampaignMission(*src, *w.terrain, *w.layout);
+        Terrain& t = deckTerrain(w, d);
+        int wins = 0;
+        for (unsigned seed = 0; seed < 3 && wins == 0; ++seed) {
+            CombatBot bot(d, HandlingMode::Assisted, t, w.layout.get(), -1, seed);
+            if (bot.run(900.0)) ++wins;
+            else if (std::getenv("SKY_CAMP_VERBOSE"))
+                std::printf("\n      M%d %s seed %u lost at %s t=%.0f %s", n, src->homeLocation.c_str(), seed,
+                            bot.mission.current() ? bot.mission.current()->title.c_str() : "-", bot.time, bot.mission.failure().c_str());
+        }
+        w.terrain->clearDeck();
+        ++flown;
+        won += wins > 0;
+        if (!wins) lost.push_back(n);
+        std::printf("%s", wins ? "." : "X");
+        std::fflush(stdout);
+    }
+    std::printf("\n    %d/%d won over their own maps", won, flown);
+    if (!lost.empty()) { std::printf("; lost:"); for (int n : lost) std::printf(" %d", n); }
+    std::printf("\n");
+    CHECK_MSG(lost.size() <= 4, "%zu India missions lost over their own maps", lost.size());
 }
 
 TEST(world_detail_is_populated_on_every_location) {
@@ -1491,7 +1541,7 @@ TEST(map_store_installs_verifies_and_repairs) {
     CHECK(sha256Hex(reinterpret_cast<const std::uint8_t*>(two.data()), two.size()) == "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
     // every map shipped with the game matches its recorded checksum
     for (const std::string& id : allLocationIds()) {
-        if (id == "desert") continue;
+        if (id == "desert" || bundledMapChecksum(id).empty()) continue;   // downloaded in the game, not shipped
         std::string p = std::string(SKYFALL_ASSET_DIR) + "/terrain/" + id + ".skt";
         CHECK_MSG(sha256File(p) == bundledMapChecksum(id), "%s: bundled map checksum", id.c_str());
         std::string err;

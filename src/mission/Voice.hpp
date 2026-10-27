@@ -60,6 +60,9 @@ extern const char* const kKills[4];
 extern const char* const kLost;
 extern const char* const kCarrierCat;
 extern const char* const kCarrierAirborne;
+extern const char* const kCivilianHit;      // a protected civilian site was destroyed
+extern const char* const kCivilianFail;
+extern const char* const kReinforcements;   // late enemy waves arrive
 }  // namespace lines
 
 /// "Next: <objective>" call when a campaign objective completes.

@@ -20,6 +20,7 @@ add_library(skyfall_core STATIC
   src/sim/Terrain.cpp
   src/sim/WorldLayout.cpp
   src/sim/WorldDetail.cpp
+  src/sim/Infrastructure.cpp
   src/sim/Locations.cpp
   src/sim/TerrainAnalysis.cpp
   src/sim/MapStore.cpp
@@ -97,6 +98,7 @@ if(SKYFALL_BUILD_GAME)
     src/render/Effects.cpp
     src/render/WorldMeshes.cpp
     src/render/Dressing.cpp
+    src/render/InfraDressing.cpp
     src/render/Props.cpp
     src/ui/Hud.cpp
     src/ui/Cockpit.cpp

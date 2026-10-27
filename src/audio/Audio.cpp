@@ -71,15 +71,24 @@ void Audio::setLockState(int s) { lock_ = s; }
 void Audio::setMissileWarning(bool on) { warn_ = on; }
 void Audio::setStallWarning(bool on) { stall_ = on; }
 
-void Audio::play(Sfx s, float gain, float pan) {
+void Audio::setNearbyJet(float distance, float closing, float pan, float throttle) {
+    jetDist_ = distance; jetClosing_ = closing; jetPan_ = std::clamp(pan, -1.0f, 1.0f); jetThrottle_ = throttle;
+}
+void Audio::setNearbyMissile(float distance, float closing, float pan) {
+    mslDist_ = distance; mslClosing_ = closing; mslPan_ = std::clamp(pan, -1.0f, 1.0f);
+}
+
+void Audio::play(Sfx s, float gain, float pan, float delay, float distance) {
     if (!ready_) return;
     Voice v;
     v.type = s;
     v.gain = gain;
     v.pan = std::clamp(pan, -1.0f, 1.0f);
+    v.delay = std::clamp(delay, 0.0f, 6.0f);
+    v.muffle = std::clamp(distance / 6000.0f, 0.0f, 0.9f);
     switch (s) {
-        case Sfx::Explosion: v.dur = 2.2f; break;
-        case Sfx::BigExplosion: v.dur = 3.5f; break;
+        case Sfx::Explosion: v.dur = 3.0f; break;
+        case Sfx::BigExplosion: v.dur = 5.0f; break;
         case Sfx::MissileLaunch: v.dur = 1.8f; break;
         case Sfx::Flares: v.dur = 1.2f; break;
         case Sfx::Hit: v.dur = 0.25f; break;
@@ -134,8 +143,43 @@ void Audio::render(float* out, unsigned frames) {
             float sp2 = std::min(1.6f, (spd / 320.0f) * (spd / 320.0f));
             float wind = lp1(lpWind_, hpWind_, 1800.0f - 900.0f * ck + 500.0f * std::min(1.0f, spd / 600.0f)) * sp2 * 0.75f;
             wind += lp1(lpRoar_, n, 220.0f) * smoothLow_ * std::min(1.0f, spd / 400.0f) * 1.6f * (1.0f - 0.4f * ck);
+            // gusts: a slow swell in the wind (stronger in a storm)
+            gustPhase_ += static_cast<float>(dt * (0.13 + 0.07 * std::sin(t_ * 0.05)));
+            float gust = 1.0f + gust_.load() * 0.5f * static_cast<float>(std::sin(gustPhase_ * kTau) * std::sin(gustPhase_ * 2.7 * kTau + 1.3));
+            wind *= gust;
             float engine = (rumble * (1.0f - 0.35f * ck) + abRoar + whine) * eng + wind * eng * 0.8f;
             L += engine; R += engine;
+            // rain drumming on the canopy (inside) or hissing past (outside)
+            float rain = rain_.load();
+            if (rain > 0.01f) {
+                hpRain_ = 0.9f * (hpRain_ + n - hpRainPrev_);
+                hpRainPrev_ = n;
+                float drops = lp1(lpRain_, hpRain_, 3500.0f + 2500.0f * (1.0f - ck)) * rain * (0.18f + 0.22f * ck);
+                if (ck > 0.5f && (rng_ & 2047u) < static_cast<unsigned>(rain * 14.0f)) drops += noise() * 0.25f * rain;   // single drops on the glass
+                L += drops * eng; R += drops * eng;
+            }
+            // the nearest other jet: engine roar, Doppler-shifted (c / (c - v)), louder as it closes
+            float jd = jetDist_.load();
+            float jetTarget = jd > 0 && jd < 2500.0f ? 1.0f / (1.0f + jd / 120.0f) : 0.0f;
+            smoothJet_ += (jetTarget - smoothJet_) * 0.0008f;
+            if (smoothJet_ > 0.002f) {
+                float dop = std::clamp(343.0f / std::max(60.0f, 343.0f - jetClosing_.load()), 0.4f, 2.6f);
+                float jn = noise();
+                float roar = lp1(lpJet_, jn, (380.0f + 900.0f * jetThrottle_.load()) * dop) - lp1(lpJet2_, jn, 70.0f * dop);
+                float js = roar * smoothJet_ * (1.2f + 1.4f * jetThrottle_.load()) * fx * (1.0f - 0.5f * ck);
+                float jp = jetPan_.load();
+                L += js * (1.0f - std::max(0.0f, jp)); R += js * (1.0f + std::min(0.0f, jp));
+            }
+            // a missile going past: a tearing rocket roar with the same Doppler drop
+            float md = mslDist_.load();
+            float mslTarget = md > 0 && md < 900.0f ? 1.0f / (1.0f + md / 60.0f) : 0.0f;
+            smoothMsl_ += (mslTarget - smoothMsl_) * 0.002f;
+            if (smoothMsl_ > 0.002f) {
+                float dop = std::clamp(343.0f / std::max(60.0f, 343.0f - mslClosing_.load()), 0.4f, 2.6f);
+                float ms = lp1(lpMsl_, noise(), 1600.0f * dop) * smoothMsl_ * 1.6f * fx;
+                float mp = mslPan_.load();
+                L += ms * (1.0f - std::max(0.0f, mp)); R += ms * (1.0f + std::min(0.0f, mp));
+            }
             // cannon: 30 Hz bursts of filtered noise
             if (gun_) {
                 gunTimer_ += dt;
@@ -164,15 +208,30 @@ void Audio::render(float* out, unsigned frames) {
         }
         // one-shots
         for (Voice& v : local) {
+            if (v.delay > 0) { v.delay -= dt; continue; }   // still travelling at the speed of sound
             if (v.t >= v.dur) continue;
             float tt = v.t, e = 0, s = 0;
             float n = noise();
+            const float clear = 1.0f - v.muffle;   // distant sounds lose their highs
             switch (v.type) {
                 case Sfx::Explosion:
                 case Sfx::BigExplosion: {
-                    e = std::exp(-tt * (v.type == Sfx::BigExplosion ? 1.6f : 2.6f)) * std::min(1.0f, tt * 200.0f);
-                    s = lp1(v.lp, n, 160.0f + 900.0f * std::exp(-tt * 6.0f)) * 3.2f * e;
-                    s += static_cast<float>(std::sin(kTau * 42.0 * tt)) * e * 0.5f;
+                    const bool big = v.type == Sfx::BigExplosion;
+                    // layered: the crack of the shock front, the boom of the fireball, a long
+                    // low rumble rolling off the terrain, and debris crackling down afterwards
+                    float crack = tt < 0.05f ? n * (1.0f - tt / 0.05f) * 1.6f * clear * clear : 0.0f;
+                    e = std::exp(-tt * (big ? 1.6f : 2.6f)) * std::min(1.0f, tt * 200.0f);
+                    float boom = lp1(v.lp, n, (160.0f + 900.0f * std::exp(-tt * 6.0f)) * (0.35f + 0.65f * clear)) * 3.2f * e;
+                    boom += static_cast<float>(std::sin(kTau * (big ? 34.0 : 42.0) * tt)) * e * 0.5f;
+                    float rumbleEnv = std::min(1.0f, tt * 6.0f) * std::exp(-tt * (big ? 0.7f : 1.1f));
+                    float rumble = lp1(v.lp2, n, 55.0f) * rumbleEnv * (big ? 3.4f : 2.2f);
+                    float crackle = 0;
+                    if (tt > 0.25f && tt < (big ? 3.2f : 1.8f)) {
+                        if ((static_cast<unsigned>(n * 1e6f) & 1023u) < (big ? 9u : 5u)) v.crackle = 1.0f;
+                        v.crackle *= 0.995f;
+                        crackle = lp1(v.lp3, n, 2600.0f * clear + 300.0f) * v.crackle * 0.55f * std::exp(-tt * 0.9f);
+                    }
+                    s = crack + boom + rumble + crackle;
                     break;
                 }
                 case Sfx::MissileLaunch:

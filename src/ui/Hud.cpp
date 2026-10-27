@@ -1011,11 +1011,11 @@ void Hud::missionPanel(const HudContext& c) {
             ui::textShadow(std::string("COMPLETE: ") + m.steps()[m.stepIndex() - 1].title, c.w * 0.5f, c.h * 0.2f, 22 * s, ui::withAlpha(Color{120, 255, 170, 255}, a), Align::Center);
         }
         if (m.status() == MissionStatus::Complete && c.missionDone) {
-            ui::textShadow("MISSION COMPLETE", c.w * 0.5f, c.h * 0.16f, 40 * s, Color{120, 255, 170, 255}, Align::Center);
+            ui::textShadow("MISSION COMPLETE", c.w * 0.5f, c.h * 0.27f, 40 * s, Color{120, 255, 170, 255}, Align::Center);
             // debrief card
             if (c.battle && c.player) {
                 const Battle::PlayerStats& ps = c.battle->playerStats();
-                Rectangle d = {c.w * 0.5f - 210 * s, c.h * 0.16f + 52 * s, 420 * s, 150 * s};
+                Rectangle d = {c.w * 0.5f - 210 * s, c.h * 0.27f + 52 * s, 420 * s, 150 * s};
                 ui::panel(d, Color{0, 0, 0, 170}, Color{120, 255, 170, 90});
                 int secs = static_cast<int>(m.elapsed());
                 struct Row { const char* k; std::string v; } rows[] = {
@@ -1032,9 +1032,56 @@ void Hud::missionPanel(const HudContext& c) {
                     ui::text(r.v, d.x + d.width - 16 * s, yy, 13 * s, WHITE, Align::Right);
                     yy += 21 * s;
                 }
-                ui::textShadow(c.missionNext, c.w * 0.5f, d.y + d.height + 12 * s, 17 * s, WHITE, Align::Center);
+                float below = d.y + d.height;
+                if (c.outcome && c.campaign) {
+                    // score, grade and the protected sites
+                    Rectangle e = {d.x, d.y + d.height + 6 * s, d.width, c.outcome->civiliansTotal > 0 ? 64 * s : 42 * s};
+                    ui::panel(e, Color{0, 0, 0, 170}, Color{120, 255, 170, 90});
+                    float ey = e.y + 10 * s;
+                    if (c.outcome->civiliansTotal > 0) {
+                        bool clean = c.outcome->civiliansLost == 0;
+                        ui::text("PROTECTED SITES INTACT", e.x + 16 * s, ey, 13 * s, Color{200, 210, 215, 255});
+                        ui::text(fmt2("%d / %d", c.outcome->civiliansTotal - c.outcome->civiliansLost, c.outcome->civiliansTotal), e.x + e.width - 16 * s, ey, 13 * s,
+                                 clean ? Color{120, 200, 255, 255} : Color{255, 110, 90, 255}, Align::Right);
+                        ey += 21 * s;
+                    }
+                    ui::text("SCORE", e.x + 16 * s, ey, 15 * s, Color{255, 176, 60, 255});
+                    ui::text(fmti("%d", c.outcome->score()) + "   GRADE " + c.outcome->grade(), e.x + e.width - 16 * s, ey, 15 * s, Color{255, 225, 120, 255}, Align::Right);
+                    below = e.y + e.height;
+                    // the flight path over the map, with what was destroyed and what was protected
+                    if (c.flightPath && c.flightPath->size() > 1 && c.minimap.id != 0) {
+                        double lo[2] = {1e9, 1e9}, hi[2] = {-1e9, -1e9};
+                        auto grow = [&](double x, double z) { lo[0] = std::min(lo[0], x); lo[1] = std::min(lo[1], z); hi[0] = std::max(hi[0], x); hi[1] = std::max(hi[1], z); };
+                        for (const Vec3& q : *c.flightPath) grow(q.x, q.z);
+                        for (const GroundTarget& g : c.battle->ground()) if (g.group > 0) grow(g.pos.x, g.pos.z);
+                        double span = std::max({hi[0] - lo[0], hi[1] - lo[1], 3000.0}) * 1.15;
+                        double cx = (lo[0] + hi[0]) * 0.5, cz = (lo[1] + hi[1]) * 0.5;
+                        float side = d.height + (below - d.y - d.height);
+                        Rectangle mr = {d.x + d.width + 10 * s, d.y, side, side};
+                        double mPerPx = 2.0 * c.minimapHalf / c.minimap.width;
+                        Rectangle src = {static_cast<float>((cx - span / 2 + c.minimapHalf) / mPerPx), static_cast<float>((cz - span / 2 + c.minimapHalf) / mPerPx),
+                                         static_cast<float>(span / mPerPx), static_cast<float>(span / mPerPx)};
+                        DrawTexturePro(c.minimap, src, mr, {0, 0}, 0, Color{255, 255, 255, 230});
+                        DrawRectangleLinesEx(mr, 1.0f * s, Color{120, 255, 170, 120});
+                        auto toMap = [&](double x, double z) {
+                            return Vector2{mr.x + static_cast<float>((x - (cx - span / 2)) / span) * mr.width, mr.y + static_cast<float>((z - (cz - span / 2)) / span) * mr.height};
+                        };
+                        const auto& fp = *c.flightPath;
+                        for (size_t i = 1; i < fp.size(); ++i) DrawLineEx(toMap(fp[i - 1].x, fp[i - 1].z), toMap(fp[i].x, fp[i].z), 2.0f * s, Color{255, 225, 120, 230});
+                        for (const GroundTarget& g : c.battle->ground()) {
+                            if (g.group <= 0 && g.kind != GroundKind::Civilian) continue;
+                            Vector2 q = toMap(g.pos.x, g.pos.z);
+                            if (g.team == Team::Blue) DrawRectangleV({q.x - 3 * s, q.y - 3 * s}, {6 * s, 6 * s}, g.alive ? Color{120, 200, 255, 255} : Color{255, 80, 70, 255});
+                            else if (!g.alive) { DrawLineEx({q.x - 3 * s, q.y - 3 * s}, {q.x + 3 * s, q.y + 3 * s}, 1.5f * s, Color{255, 90, 70, 255}); DrawLineEx({q.x - 3 * s, q.y + 3 * s}, {q.x + 3 * s, q.y - 3 * s}, 1.5f * s, Color{255, 90, 70, 255}); }
+                        }
+                        Vector2 end = toMap(fp.back().x, fp.back().z);
+                        DrawCircleV(end, 3.5f * s, WHITE);
+                        ui::text("FLIGHT PATH", mr.x + 6 * s, mr.y + 4 * s, 11 * s, Color{255, 255, 255, 220});
+                    }
+                }
+                ui::textShadow(c.missionNext, c.w * 0.5f, below + 12 * s, 17 * s, WHITE, Align::Center);
             } else {
-                ui::textShadow(fmt("TIME %.0f s     ", m.elapsed()) + c.missionNext, c.w * 0.5f, c.h * 0.16f + 50 * s, 17 * s, WHITE, Align::Center);
+                ui::textShadow(fmt("TIME %.0f s     ", m.elapsed()) + c.missionNext, c.w * 0.5f, c.h * 0.27f + 50 * s, 17 * s, WHITE, Align::Center);
             }
         }
     } else if (c.arena && c.battle) {

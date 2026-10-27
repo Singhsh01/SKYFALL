@@ -61,6 +61,7 @@ const char* groundKindName(GroundKind k) {
         case GroundKind::Substation: return "SUBSTATION";
         case GroundKind::Helicopter: return "HELICOPTER";
         case GroundKind::Cargo: return "SUPPLIES";
+        case GroundKind::Civilian: return "PROTECTED SITE";
         default: return "TARGET";
     }
 }
@@ -84,6 +85,7 @@ double groundAimHeight(GroundKind k) {
         case GroundKind::Ammo: return 2.5;
         case GroundKind::Substation: return 3.0;
         case GroundKind::Helicopter: return 2.4;
+        case GroundKind::Civilian: return 8.0;
         default: return 1.5;
     }
 }
@@ -102,6 +104,7 @@ double groundHitRadius(GroundKind k) {
         case GroundKind::Substation: return 20.0;
         case GroundKind::Helicopter: return 9.0;
         case GroundKind::Ammo: return 16.0;
+        case GroundKind::Civilian: return 14.0;
         default: return 14.0;
     }
 }
@@ -129,6 +132,7 @@ double groundMaxHealth(GroundKind k) {
         case GroundKind::Substation: return 160;
         case GroundKind::Helicopter: return 70;
         case GroundKind::Cargo: return 40;
+        case GroundKind::Civilian: return 150;   // a near miss damages it, a second one brings it down
         default: return 100;
     }
 }

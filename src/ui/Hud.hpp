@@ -70,6 +70,8 @@ struct HudContext {
     int approachDir = 1;          // mission 3 glide path: +1 runway 09, -1 runway 27
     DeckInfo deck{};                 // aircraft carrier (inactive unless a carrier mission)
     const CampaignMissionDef* campaign = nullptr;
+    const CampaignOutcome* outcome = nullptr;           // campaign debrief: score, protected sites
+    const std::vector<Vec3>* flightPath = nullptr;      // campaign debrief map
     bool showGlidePath = false;
     // Training Academy
     const TrainingSession* training = nullptr;
