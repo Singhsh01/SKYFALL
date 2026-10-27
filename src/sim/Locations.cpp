@@ -38,6 +38,37 @@ const std::vector<LocationDef>& locations() {
          "Hundreds of limestone towers along the Li River."},
         {"fuji", "Mount Fuji", "Japan / Asia", 35.36, 138.73, Biome::Temperate, 3200, 2500, 2700,
          "The perfect volcanic cone above forests and lakes."},
+        // ---- India ----
+        {"ladakh", "Leh & the Indus Valley", "India / Ladakh", 34.13, 77.58, Biome::HighDesert, 5600, 3650, 4900,
+         "High-altitude desert: bare scree mountains, the Indus and green oases at 3,500 m. Thin air.", 3.0, -1e9, 1, false},
+        {"nubra", "Nubra Valley", "India / Ladakh", 34.58, 77.56, Biome::HighDesert, 5700, 3300, 4900,
+         "Sand dunes and a braided river between 6,000 m ridges, Diskit and Hunder on the valley floor.", 3.0, -1e9, 0, false},
+        {"kashmir", "Kashmir Valley", "India / Jammu & Kashmir", 34.08, 74.85, Biome::Temperate, 3900, 3300, 3600,
+         "Srinagar, the Jhelum and the Dal lake shore in a wide valley ringed by the Pir Panjal and Zabarwan.", 2.0, -1e9, 2},
+        {"gangotri", "Gangotri & Garhwal Himalaya", "India / Uttarakhand", 30.90, 79.05, Biome::Alpine, 4600, 3800, 4300,
+         "Glaciers, the Bhagirathi peaks and deep gorges: high Himalayan flying.", 1.5, -1e9, 0, false},
+        {"himachal", "Kullu & Manali", "India / Himachal Pradesh", 32.20, 77.17, Biome::Alpine, 4300, 3500, 3900,
+         "The Beas valley: deodar forests, orchards, hillside towns and snow peaks above.", 2.0, -1e9, 1},
+        {"uttarakhand", "Tehri & the Bhagirathi", "India / Uttarakhand", 30.38, 78.45, Biome::Temperate, 99999, 2600, 2900,
+         "The Bhagirathi valley around Tehri: river gorges, terraced slopes and hillside towns in the Garhwal hills.", 2.0, -1e9, 1},
+        {"tawang", "Tawang", "India / Arunachal Pradesh", 27.59, 91.87, Biome::Temperate, 4600, 4000, 4300,
+         "Forested ridges, deep valleys and a monastery town under snow peaks.", 2.0, -1e9, 1},
+        {"sikkim", "Gangtok & East Sikkim", "India / Sikkim", 27.33, 88.62, Biome::Temperate, 4800, 3900, 4300,
+         "Gangtok on its ridge, the Teesta gorge and dense subtropical forest.", 2.0, -1e9, 2},
+        {"assam", "Brahmaputra & Guwahati", "India / Assam", 26.17, 91.72, Biome::Tropical, 99999, 1500, 99999,
+         "The mighty Brahmaputra and its plains around Guwahati, green hills to the south.", 3.0, -1e9, 2},
+        {"kochi", "Kochi & the Backwaters", "India / Kerala", 9.95, 76.29, Biome::Tropical, 99999, 2000, 99999,
+         "The port city between the Arabian Sea and the Kerala backwaters, palms everywhere.", 0.0, 0.8, 2},
+        {"chennai", "Chennai Coast", "India / Tamil Nadu", 13.05, 80.25, Biome::Tropical, 99999, 2000, 99999,
+         "A large coastal city on the Bay of Bengal: beaches, port and dense urban grid.", 0.0, -1e9, 3},
+        {"bengaluru", "Bengaluru", "India / Karnataka", 12.97, 77.59, Biome::Tropical, 99999, 2000, 99999,
+         "A high-rise technology city on the Deccan plateau at 900 m, lakes and parks.", 0.0, -1e9, 3},
+        {"vizag", "Visakhapatnam", "India / Andhra Pradesh", 17.72, 83.28, Biome::Tropical, 99999, 2000, 99999,
+         "A coastal port city between the Eastern Ghats hills and the Bay of Bengal.", 0.0, -1e9, 2},
+        {"western_ghats", "Munnar & the Western Ghats", "India / Kerala", 10.09, 77.06, Biome::Tropical, 99999, 2300, 2450,
+         "Tea estates, shola forest and steep green ridges up to 2,600 m.", 1.5, -1e9, 1},
+        {"mumbai", "Mumbai", "India / Maharashtra", 19.02, 72.86, Biome::Tropical, 99999, 2000, 99999,
+         "A dense skyline on the Arabian Sea: Marine Drive, the harbour and the sea links.", 0.0, -1e9, 3},
     };
     return k;
 }
@@ -57,6 +88,9 @@ TerrainInfo terrainInfoFor(const LocationDef& loc) {
     t.treeLine = loc.treeLine;
     t.highRock = loc.highRock;
     t.real = loc.id != "desert";
+    t.riverDepth = loc.riverDepth;
+    t.lakeLevel = loc.lakeLevel;
+    t.urban = loc.urban;
     if (t.real) t.attribution = "Elevation: AWS Terrain Tiles (Mapzen terrarium; SRTM, GMTED2010, ETOPO1, NED and others)";
     return t;
 }

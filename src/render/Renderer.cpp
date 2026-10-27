@@ -1215,8 +1215,21 @@ void Renderer::drawTerrain(const FrameParams& f) {
     setAtmosphere(water_, f);
     water_.setF("uMapHalf", static_cast<float>(Terrain::kHalfSize));
     water_.setF("uCloudCover", f.L.cloudCover);
+    water_.setF("uInland", 0.0f);
     drawMeshC(world_.water, waterMat_, MatrixIdentity());
     ++drawCalls_;
+    if (!world_.inlandWater.empty()) {   // rivers and lakes: silty glacial green, brown in the plains
+        water_.setF("uInland", 1.0f);
+        Vector3 rc = terrain_->info().biome == Biome::Tropical ? Vector3{0.10f, 0.12f, 0.08f}
+                   : (aridBiome(terrain_->info().biome) || terrain_->info().biome == Biome::Alpine ? Vector3{0.11f, 0.17f, 0.17f}
+                                                                                                    : Vector3{0.05f, 0.11f, 0.11f});
+        water_.setV3("uRiverColor", rc);
+        for (const auto& w : world_.inlandWater) {
+            if (Vector3Distance(w.center, cp) - w.radius > 30000.0f || !sphereVisible(f, w.center, w.radius)) continue;
+            drawMeshC(w.mesh, waterMat_, MatrixIdentity());
+        }
+        water_.setF("uInland", 0.0f);
+    }
     rlEnableBackfaceCulling();
     if (std::getenv("SKYFALL_TRIS")) {
         static int n = 0;

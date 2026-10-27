@@ -26,7 +26,10 @@ struct RunwayInfo {
 
 enum class SurfaceKind { Water, Sand, Grass, Forest, Rock, Snow, Runway, Town };
 
-enum class Biome { Desert = 0, Alpine = 1, Temperate = 2, Tropical = 3 };
+enum class Biome { Desert = 0, Alpine = 1, Temperate = 2, Tropical = 3,
+                   HighDesert = 4 };   // cold high-altitude desert (Ladakh): grey scree, poplar oases
+/// Dry climates: sand / scree ground, sparse vegetation (no forests).
+inline bool aridBiome(Biome b) { return b == Biome::Desert || b == Biome::HighDesert; }
 
 /// What the terrain represents and how it should be dressed (materials, vegetation, clouds).
 struct TerrainInfo {
@@ -40,6 +43,10 @@ struct TerrainInfo {
     double cloudBase = 2100;   // m: cumulus layer height
     bool real = false;         // built from real elevation data
     std::string attribution;
+    // inland water (the sea is anything below 0 m): rivers along the valley floors and lakes
+    double riverDepth = 0;     // > 0: ground within this many metres of the local valley floor is river
+    double lakeLevel = -1e9;   // ground below this height is a lake / reservoir / backwater
+    int urban = 1;             // 0 villages, 1 town, 2 city, 3 metropolis (density of the scenery)
 };
 
 /// A square elevation grid (row 0 = north edge, z increasing southwards) covering `extent` metres.
@@ -96,7 +103,21 @@ public:
     /// Height of whatever the aircraft would collide with: max(ground, sea surface).
     double surfaceHeight(double x, double z) const;
     Vec3 normal(double x, double z, double eps = 4.0) const;
-    bool isWater(double x, double z) const { return height(x, z) < kSeaLevel; }
+    bool isWater(double x, double z) const {
+        double h = height(x, z);
+        return h < kSeaLevel || h < inlandLevel(x, z);
+    }
+    /// Surface of a river or lake at (x, z), or -1e9 where there is none (the sea is not included).
+    double inlandLevel(double x, double z) const {
+        if (inland_.empty()) return -1e9;
+        int i = static_cast<int>((x + kHalfSize) / kWaterCell), j = static_cast<int>((z + kHalfSize) / kWaterCell);
+        if (i < 0 || j < 0 || i >= kWaterN || j >= kWaterN) return -1e9;
+        return inland_[static_cast<size_t>(j) * kWaterN + i];
+    }
+    /// Inland water grid (kWaterN^2 cells of kWaterCell metres; -1e9 = dry). Empty without rivers / lakes.
+    static constexpr int kWaterN = 1024;
+    static constexpr double kWaterCell = 2.0 * kHalfSize / kWaterN;
+    const std::vector<float>& inlandWater() const { return inland_; }
     SurfaceKind surface(double x, double z) const;
 
     // Height grid shared with the renderer (row-major, (N+1) x (N+1) samples).
@@ -132,7 +153,9 @@ public:
 private:
     double rawHeight(double x, double z) const;
     double applyModifiers(double x, double z, double h) const;
+    void buildInlandWater();
     std::vector<float> grid_;
+    std::vector<float> inland_;   // river / lake surface per water cell (-1e9 = dry)
     RunwayInfo runway_;
     DeckInfo deck_;
     Vec3 town_;

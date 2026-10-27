@@ -1,6 +1,7 @@
 #include "Terrain.hpp"
 
 #include <algorithm>
+#include <queue>
 #include <cmath>
 #include "sim/Parallel.hpp"
 
@@ -341,10 +342,13 @@ Terrain::Terrain(const Heightmap& hmIn, const TerrainInfo& info) : info_(info) {
             grid_[static_cast<size_t>(j) * n + i] = static_cast<float>(h);
         }
     });
+    // 1b. rivers and lakes (before choosing the runway and the town, which must stay dry)
+    buildInlandWater();
     auto raw = [&](double x, double z) {
         double gx = (x + kHalfSize) / kCell, gz = (z + kHalfSize) / kCell;
         int i = std::clamp(static_cast<int>(gx), 0, kGridCells), j = std::clamp(static_cast<int>(gz), 0, kGridCells);
-        return static_cast<double>(gridAt(i, j));
+        double h = static_cast<double>(gridAt(i, j));
+        return inlandLevel(x, z) > h ? -1.0 : h;   // wet ground counts as water for the site searches
     };
     // 2. runway: the flattest dry east-west strip, preferring the middle of the map
     double best = 1e18;
@@ -429,6 +433,163 @@ Terrain::Terrain(const Heightmap& hmIn, const TerrainInfo& info) : info_(info) {
     town_.y = height(town_.x, town_.z);
 }
 
+/// Rivers along the valley floors (ground within riverDepth metres of the lowest ground around
+/// it, in real valleys or on the lowest plain of the map) and lakes / backwaters (ground below
+/// lakeLevel). Speckles are removed and tiny ponds dropped, so what is left reads as rivers and lakes.
+void Terrain::buildInlandWater() {
+    inland_.clear();
+    const bool river = info_.riverDepth > 0, lake = info_.lakeLevel > -1e8;
+    if (!river && !lake) return;
+    const int N = kWaterN;
+    std::vector<float> H(static_cast<size_t>(N) * N);
+    parallelRows(N, [&](int j) {
+        for (int i = 0; i < N; ++i)
+            H[static_cast<size_t>(j) * N + i] = static_cast<float>(height(-kHalfSize + (i + 0.5) * kWaterCell, -kHalfSize + (j + 0.5) * kWaterCell));
+    });
+    auto idx = [N](int i, int j) { return static_cast<size_t>(j) * N + i; };
+    // separable running min / max over a square window
+    auto filter = [&](const std::vector<float>& in, int r, bool takeMin) {
+        std::vector<float> tmp(in.size()), out(in.size());
+        parallelRows(N, [&](int j) {
+            for (int i = 0; i < N; ++i) {
+                float v = in[idx(i, j)];
+                for (int k = std::max(0, i - r); k <= std::min(N - 1, i + r); ++k) v = takeMin ? std::min(v, in[idx(k, j)]) : std::max(v, in[idx(k, j)]);
+                tmp[idx(i, j)] = v;
+            }
+        });
+        parallelRows(N, [&](int j) {
+            for (int i = 0; i < N; ++i) {
+                float v = tmp[idx(i, j)];
+                for (int k = std::max(0, j - r); k <= std::min(N - 1, j + r); ++k) v = takeMin ? std::min(v, tmp[idx(i, k)]) : std::max(v, tmp[idx(i, k)]);
+                out[idx(i, j)] = v;
+            }
+        });
+        return out;
+    };
+    std::vector<float> level(H.size(), -1e9f);
+    if (river) {
+        // rivers follow the drainage: fill the pits (priority flood), route every cell to its
+        // steepest downhill neighbour, accumulate the area draining through each cell; where that
+        // area is large there is a river, wider the more it carries. Valleys crossing the map edge
+        // bring in water from outside (the big through-flowing rivers).
+        std::vector<float> F(H);
+        {
+            using Q = std::pair<float, size_t>;
+            std::priority_queue<Q, std::vector<Q>, std::greater<Q>> pq;
+            std::vector<char> seen(H.size(), 0);
+            for (int i = 0; i < N; ++i)
+                for (int j : {0, N - 1}) { pq.push({F[idx(i, j)], idx(i, j)}); pq.push({F[idx(j, i)], idx(j, i)}); seen[idx(i, j)] = seen[idx(j, i)] = 1; }
+            while (!pq.empty()) {
+                auto [hc, k] = pq.top(); pq.pop();
+                int i = static_cast<int>(k % N), j = static_cast<int>(k / N);
+                for (int dj = -1; dj <= 1; ++dj)
+                    for (int di = -1; di <= 1; ++di) {
+                        int a2 = i + di, b2 = j + dj;
+                        if ((!di && !dj) || a2 < 0 || b2 < 0 || a2 >= N || b2 >= N) continue;
+                        size_t q = idx(a2, b2);
+                        if (seen[q]) continue;
+                        seen[q] = 1;
+                        F[q] = std::max(F[q], hc + 0.001f);
+                        pq.push({F[q], q});
+                    }
+            }
+        }
+        std::vector<int> down(H.size(), -1);
+        for (int j = 0; j < N; ++j)
+            for (int i = 0; i < N; ++i) {
+                float best = 0; int bk = -1;
+                for (int dj = -1; dj <= 1; ++dj)
+                    for (int di = -1; di <= 1; ++di) {
+                        int a2 = i + di, b2 = j + dj;
+                        if ((!di && !dj) || a2 < 0 || b2 < 0 || a2 >= N || b2 >= N) continue;
+                        float drop = (F[idx(i, j)] - F[idx(a2, b2)]) / ((di && dj) ? 1.414f : 1.0f);
+                        if (drop > best) { best = drop; bk = static_cast<int>(idx(a2, b2)); }
+                    }
+                down[idx(i, j)] = bk;
+            }
+        std::vector<double> acc(H.size(), 1.0);
+        // inflow where a main valley crosses the map edge: the lowest stretches of the border
+        {
+            std::vector<float> edge;
+            for (int i = 0; i < N; ++i) for (int j : {0, N - 1}) { edge.push_back(H[idx(i, j)]); edge.push_back(H[idx(j, i)]); }
+            std::nth_element(edge.begin(), edge.begin() + edge.size() / 8, edge.end());
+            float low = edge[edge.size() / 8];
+            auto inflow = [&](int i, int j, int ai, int aj) {
+                size_t k = idx(i, j);
+                if (H[k] <= 0.5f || H[k] > low) return;
+                for (int d = -48; d <= 48; ++d) {   // the lowest point of the border within 1.5 km
+                    int a2 = i + ai * d, b2 = j + aj * d;
+                    if (a2 < 0 || b2 < 0 || a2 >= N || b2 >= N) continue;
+                    if (H[idx(a2, b2)] < H[k]) return;
+                }
+                acc[k] += 400000.0;   // ~ 400 km2 of catchment outside the map
+            };
+            for (int i = 0; i < N; ++i) { inflow(i, 0, 1, 0); inflow(i, N - 1, 1, 0); inflow(0, i, 0, 1); inflow(N - 1, i, 0, 1); }
+        }
+        std::vector<size_t> order(H.size());
+        for (size_t k = 0; k < order.size(); ++k) order[k] = k;
+        std::sort(order.begin(), order.end(), [&](size_t x, size_t y) { return F[x] > F[y]; });
+        for (size_t k : order) if (down[k] >= 0) acc[static_cast<size_t>(down[k])] += acc[k];
+        const double cellKm2 = kWaterCell * kWaterCell * 1e-6;
+        const double minKm2 = 10.0 / std::max(0.5, info_.riverDepth);   // bigger riverDepth: smaller streams show too
+        for (int j = 0; j < N; ++j)
+            for (int i = 0; i < N; ++i) {
+                size_t k = idx(i, j);
+                double km2 = acc[k] * cellKm2;
+                if (km2 < minKm2 || H[k] <= 0.5f) continue;
+                // half-width in cells: a stream is one cell, a big river several hundred metres
+                int r = static_cast<int>(std::clamp(std::sqrt(km2 / 25.0) + 0.5, 1.0, 9.0));
+                float lv = H[k] + 0.8f + 0.25f * static_cast<float>(r);
+                for (int dj = -r; dj <= r; ++dj)
+                    for (int di = -r; di <= r; ++di) {
+                        int a2 = i + di, b2 = j + dj;
+                        if (a2 < 0 || b2 < 0 || a2 >= N || b2 >= N || di * di + dj * dj > r * r + r) continue;
+                        size_t q = idx(a2, b2);
+                        if (H[q] < lv) level[q] = std::max(level[q], lv);   // the banks stay dry
+                    }
+            }
+    }
+    if (lake) {
+        for (size_t k = 0; k < H.size(); ++k)
+            if (H[k] > 0.0f && H[k] < info_.lakeLevel) level[k] = std::max(level[k], static_cast<float>(info_.lakeLevel));
+    }
+    // clean up: a water cell needs at least 3 wet neighbours (no speckles), then drop ponds
+    std::vector<float> clean(level);
+    for (int j = 1; j < N - 1; ++j)
+        for (int i = 1; i < N - 1; ++i) {
+            if (level[idx(i, j)] < -1e8f) continue;
+            int wet = 0;
+            for (int dj = -1; dj <= 1; ++dj) for (int di = -1; di <= 1; ++di) if ((di || dj) && level[idx(i + di, j + dj)] > -1e8f) ++wet;
+            if (wet < 2) clean[idx(i, j)] = -1e9f;
+        }
+    std::vector<int> comp(H.size(), -1);
+    std::vector<size_t> stack;
+    for (size_t s0 = 0; s0 < H.size(); ++s0) {
+        if (clean[s0] < -1e8f || comp[s0] >= 0) continue;
+        std::vector<size_t> members;
+        stack.assign(1, s0);
+        comp[s0] = 1;
+        while (!stack.empty()) {
+            size_t k = stack.back(); stack.pop_back();
+            members.push_back(k);
+            int i = static_cast<int>(k % N), j = static_cast<int>(k / N);
+            const int di[4] = {1, -1, 0, 0}, dj[4] = {0, 0, 1, -1};
+            for (int d = 0; d < 4; ++d) {
+                int a = i + di[d], b = j + dj[d];
+                if (a < 0 || b < 0 || a >= N || b >= N) continue;
+                size_t q = idx(a, b);
+                if (clean[q] < -1e8f || comp[q] >= 0) continue;
+                comp[q] = 1;
+                stack.push_back(q);
+            }
+        }
+        if (members.size() < 24) for (size_t k : members) clean[k] = -1e9f;   // ponds and puddles
+    }
+    size_t wet = 0;
+    for (float v : clean) wet += v > -1e8f;
+    if (wet) inland_ = std::move(clean);
+}
+
 double Terrain::applyModifiers(double x, double z, double h) const {
     if (info_.real) {
         // airbase plateau (narrower transition than the desert map: real valleys are tighter)
@@ -483,6 +644,7 @@ double Terrain::height(double x, double z) const {
 
 double Terrain::surfaceHeight(double x, double z) const {
     double h = std::max(height(x, z), kSeaLevel);
+    if (!inland_.empty()) h = std::max(h, inlandLevel(x, z));
     if (deck_.active && onDeck(x, z, 14.0)) h = std::max(h, deck_.center.y);   // hull is wider than the strip
     return h;
 }
@@ -609,7 +771,7 @@ bool Terrain::onRunway(double x, double z, double margin) const {
 SurfaceKind Terrain::surface(double x, double z) const {
     if (onRunway(x, z) || onDeck(x, z)) return SurfaceKind::Runway;
     double h = height(x, z);
-    if (h < kSeaLevel) return SurfaceKind::Water;
+    if (h < kSeaLevel || h < inlandLevel(x, z)) return SurfaceKind::Water;
     if (h < 8.0) return SurfaceKind::Sand;
     Vec3 n = normal(x, z, 20.0);
     if (h > info_.snowLine && n.y > 0.75) return SurfaceKind::Snow;

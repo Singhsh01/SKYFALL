@@ -870,6 +870,73 @@ TEST(chase_rig_spring_arm_never_goes_into_the_terrain) {
     CHECK_NEAR(rig.armLength(), std::sqrt(20.0 * 20 + 4 * 4), 1e-3);
 }
 
+TEST(rivers_follow_the_valleys_and_lakes_fill_basins_below_their_level) {
+    // a synthetic valley: a long V trough sloping down to the east, with ribbed sides
+    Heightmap hm;
+    hm.n = 513;
+    hm.extent = 32000.0;
+    hm.h.resize(static_cast<size_t>(hm.n) * hm.n);
+    for (int j = 0; j < hm.n; ++j)
+        for (int i = 0; i < hm.n; ++i) {
+            double x = (i / double(hm.n - 1) - 0.5) * 32000.0, z = (j / double(hm.n - 1) - 0.5) * 32000.0;
+            double valley = 900.0 - x * 0.02 + std::fabs(z) * 0.12;           // trough along z = 0
+            double ribs = 60.0 * std::fabs(std::sin(x / 2500.0)) * std::min(1.0, std::fabs(z) / 4000.0);
+            hm.h[static_cast<size_t>(j) * hm.n + i] = static_cast<float>(valley + ribs);
+        }
+    TerrainInfo info = terrainInfoFor(*findLocation("himachal"));
+    CHECK(info.riverDepth > 0);
+    Terrain t(hm, info);
+    CHECK(!t.inlandWater().empty());
+    // the valley floor carries a river...
+    int wetFloor = 0, wetSlopes = 0;
+    for (double x = -12000; x <= 12000; x += 1000) {
+        bool wet = false;
+        for (double z = -400; z <= 400; z += 31) wet = wet || t.isWater(x, z);
+        wetFloor += wet;
+        wetSlopes += t.isWater(x, 6000) || t.isWater(x, -6000);
+    }
+    CHECK(wetFloor >= 18);   // a river along most of the 25 km of valley floor
+    CHECK(wetSlopes <= 5);   // ...the valley sides only where a side stream runs down a gully
+    // water is something you fly into: surface height >= ground, crash surface is water
+    for (double x = -12000; x <= 12000; x += 2000)
+        for (double z = -300; z <= 300; z += 31)
+            if (t.isWater(x, z)) {
+                CHECK(t.surfaceHeight(x, z) >= t.height(x, z));
+                CHECK(t.surface(x, z) == SurfaceKind::Water);
+            }
+    // the runway and the town are never put in the river
+    const RunwayInfo& rw = t.runway();
+    for (double a = -1500; a <= 1500; a += 100) CHECK(!t.isWater(rw.center.x + a, rw.center.z));
+    CHECK(!t.isWater(t.townCenter().x, t.townCenter().z));
+    // a lake level floods everything below it, and nothing above
+    TerrainInfo lakeInfo = info;
+    lakeInfo.riverDepth = 0;
+    lakeInfo.lakeLevel = 700;
+    Terrain l(hm, lakeInfo);
+    CHECK(l.isWater(12000, 0));                         // ground ~660 m: under the lake
+    CHECK(!l.isWater(-12000, 0));                       // ground ~1140 m: dry
+    CHECK_NEAR(l.surfaceHeight(12000, 0), 700.0, 1e-3);
+    // existing locations have no inland water (their layouts are unchanged)
+    TerrainInfo none = terrainInfoFor(*findLocation("matterhorn"));
+    Terrain m(hm, none);
+    CHECK(m.inlandWater().empty());
+}
+
+TEST(indian_locations_are_listed_with_their_climates) {
+    const char* ids[] = {"ladakh", "nubra", "kashmir", "gangotri", "himachal", "uttarakhand", "tawang", "sikkim",
+                         "assam", "kochi", "chennai", "bengaluru", "vizag", "western_ghats", "mumbai"};
+    for (const char* id : ids) {
+        const LocationDef* l = findLocation(id);
+        CHECK(l != nullptr);
+        if (!l) continue;
+        CHECK(l->lat > 8.0 && l->lat < 36.0 && l->lon > 68.0 && l->lon < 98.0);   // inside India
+        CHECK(!l->blurb.empty());
+    }
+    CHECK(findLocation("ladakh")->biome == Biome::HighDesert && aridBiome(Biome::HighDesert));
+    CHECK(findLocation("mumbai")->urban == 3 && findLocation("kochi")->lakeLevel > 0);
+    CHECK(locations().size() == 29);   // desert + 13 earlier real locations + 15 Indian ones
+}
+
 TEST(frame_stats_percentiles) {
     FrameStats fs(1000);
     for (int i = 1; i <= 100; ++i) fs.push(i);

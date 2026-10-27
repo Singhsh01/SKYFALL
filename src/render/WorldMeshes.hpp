@@ -43,6 +43,8 @@ struct WorldMeshes {
     std::vector<ChunkGroup> treeGroups;    // merged trees (replace the per-chunk tree meshes)
     Mesh farRing{};
     Mesh water{};
+    struct WaterPatch { Mesh mesh; Vector3 center; float radius; };
+    std::vector<WaterPatch> inlandWater;   // rivers and lakes, one mesh per 2 km block
     Mesh cloudPlane{};
     Mesh runway{};       // uv = metres along / across
     Mesh taxiways{};

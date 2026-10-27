@@ -2792,7 +2792,9 @@ const char* trainingRemarkLine(double total) {
 }
 bool academyLocationAllowed(const std::string& id, int level) {
     if (id == "everest") return false;   // 5-8 km up: too thin for low-level work and air combat
-    if (trainingLevel(level).needsSea) return id == "desert" || id == "musandam" || id == "rio";
+    if (const LocationDef* l = findLocation(id); l && !l->academy) return false;   // high Ladakh / Garhwal: as Everest
+    if (trainingLevel(level).needsSea)
+        return id == "desert" || id == "musandam" || id == "rio" || id == "mumbai" || id == "chennai" || id == "vizag" || id == "kochi";
     return true;
 }
 

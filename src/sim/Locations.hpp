@@ -23,6 +23,10 @@ struct LocationDef {
     Biome biome;
     double snowLine, treeLine, highRock;
     std::string blurb;
+    double riverDepth = 0;     // see TerrainInfo
+    double lakeLevel = -1e9;
+    int urban = 1;
+    bool academy = true;       // offered for the Training Academy operations
 };
 
 /// The playable world: index 0 is the procedural desert, then the real locations.

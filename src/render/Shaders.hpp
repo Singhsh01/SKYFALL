@@ -151,7 +151,7 @@ uniform sampler2D uLandCover;     // r forest, g grass / meadow, b farmland, a r
 uniform float uCloudCover;
 uniform vec3 uFlashPos;
 uniform vec3 uFlashColor;
-uniform float uBiome;      // 0 desert, 1 alpine, 2 temperate, 3 tropical
+uniform float uBiome;      // 0 desert, 1 alpine, 2 temperate, 3 tropical, 4 cold high desert
 uniform float uSnowLine;
 uniform float uTreeLine;
 uniform float uHighRock;
@@ -208,19 +208,22 @@ void main() {
         grain = mix(texture(uNoise, vPos.xz / 7.0).a, 0.5, smoothstep(2500.0, 6000.0, dist));
     }
 
-    vec3 sandLight = vec3(0.52, 0.38, 0.26);
-    vec3 sandDark = vec3(0.42, 0.27, 0.17);
+    float cold = step(3.5, uBiome);   // Ladakh: grey-beige scree and silt instead of red sand
+    vec3 sandLight = mix(vec3(0.52, 0.38, 0.26), vec3(0.53, 0.49, 0.43), cold);
+    vec3 sandDark = mix(vec3(0.42, 0.27, 0.17), vec3(0.42, 0.38, 0.33), cold);
     vec3 sand = mix(sandLight, sandDark, smoothstep(0.3, 0.75, macro + (meso - 0.5) * 0.5));
     sand *= 0.92 + 0.12 * micro;
     // wind-blown dune ripples on flat sand
     float ripple = sin(dot(vPos.xz, vec2(0.21, 0.13)) + meso * 9.0) * 0.5 + 0.5;
     sand *= 1.0 - 0.05 * ripple * near * (1.0 - slope * 3.0);
-    vec3 gravel = mix(vec3(0.40, 0.27, 0.19), vec3(0.31, 0.21, 0.15), meso) * (0.85 + 0.25 * grain);
+    vec3 gravel = mix(mix(vec3(0.40, 0.27, 0.19), vec3(0.31, 0.21, 0.15), meso), mix(vec3(0.40, 0.37, 0.33), vec3(0.30, 0.27, 0.25), meso), cold) * (0.85 + 0.25 * grain);
     // sedimentary rock strata: horizontal bands warped by noise
     float strata = sin(h * 0.085 + meso * 6.0 + macro * 4.0) * 0.5 + 0.5;
     float strata2 = sin(h * 0.31 + micro * 3.0) * 0.5 + 0.5;
     // desert: red sandstone cliffs with pale bands; green climates override with granite below
-    vec3 rockA = vec3(0.44, 0.22, 0.13), rockB = vec3(0.29, 0.14, 0.09), rockC = vec3(0.56, 0.38, 0.25);
+    vec3 rockA = mix(vec3(0.44, 0.22, 0.13), vec3(0.40, 0.33, 0.30), cold);   // cold: purple-brown and grey scree
+    vec3 rockB = mix(vec3(0.29, 0.14, 0.09), vec3(0.25, 0.21, 0.20), cold);
+    vec3 rockC = mix(vec3(0.56, 0.38, 0.25), vec3(0.50, 0.45, 0.40), cold);
     vec3 rock = mix(rockB, rockA, 0.35 + 0.65 * mix(meso, strata, 0.35));
     rock = mix(rock, rockC, smoothstep(0.7, 0.95, strata2) * 0.25);
     rock *= 0.80 + 0.32 * micro * grain + 0.1 * meso;
@@ -243,7 +246,7 @@ void main() {
     float rockW = smoothstep(0.05, 0.17, slope + (meso - 0.5) * 0.08 - (1.0 - cav) * 0.05);
     albedo = mix(albedo, rock, rockW);
     // green climates: grey granite instead of red strata, soil instead of sand
-    float green = step(0.5, uBiome);
+    float green = step(0.5, uBiome) * (1.0 - cold);
     vec3 granite = mix(vec3(0.27, 0.27, 0.28), vec3(0.38, 0.38, 0.39), meso) * (0.82 + 0.3 * micro * grain);
     // upland heath / moss on green-climate ground (not desert sand)
     vec3 soil = mix(vec3(0.17, 0.18, 0.12), vec3(0.24, 0.24, 0.18), micro * 0.6 + meso * 0.4);
@@ -256,7 +259,7 @@ void main() {
         // beyond the map: the same rules from noise, so the landscape goes on to the horizon
         float bigN = texture(uNoise, vPos.xz / 9000.0).r * 0.65 + texture(uNoise, vPos.xz / 2300.0).g * 0.35;
         float rkO = smoothstep(0.30, 0.45, slope);
-        if (uBiome > 0.5) {
+        if (uBiome > 0.5 && uBiome < 3.5) {
             float below = 1.0 - smoothstep(uTreeLine - 120.0, uTreeLine + 80.0, h);
             float frO = below * smoothstep(0.30, 0.42, bigN) * (1.0 - rkO);
             float faO = (1.0 - smoothstep(0.015, 0.06, slope)) * (1.0 - smoothstep(uTreeLine * 0.55, uTreeLine * 0.85, h)) * smoothstep(0.42, 0.5, bigN);
@@ -268,7 +271,7 @@ void main() {
         if (h < 0.5) lc = vec4(0.0, 1.0, 0.0, 0.0);
     }
     float tufts = near > 0.0 ? texture(uNoise, vPos.xz / 1.9).a : 0.5;
-    if (uBiome > 0.5) {
+    if (uBiome > 0.5 && uBiome < 3.5) {
         // meadow / pasture: bright yellow-green, patchy, tufted close up
         float ma = meso, mb = dist < 5000.0 ? texture(uNoise, vPos.xz / 70.0).g : 0.5;
         vec3 meadow = mix(vec3(0.12, 0.20, 0.045), vec3(0.24, 0.30, 0.08), ma);
@@ -317,7 +320,7 @@ void main() {
     } else {
         // desert grassland: golden bunch grass over red soil, with soil patches and old tracks
         float ga = meso, gb = dist < 5000.0 ? texture(uNoise, vPos.xz / 85.0).g : 0.5;
-        vec3 gold = mix(vec3(0.44, 0.31, 0.12), vec3(0.60, 0.46, 0.20), ga);
+        vec3 gold = mix(mix(vec3(0.44, 0.31, 0.12), vec3(0.60, 0.46, 0.20), ga), mix(vec3(0.42, 0.38, 0.26), vec3(0.52, 0.47, 0.32), ga), cold);
         float soilP = smoothstep(0.56, 0.76, gb * 0.7 + micro * 0.3);
         float track = 1.0 - smoothstep(0.0, 0.012, abs(texture(uNoise, vPos.xz / 3000.0).g - 0.5));
         vec3 grassland = mix(gold, vec3(0.44, 0.19, 0.10), max(soilP * 0.6, track * 0.7 * near));
@@ -325,7 +328,9 @@ void main() {
         albedo = mix(albedo, grassland, lc.g);
         // junipers / pinyon: scattered dark green crowns on the foothills
         float jun = dist < 9000.0 && lc.r > 0.01 ? smoothstep(0.63, 0.70, texture(uNoise, vPos.xz / 19.0).r * 0.6 + grain * 0.4) : 0.35;
-        albedo = mix(albedo, vec3(0.05, 0.08, 0.035), lc.r * mix(jun, 0.35, smoothstep(3000.0, 9000.0, dist)) * 1.4);
+        albedo = mix(albedo, vec3(0.05, 0.08, 0.035), lc.r * mix(jun, 0.35, smoothstep(3000.0, 9000.0, dist)) * 1.4 * (1.0 - cold));
+        // cold desert oases: poplar groves and barley fields, vivid green on the valley floor
+        albedo = mix(albedo, mix(vec3(0.07, 0.14, 0.03), vec3(0.12, 0.20, 0.04), meso), max(lc.r, lc.b) * cold);
         albedo = mix(albedo, rock, lc.a * 0.7);
     }
     float snowW = smoothstep(uSnowLine, uSnowLine + 250.0, h + meso * 180.0) * (1.0 - smoothstep(0.25, 0.5, slope));
@@ -349,7 +354,7 @@ void main() {
     float skyAO = mix(0.25, 1.0, ao * ao);
     vec3 amb = ambientLight(nd) * skyAO;
     // warm bounce light from sunlit sand fills the shadows (key to a desert look)
-    vec3 bounce = mix(vec3(0.55, 0.45, 0.33), vec3(0.30, 0.34, 0.28), step(0.5, uBiome)) * uSunColor * 0.05 * (1.0 - nd.y * 0.5) * skyAO;
+    vec3 bounce = mix(mix(vec3(0.55, 0.45, 0.33), vec3(0.30, 0.34, 0.28), green), vec3(0.45, 0.43, 0.40), cold) * uSunColor * 0.05 * (1.0 - nd.y * 0.5) * skyAO;
     vec3 col = albedo * (uSunColor * ndl * sh * 1.05 + amb * 0.62 + bounce);
     // dusty specular sheen at grazing sun
     vec3 v = normalize(uCamPos - vPos);
@@ -382,6 +387,8 @@ uniform sampler2D uNoise;
 uniform sampler2D uDepthMap;   // sea-floor height over the map
 uniform float uMapHalf;
 uniform float uCloudCover;
+uniform float uInland;         // 1: river / lake (no sea-floor map, its own water colour)
+uniform vec3 uRiverColor;
 out vec4 finalColor;
 void main() {
     float storm = smoothstep(0.7, 0.95, uCloudCover);
@@ -406,7 +413,9 @@ void main() {
     if (duv.x < 0.0 || duv.x > 1.0 || duv.y < 0.0 || duv.y > 1.0) depth = 100.0;
     vec3 deep = vec3(0.015, 0.075, 0.13);
     vec3 shallow = vec3(0.06, 0.32, 0.36);
+    if (uInland > 0.5) depth = 6.0;
     vec3 body = mix(shallow, deep, smoothstep(2.0, 45.0, depth));
+    body = mix(body, uRiverColor, uInland);
     body *= (0.45 + 0.55 * max(uSunDir.y, 0.0)) * (uSunColor * 0.6 + 0.4);
     // storm sea: slate grey-green, wind-roughened, with whitecaps
     body = mix(body, vec3(0.035, 0.05, 0.05) + uHorizon * 0.06, storm);
@@ -415,7 +424,7 @@ void main() {
     float spec = pow(max(dot(n, h), 0.0), 900.0) * 25.0 + pow(max(dot(n, h), 0.0), 90.0) * 0.6;
     col += uSunColor * spec;
     // shoreline foam
-    float foam = smoothstep(3.5, 0.0, depth) * smoothstep(0.45, 0.75, texture(uNoise, vPos.xz / 18.0 + uTime * 0.02).r);
+    float foam = (1.0 - uInland) * smoothstep(3.5, 0.0, depth) * smoothstep(0.45, 0.75, texture(uNoise, vPos.xz / 18.0 + uTime * 0.02).r);
     col = mix(col, vec3(0.9), foam * 0.6);
     float caps = smoothstep(0.70, 0.80, texture(uNoise, vPos.xz / 31.0 + vec2(uTime * 0.05, uTime * 0.03)).r * 0.6
                                         + texture(uNoise, vPos.xz / 9.0 - uTime * 0.04).g * 0.4);

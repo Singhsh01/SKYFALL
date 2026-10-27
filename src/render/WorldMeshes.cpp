@@ -188,7 +188,8 @@ void computeLandCover(const Terrain& t, std::vector<unsigned char>& out) {
     const int N = kCoverN;
     const double cell = 2.0 * Terrain::kHalfSize / N;
     const TerrainInfo& info = t.info();
-    const bool desert = info.biome == Biome::Desert;
+    const bool desert = aridBiome(info.biome);
+    const bool cold = info.biome == Biome::HighDesert;
     std::vector<float> H(static_cast<size_t>(N) * N);
     parallelRows(N, [&](int j) {
         for (int i = 0; i < N; ++i)
@@ -213,6 +214,14 @@ void computeLandCover(const Terrain& t, std::vector<unsigned char>& out) {
                 gr = flat * smoothstep(0.30, 0.55, big * 0.7 + mid * 0.3) * (1.0 - rk) * (1.0 - smoothstep(info.highRock, info.highRock + 400, h));
                 // junipers / pinyon on the foothills and the talus below cliffs
                 fr = smoothstep(0.04, 0.12, slope) * (1.0 - rk) * smoothstep(0.45, 0.62, mid) * 0.55 * (1.0 - smoothstep(info.treeLine + 600, info.treeLine + 1200, h));
+                if (cold) {
+                    // cold desert: almost bare; green oases of poplar and willow, fields and
+                    // barley terraces only on the low valley floor, along the rivers
+                    double valley = (1.0 - smoothstep(info.treeLine - 150, info.treeLine + 60, h)) * smoothstep(-0.15, 0.25, hollow + 0.1);
+                    fr = flat * valley * smoothstep(0.42, 0.58, mid * 0.6 + big * 0.4);
+                    fa = flat * valley * smoothstep(0.30, 0.42, big) * (1.0 - fr) * 0.8;
+                    gr *= 0.35;
+                }
             } else {
                 double snowy = smoothstep(info.snowLine - 100, info.snowLine + 200, h);
                 rk = std::clamp(smoothstep(0.25, 0.44, slope + (mid - 0.5) * 0.12) + smoothstep(info.highRock, info.highRock + 300, h) * (0.4 + slope), 0.0, 1.0);
@@ -244,7 +253,7 @@ double forestMask(double x, double z, double h) {
         double f = coverAt(x, z).x;
         return g_info && g_info->biome == Biome::Desert ? f * 0.6 : f;
     }
-    if (g_info && g_info->biome != Biome::Desert) {
+    if (g_info && !aridBiome(g_info->biome)) {
         double f = smoothstep(0.40, 0.58, fbm2(x / 900.0, z / 900.0, 3, 99u)) * 0.95;
         f *= 1.0 - smoothstep(g_info->treeLine - 180.0, g_info->treeLine + 60.0, h);
         f *= smoothstep(2.0, 10.0, h);
@@ -402,7 +411,8 @@ void addTree(MeshBuilder& mb, Vector3 p, float height, float radius, Color c, in
 void WorldMeshes::build(const Terrain& t) {
     terrain = &t;
     g_info = &t.info();
-    const bool green = t.info().biome != Biome::Desert;
+    const bool green = !aridBiome(t.info().biome);
+    const bool coldDesert = t.info().biome == Biome::HighDesert;
     noise = makeNoiseTexture();
     detailGrad = makeDetailGradTexture();
     puff = makeSprite(0);
@@ -477,6 +487,14 @@ void WorldMeshes::build(const Terrain& t) {
                         addTree(tb, V3(px, h - 0.6, pz), hgt, tropical ? hgt * 0.45f : hgt * 0.28f, col, tropical ? 1 : 0);
                         continue;
                     }
+                    if (coldDesert) {
+                        // Ladakh: tall, slim poplars and willows in the oases, yellow-green
+                        float hgt = static_cast<float>(rng.range(9, 17));
+                        double v = rng.uniform();
+                        Color col = Color{u8(0.13 + 0.06 * v), u8(0.20 + 0.06 * v), u8(0.05 + 0.02 * v), 255};
+                        addTree(tb, V3(px, h - 0.6, pz), hgt, hgt * 0.13f, col, 0);
+                        continue;
+                    }
                     // palms along the wadi, low acacia-like shrubs elsewhere
                     bool palm = wadi > 0.4 && rng.uniform() < 0.5;
                     float hgt = palm ? static_cast<float>(rng.range(9, 14)) : static_cast<float>(rng.range(2.5, 5.5));
@@ -488,6 +506,36 @@ void WorldMeshes::build(const Terrain& t) {
                 }
             if (tb.vertexCount() > 0) { c.trees = tb.build(); c.hasTrees = true; }
         }
+
+    // ---- inland water: flat quads at the river / lake surface, slightly oversized so the banks
+    //      hide their edges; one mesh per 2 km block (culled like the terrain)
+    if (!t.inlandWater().empty()) {
+        const int N = Terrain::kWaterN, B = 64;
+        const double c = Terrain::kWaterCell;
+        const auto& W = t.inlandWater();
+        for (int bj = 0; bj < N; bj += B)
+            for (int bi = 0; bi < N; bi += B) {
+                MeshBuilder mb;
+                double sumY = 0; int cnt = 0;
+                for (int j = bj; j < bj + B; ++j)
+                    for (int i = bi; i < bi + B; ++i) {
+                        float lv = W[static_cast<size_t>(j) * N + i];
+                        if (lv < -1e8f) continue;
+                        double x0 = -Terrain::kHalfSize + (i - 0.3) * c, z0 = -Terrain::kHalfSize + (j - 0.3) * c, s = c * 1.6;
+                        Vector3 a = V3(x0, lv, z0), b = V3(x0 + s, lv, z0), d = V3(x0, lv, z0 + s), e = V3(x0 + s, lv, z0 + s);
+                        Color col = {255, 255, 255, 255};
+                        mb.vertex(a, {0, 1, 0}, col); mb.vertex(d, {0, 1, 0}, col); mb.vertex(b, {0, 1, 0}, col);
+                        mb.vertex(b, {0, 1, 0}, col); mb.vertex(d, {0, 1, 0}, col); mb.vertex(e, {0, 1, 0}, col);
+                        sumY += lv; ++cnt;
+                    }
+                if (!cnt) continue;
+                WaterPatch wp;
+                wp.mesh = mb.build();
+                wp.center = V3(-Terrain::kHalfSize + (bi + B * 0.5) * c, sumY / cnt, -Terrain::kHalfSize + (bj + B * 0.5) * c);
+                wp.radius = static_cast<float>(B * c * 0.75);
+                inlandWater.push_back(wp);
+            }
+    }
 
     // ---- merged groups: far terrain in 4 x 4 chunks, trees in 2 x 2 chunks (fewer draw calls) ----
     auto makeGroups = [&](int g, bool trees) {
@@ -892,6 +940,8 @@ void WorldMeshes::unload() {
         UnloadMesh(c.lo);
         if (c.hasTrees) UnloadMesh(c.trees);
     }
+    for (WaterPatch& w : inlandWater) UnloadMesh(w.mesh);
+    inlandWater.clear();
     for (auto* gs : {&loGroups, &treeGroups}) {
         for (ChunkGroup& g : *gs) if (g.has) UnloadMesh(g.mesh);
         gs->clear();

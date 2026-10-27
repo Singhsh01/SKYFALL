@@ -40,6 +40,21 @@ LOCATIONS = [
     ("rio", -22.95, -43.21, "Rio de Janeiro, Brazil"),
     ("guilin", 24.78, 110.45, "Guilin karst, China"),
     ("fuji", 35.36, 138.73, "Mount Fuji, Japan"),
+    ("ladakh", 34.13, 77.58, "Leh & the Indus Valley, Ladakh, India"),
+    ("nubra", 34.58, 77.56, "Nubra Valley, Ladakh, India"),
+    ("kashmir", 34.08, 74.85, "Kashmir Valley, India"),
+    ("gangotri", 30.90, 79.05, "Gangotri & Garhwal Himalaya, India"),
+    ("himachal", 32.20, 77.17, "Kullu & Manali, Himachal Pradesh, India"),
+    ("uttarakhand", 30.38, 78.45, "Tehri & the Bhagirathi, Uttarakhand, India"),
+    ("tawang", 27.59, 91.87, "Tawang, Arunachal Pradesh, India"),
+    ("sikkim", 27.33, 88.62, "Gangtok & East Sikkim, India"),
+    ("assam", 26.17, 91.72, "Brahmaputra & Guwahati, Assam, India"),
+    ("kochi", 9.95, 76.29, "Kochi & the Backwaters, Kerala, India"),
+    ("chennai", 13.05, 80.25, "Chennai Coast, Tamil Nadu, India"),
+    ("bengaluru", 12.97, 77.59, "Bengaluru, Karnataka, India"),
+    ("vizag", 17.72, 83.28, "Visakhapatnam, Andhra Pradesh, India"),
+    ("western_ghats", 10.09, 77.06, "Munnar & the Western Ghats, Kerala, India"),
+    ("mumbai", 19.02, 72.86, "Mumbai, Maharashtra, India"),
 ]
 
 TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"

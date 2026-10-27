@@ -476,8 +476,27 @@ bool Game::loadLocation(const std::string& id, bool showProgress) {
     if (id != "desert") {
         std::string err;
         if (!loadHeightmap(terrainPath(id), hm, err)) {
-            locStatus_ = loc->name + ": " + err + ". Run  python3 tools/fetch_real_terrain.py  (or the 'real terrain' GitHub action).";
-            return false;
+            // development preview only: SKYFALL_TERRAIN_PROXY="ladakh=everest:-1300,..." borrows
+            // another map's elevation (shifted) to look at a location's materials before its data exists
+            bool proxied = false;
+            if (const char* px = std::getenv("SKYFALL_TERRAIN_PROXY")) {
+                std::string all = px, key = id + "=";
+                size_t at = all.find(key);
+                if (at != std::string::npos) {
+                    std::string spec = all.substr(at + key.size(), all.find(',', at) == std::string::npos ? std::string::npos : all.find(',', at) - at - key.size());
+                    std::string src = spec.substr(0, spec.find(':'));
+                    double off = spec.find(':') != std::string::npos ? std::atof(spec.c_str() + spec.find(':') + 1) : 0.0;
+                    if (loadHeightmap(terrainPath(src), hm, err)) {
+                        for (float& v : hm.h) if (v > 0.0f) v = std::max(1.0f, v + static_cast<float>(off));
+                        proxied = true;
+                        TraceLog(LOG_WARNING, "SKYFALL: %s previewed on %s elevation (%+.0f m): not real data", id.c_str(), src.c_str(), off);
+                    }
+                }
+            }
+            if (!proxied) {
+                locStatus_ = loc->name + ": " + err + ". Run  python3 tools/fetch_real_terrain.py  (or the 'real terrain' GitHub action).";
+                return false;
+            }
         }
     }
     if (showProgress && IsWindowReady()) {
@@ -3317,6 +3336,33 @@ int Game::runCapture() {
         hideHud_ = true;
         startTitle(); settingsReturn_ = Screen::Title; screen_ = Screen::Settings; nav_.focus = 29;
         snap("camera_08_settings", 2);
+        return 0;
+    }
+    if (set == "india") {
+        // a look at each Indian location (SKYFALL_INDIA=ladakh,mumbai picks some)
+        hideHud_ = true;
+        std::vector<std::string> ids = {"ladakh", "nubra", "kashmir", "gangotri", "himachal", "uttarakhand", "tawang", "sikkim",
+                                        "assam", "kochi", "chennai", "bengaluru", "vizag", "western_ghats", "mumbai"};
+        if (const char* only = std::getenv("SKYFALL_INDIA")) {
+            ids.clear();
+            std::string o = only;
+            for (size_t a = 0; a <= o.size();) { size_t b = o.find(',', a); if (b == std::string::npos) b = o.size(); ids.push_back(o.substr(a, b - a)); a = b + 1; }
+        }
+        for (const std::string& id : ids) {
+            if (!loadLocation(id, false)) { std::printf("india: %s not available\n", id.c_str()); continue; }
+            startArena(false);
+            battle_.clearCombatants();
+            battle_.setAiEnabled(false);
+            tod_ = TimeOfDay::Morning; lighting_ = Lighting::preset(tod_);
+            const RunwayInfo& rw = terrain_.runway();
+            camMode_ = CameraMode::Chase; chaseInit_ = false;
+            battle_.player().fm->resetAirborne({rw.center.x - 4000, rw.center.y + 900, rw.center.z + 2500}, 0.35, 200, 0.8);
+            scriptedStep(0.5, [&](double) { setInput(0, 0, 0, 0); });
+            snap("india_" + id + "_1", 3);
+            battle_.player().fm->resetAirborne({rw.center.x + 3000, rw.center.y + 1800, rw.center.z - 6000}, 2.4, 200, 0.8);
+            scriptedStep(0.5, [&](double) { setInput(0, 0, 0, 0); });
+            snap("india_" + id + "_2", 3);
+        }
         return 0;
     }
     if (set == "destruction") {
